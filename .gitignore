@@ -13,3 +13,12 @@ data/raw/**
 # Python cache files.
 __pycache__/
 *.py[cod]
+.venv/
+
+# Local runtime logs and temporary WeChat bridge files.
+streamlit.log
+streamlit.err.log
+wechatExtension/send-text.txt
+wechatExtension/last-selected.txt
+wechatExtension/rag-bridge.log
+wechatExtension/preview-test-result.ini
