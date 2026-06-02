@@ -1,0 +1,11 @@
+faiss-cpu>=1.8.0
+llama-cpp-python>=0.2.90
+numpy>=1.26.0
+openpyxl>=3.1.0
+pandas>=2.2.0
+python-docx>=1.1.0
+PyYAML>=6.0.0
+pypdf>=4.2.0
+sentence-transformers>=3.0.0
+streamlit>=1.36.0
+xlrd>=2.0.1
