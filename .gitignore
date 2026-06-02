@@ -1,0 +1,15 @@
+# Local model files are large and should be downloaded per machine.
+models/embeddings/**
+models/llm/**
+!models/embeddings/.gitkeep
+!models/llm/.gitkeep
+
+# Runtime data and generated indexes.
+data/index/**
+data/raw/**
+!data/index/.gitkeep
+!data/raw/.gitkeep
+
+# Python cache files.
+__pycache__/
+*.py[cod]
