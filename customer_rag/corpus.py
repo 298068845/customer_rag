@@ -143,6 +143,15 @@ class CorpusStore:
         self.replace_all(next_items)
         return len(items) - len(next_items)
 
+    def delete_by_sources(self, sources: set[str]) -> int:
+        if not sources:
+            return 0
+        normalized_sources = {str(source) for source in sources}
+        items = self.list_items()
+        next_items = [item for item in items if item.source not in normalized_sources]
+        self.replace_all(next_items)
+        return len(items) - len(next_items)
+
     def add_tags_many(self, item_ids: set[str], tags: list[str]) -> int:
         clean_tags = _clean_tags(tags)
         if not item_ids or not clean_tags:

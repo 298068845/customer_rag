@@ -68,6 +68,29 @@ class RagPipeline:
         self.corpus.add_documents(documents)
         return self._rebuild_stats(documents=len(documents), before=before)
 
+    def replace_files_with_tags(self, path_tags: list[tuple[Path, list[str]]]) -> dict[str, int | str | None]:
+        documents: list[LoadedDocument] = []
+        source_paths = {str(path) for path, _ in path_tags}
+        removed = self.corpus.delete_by_sources(source_paths)
+        before = len(self.corpus.list_items())
+        for path, tags in path_tags:
+            file_tags = _clean_tags(tags)
+            for doc in load_document_file(path):
+                documents.append(
+                    LoadedDocument(
+                        text=doc.text,
+                        source=doc.source,
+                        title=doc.title,
+                        location=doc.location,
+                        image_paths=doc.image_paths,
+                        tags=_clean_tags((doc.tags or []) + file_tags),
+                    )
+                )
+        self.corpus.add_documents(documents)
+        stats = self._rebuild_stats(documents=len(documents), before=before)
+        stats["removed"] = removed
+        return stats
+
     def rebuild_index(self) -> int:
         documents = [
             LoadedDocument(

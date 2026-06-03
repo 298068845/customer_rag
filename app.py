@@ -1,22 +1,33 @@
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
+import importlib
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from streamlit.runtime.scriptrunner import get_script_run_ctx
 
-
-if get_script_run_ctx() is None:
-    subprocess.run([sys.executable, "-m", "streamlit", "run", __file__], check=False)
-    sys.exit()
-
+import customer_rag.browser_cookies as browser_cookies
 from customer_rag.config import load_config
+
+browser_cookies = importlib.reload(browser_cookies)
+from customer_rag.browser_cookies import (
+    open_tencent_docs_login_window,
+    read_tencent_docs_cookie_from_login_window,
+)
 from customer_rag.loaders import SUPPORTED_SUFFIXES
 from customer_rag.pipeline import RagPipeline
+from customer_rag.subscription_jobs import (
+    is_subscription_job_running,
+    read_job_state,
+    request_stop_subscription_job,
+    start_subscription_job,
+)
+from customer_rag.tencent_docs import (
+    TencentDocSubscription,
+    load_subscriptions,
+    save_subscriptions,
+)
 
 
 st.set_page_config(page_title="本地腾讯文档 RAG", layout="wide")
@@ -69,7 +80,15 @@ DEFAULT_SYSTEM_PROMPT = """你是企业内部商品知识库助手。请只根�
 
 
 @st.cache_resource
-def get_pipeline() -> RagPipeline:
+def get_pipeline(cache_version: str = "subscription-replace-v2") -> RagPipeline:
+    return RagPipeline(load_config())
+
+
+def subscription_pipeline() -> RagPipeline:
+    current = get_pipeline()
+    if hasattr(current, "replace_files_with_tags"):
+        return current
+    st.cache_resource.clear()
     return RagPipeline(load_config())
 
 
@@ -126,6 +145,17 @@ def tag_badges(tags: list[str]) -> str:
     return "、".join(tags) if tags else "未分类"
 
 
+def format_bytes(size: int | None) -> str:
+    if size is None:
+        return "未知大小"
+    value = float(size)
+    for unit in ["B", "KB", "MB", "GB"]:
+        if value < 1024 or unit == "GB":
+            return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
+        value /= 1024
+    return f"{value:.1f} GB"
+
+
 def uploaded_file_tag_key(index: int, name: str, size: int) -> str:
     return f"upload_file_tags_{index}_{name}_{size}"
 
@@ -153,6 +183,10 @@ def prompt_settings_path() -> Path:
     return cfg.index_dir / "prompt_settings.json"
 
 
+def subscriptions_path() -> Path:
+    return cfg.index_dir / "tencent_doc_subscriptions.json"
+
+
 def load_system_prompt() -> str:
     path = prompt_settings_path()
     if not path.exists():
@@ -172,6 +206,27 @@ def save_system_prompt(prompt: str) -> None:
         json.dumps({"system_prompt": prompt.strip()}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def subscription_rows_to_items(rows: list[dict]) -> list[TencentDocSubscription]:
+    subscriptions: list[TencentDocSubscription] = []
+    for row in rows:
+        name = str(row.get("名称", "")).strip()
+        url = str(row.get("腾讯文档地址", "")).strip()
+        if not name or not url:
+            continue
+        subscriptions.append(
+            TencentDocSubscription(
+                name=name,
+                url=url,
+                tags=parse_tags(str(row.get("Tag", ""))),
+                enabled=bool(row.get("启用", True)),
+                last_updated=str(row.get("上次更新", "") or ""),
+                last_status=str(row.get("状态", "") or ""),
+                last_modified=str(row.get("最后修改", "") or ""),
+            )
+        )
+    return subscriptions
 
 
 def rebuild_index_button(key: str, label: str = "重建向量索引") -> None:
@@ -558,6 +613,152 @@ with tab_import:
                 st.caption(f"{rel} · {size_kb:.1f} KB")
         else:
             st.info("暂无文件。")
+
+    st.divider()
+    st.markdown("### 在线腾讯文档订阅")
+    st.caption("订阅更新会自动从腾讯文档导出表格，保存到 data/raw/tencent_docs/，再替换导入到语料库。")
+
+    job_state = read_job_state(cfg)
+    job_running = is_subscription_job_running(cfg)
+    if job_running:
+        st.markdown("<meta http-equiv='refresh' content='2'>", unsafe_allow_html=True)
+
+    st.markdown("#### 腾讯文档登录凭证")
+    st.caption("推荐使用专用登录窗口：登录后点读取，系统会自动填入 Cookie。全程不用打开开发者工具。")
+    cookie_guide_a, cookie_guide_b, cookie_guide_c = st.columns([1, 1, 2.2], gap="medium")
+    with cookie_guide_a:
+        if st.button("打开登录窗口", use_container_width=True, disabled=job_running):
+            try:
+                open_tencent_docs_login_window()
+                st.success("已打开专用登录窗口，请在里面登录腾讯文档。")
+            except RuntimeError as exc:
+                st.warning(f"打开登录窗口失败：{exc}")
+    with cookie_guide_b:
+        if st.button("读取登录窗口 Cookie", use_container_width=True, disabled=job_running):
+            try:
+                cookie_result = read_tencent_docs_cookie_from_login_window()
+                st.session_state["qq_cookie"] = cookie_result.cookie
+                st.success(f"已读取专用登录窗口的 {cookie_result.count} 个 Cookie。")
+            except RuntimeError as exc:
+                st.warning(f"读取失败：{exc}")
+    with cookie_guide_c:
+        st.info("操作顺序：打开登录窗口 -> 登录腾讯文档 -> 读取登录窗口 Cookie")
+
+    st.markdown("#### 腾讯文档订阅")
+    control_col, cookie_col = st.columns([0.28, 0.72], gap="large")
+    with control_col:
+        st.caption("更新启用订阅")
+        start_label = "后台更新中..." if job_running else "开始后台更新"
+        if st.button(start_label, type="primary", use_container_width=True, disabled=job_running):
+            st.session_state["start_subscription_update_requested"] = True
+        if job_running and st.button("停止当前任务", use_container_width=True):
+            request_stop_subscription_job(cfg)
+            st.warning("已请求停止，任务会在安全点退出。")
+            st.rerun()
+    with cookie_col:
+        qq_cookie = st.text_input(
+            "腾讯文档 Cookie",
+            type="password",
+            placeholder="先点击上方读取；失败时可手动粘贴已登录 docs.qq.com 的 Cookie",
+            key="qq_cookie",
+            disabled=job_running,
+        )
+
+    subscriptions = load_subscriptions(subscriptions_path())
+    subscription_rows = [
+        {
+            "启用": subscription.enabled,
+            "名称": subscription.name,
+            "腾讯文档地址": subscription.url,
+            "Tag": tag_text(subscription.tags),
+            "最后修改": subscription.last_modified,
+            "上次更新": subscription.last_updated,
+            "状态": subscription.last_status,
+        }
+        for subscription in subscriptions
+    ]
+    list_title_col, list_action_col = st.columns([0.72, 0.28], gap="large")
+    with list_title_col:
+        st.markdown("#### 订阅列表")
+    with list_action_col:
+        save_col, add_hint_col = st.columns([1, 1], gap="medium")
+        save_clicked = save_col.button("保存订阅配置", use_container_width=True, disabled=job_running)
+        add_hint_col.caption("表格底部可新增订阅")
+
+    edited_subscriptions = st.data_editor(
+        pd.DataFrame(subscription_rows),
+        key="tencent_doc_subscriptions",
+        hide_index=True,
+        use_container_width=True,
+        num_rows="dynamic",
+        disabled=True if job_running else ["最后修改", "上次更新", "状态"],
+        column_config={
+            "启用": st.column_config.CheckboxColumn("启用", width="small"),
+            "名称": st.column_config.TextColumn("名称", width="medium"),
+            "腾讯文档地址": st.column_config.TextColumn("腾讯文档地址", width="large"),
+            "Tag": st.column_config.TextColumn("Tag", width="small"),
+            "最后修改": st.column_config.TextColumn("最后修改", width="small"),
+            "上次更新": st.column_config.TextColumn("上次更新", width="small"),
+            "状态": st.column_config.TextColumn("状态", width="medium"),
+        },
+    )
+    current_subscriptions = subscription_rows_to_items(edited_subscriptions.to_dict("records"))
+
+    if st.session_state.pop("start_subscription_update_requested", False):
+        save_subscriptions(subscriptions_path(), current_subscriptions)
+        enabled_subscriptions = [subscription for subscription in current_subscriptions if subscription.enabled]
+        if not enabled_subscriptions:
+            st.info("请先启用至少一个订阅。")
+        else:
+            start_subscription_job(cfg, subscriptions_path(), enabled_subscriptions, st.session_state.get("qq_cookie", ""))
+            st.success("后台更新已启动，刷新页面不会中断任务。")
+            st.rerun()
+
+    if save_clicked:
+        save_subscriptions(subscriptions_path(), current_subscriptions)
+        st.success("订阅已保存。")
+        st.rerun()
+
+    if job_state.status != "idle":
+        st.markdown("#### 后台任务")
+        status_text = {
+            "running": "运行中",
+            "rebuilding": "正在重建索引",
+            "stopping": "停止中",
+            "stopped": "已停止",
+            "completed": "已完成",
+            "error": "异常",
+        }.get(job_state.status, job_state.status)
+        st.caption(
+            f"状态：{status_text}    开始时间：{job_state.started_at or '-'}    "
+            f"完成时间：{job_state.finished_at or '-'}"
+        )
+        total_progress = job_state.current_index / job_state.total if job_state.total else 0
+        st.progress(min(total_progress, 1.0))
+        st.info(
+            f"总进度：{job_state.current_index} / {job_state.total}，"
+            f"{job_state.message or job_state.current_name}"
+        )
+        if job_state.current_downloaded:
+            if job_state.current_total:
+                download_progress = min(job_state.current_downloaded / job_state.current_total, 1.0)
+                st.progress(download_progress)
+                st.caption(
+                    f"当前文件下载进度：{download_progress:.0%}    "
+                    f"已下载：{format_bytes(job_state.current_downloaded)} / {format_bytes(job_state.current_total)}"
+                )
+            else:
+                st.progress(0)
+                st.caption(f"当前文件下载进度：已下载 {format_bytes(job_state.current_downloaded)}")
+        st.caption(
+            f"下载 {job_state.downloaded} 个，跳过 {job_state.skipped} 个，失败 {job_state.failed} 个，"
+            f"移除旧语料 {job_state.removed} 条，新增 {job_state.items} 条语料，索引 {job_state.chunks} 个片段。"
+        )
+        if job_state.index_error:
+            st.warning(f"语料已更新，但索引暂未重建：{job_state.index_error}")
+        if job_state.logs:
+            with st.expander("最近日志", expanded=job_running):
+                st.write("\n".join(job_state.logs[-12:]))
 
 with tab_prompt:
     st.subheader("Prompt 设置")

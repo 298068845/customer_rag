@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import os
+import socket
 import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 import webbrowser
 from pathlib import Path
 
@@ -27,6 +31,7 @@ status_text = "启动中"
 wechat_running = False
 wechat_busy = False
 streamlit_process: subprocess.Popen | None = None
+rag_ready = False
 
 
 def main() -> None:
@@ -61,33 +66,43 @@ def build_menu() -> pystray.Menu:
 
 def start_all(icon: pystray.Icon) -> None:
     set_status(icon, "正在启动 RAG 服务", "starting")
+    notify(icon, "正在启动 RAG 服务", "请稍候，服务启动完成前不会打开 RAG 页面。")
+    if not preflight_check():
+        set_status(icon, "RAG 服务启动失败", "paused")
+        notify(icon, "RAG 服务启动失败", "代码自检未通过，请查看 streamlit.err.log。")
+        return
     start_streamlit()
-    wait_for_streamlit()
+    if not wait_for_streamlit():
+        set_status(icon, "RAG 服务启动失败", "paused")
+        notify(icon, "RAG 服务启动失败", "请查看 streamlit.err.log 或 streamlit.log。")
+        return
     set_status(icon, "正在启动微信插件", "starting")
     start_wechat_plugin(icon)
     set_status(icon, "运行中", "running")
+    open_app(icon)
 
 
 def start_streamlit() -> None:
     global streamlit_process
-    if is_port_listening(APP_PORT):
+    if is_streamlit_healthy():
+        set_rag_ready(True)
         return
+    if is_port_listening(APP_PORT):
+        stop_streamlit()
     with STREAMLIT_LOG.open("ab") as stdout, STREAMLIT_ERR.open("ab") as stderr:
+        env = dict(os.environ)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["VIRTUAL_ENV"] = str(ROOT / ".venv")
+        env["PATH"] = str(ROOT / ".venv" / "Scripts") + os.pathsep + env.get("PATH", "")
         streamlit_process = subprocess.Popen(
             [
                 str(PYTHON),
-                "-m",
-                "streamlit",
-                "run",
-                "app.py",
-                "--server.address",
-                "127.0.0.1",
-                "--server.port",
-                str(APP_PORT),
+                "run_streamlit.py",
             ],
             cwd=ROOT,
             stdout=stdout,
             stderr=stderr,
+            env=env,
             creationflags=CREATE_NO_WINDOW,
         )
 
@@ -95,17 +110,28 @@ def start_streamlit() -> None:
 def restart_streamlit(icon: pystray.Icon, _: object = None) -> None:
     def worker() -> None:
         set_status(icon, "正在重启 RAG 服务", "starting")
+        set_rag_ready(False)
+        notify(icon, "正在重启 RAG 服务", "请稍候，重启完成前不会打开 RAG 页面。")
         stop_streamlit()
         time.sleep(1)
+        if not preflight_check():
+            set_status(icon, "RAG 服务启动失败", "paused")
+            notify(icon, "RAG 服务启动失败", "代码自检未通过，请查看 streamlit.err.log。")
+            return
         start_streamlit()
-        wait_for_streamlit()
-        set_status(icon, current_ready_status(), current_icon_kind())
+        if wait_for_streamlit():
+            set_status(icon, current_ready_status(), current_icon_kind())
+            notify(icon, "RAG 服务已启动", "现在可以打开 RAG 页面。")
+        else:
+            set_status(icon, "RAG 服务启动失败", "paused")
+            notify(icon, "RAG 服务启动失败", "请查看 streamlit.err.log 或 streamlit.log。")
 
     threading.Thread(target=worker, daemon=True).start()
 
 
 def stop_streamlit() -> None:
     global streamlit_process
+    set_rag_ready(False)
     if streamlit_process and streamlit_process.poll() is None:
         streamlit_process.terminate()
         try:
@@ -114,20 +140,28 @@ def stop_streamlit() -> None:
             streamlit_process.kill()
     streamlit_process = None
 
-    owner = port_owner_pid(APP_PORT)
-    if owner:
+    for owner in port_owner_pids(APP_PORT):
         run_powershell(f"Stop-Process -Id {owner} -Force")
 
 
-def wait_for_streamlit(timeout_seconds: int = 30) -> None:
+def wait_for_streamlit(timeout_seconds: int = 60) -> bool:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
-        if is_port_listening(APP_PORT):
-            return
+        if is_streamlit_healthy():
+            set_rag_ready(True)
+            return True
         time.sleep(0.5)
+    set_rag_ready(False)
+    return False
 
 
-def open_app(*_: object) -> None:
+def open_app(icon: pystray.Icon | None = None, *_: object) -> None:
+    if not get_rag_ready() and not is_streamlit_healthy():
+        if icon:
+            set_status(icon, "正在启动 RAG 服务", "starting")
+            notify(icon, "正在启动 RAG 服务", "服务未启动完成，暂不打开 RAG 页面。")
+        return
+    set_rag_ready(True)
     webbrowser.open(APP_URL)
 
 
@@ -194,21 +228,30 @@ def is_wechat_plugin_running() -> bool:
 
 
 def is_port_listening(port: int) -> bool:
-    command = (
-        f"Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort {port} -ErrorAction SilentlyContinue | "
-        "Where-Object { $_.State -eq 'Listen' } | "
-        "Select-Object -First 1 -ExpandProperty LocalPort"
-    )
-    return bool(run_powershell(command).stdout.strip())
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            return True
+    except OSError:
+        return False
 
 
-def port_owner_pid(port: int) -> str:
-    command = (
-        f"Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort {port} -ErrorAction SilentlyContinue | "
-        "Where-Object { $_.State -eq 'Listen' } | "
-        "Select-Object -First 1 -ExpandProperty OwningProcess"
+def port_owner_pids(port: int) -> list[str]:
+    result = subprocess.run(
+        ["netstat", "-ano"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        creationflags=CREATE_NO_WINDOW,
     )
-    return run_powershell(command).stdout.strip()
+    owners: list[str] = []
+    marker = f":{port}"
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and parts[1].endswith(marker) and parts[3].upper() == "LISTENING":
+            owner = parts[4]
+            if owner not in owners:
+                owners.append(owner)
+    return owners
 
 
 def run_powershell(command: str) -> subprocess.CompletedProcess:
@@ -219,6 +262,44 @@ def run_powershell(command: str) -> subprocess.CompletedProcess:
         capture_output=True,
         creationflags=CREATE_NO_WINDOW,
     )
+
+
+def preflight_check() -> bool:
+    script = (
+        "from customer_rag.tencent_docs import fetch_subscription_last_modified; "
+        "from customer_rag.pipeline import RagPipeline; "
+        "assert hasattr(RagPipeline, 'replace_files_with_tags')"
+    )
+    result = subprocess.run(
+        [str(PYTHON), "-c", script],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        creationflags=CREATE_NO_WINDOW,
+    )
+    if result.returncode == 0:
+        return True
+    with STREAMLIT_ERR.open("ab") as stderr:
+        stderr.write(("\n[launcher preflight failed]\n" + result.stderr + result.stdout).encode("utf-8", errors="ignore"))
+    return False
+
+
+def is_streamlit_healthy() -> bool:
+    if not is_port_listening(APP_PORT):
+        return False
+    try:
+        with urllib.request.urlopen(APP_URL, timeout=3) as response:
+            body = response.read(200_000).decode("utf-8", errors="ignore")
+    except (urllib.error.URLError, TimeoutError):
+        return False
+    error_markers = [
+        "Traceback:",
+        "ImportError:",
+        "ModuleNotFoundError:",
+        "AttributeError:",
+        "Uncaught app exception",
+    ]
+    return not any(marker in body for marker in error_markers)
 
 
 def quote_ps(path: Path) -> str:
@@ -248,6 +329,24 @@ def set_wechat_running(value: bool) -> None:
     global wechat_running
     with state_lock:
         wechat_running = value
+
+
+def set_rag_ready(value: bool) -> None:
+    global rag_ready
+    with state_lock:
+        rag_ready = value
+
+
+def get_rag_ready() -> bool:
+    with state_lock:
+        return rag_ready
+
+
+def notify(icon: pystray.Icon, title: str, message: str) -> None:
+    try:
+        icon.notify(message, title)
+    except Exception:
+        pass
 
 
 def get_wechat_running() -> bool:
