@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
 from customer_rag.config import RagConfig
-from customer_rag.pipeline import RagPipeline
 from customer_rag.tencent_docs import (
     TencentDocSubscription,
     download_subscription,
     fetch_subscription_last_modified,
+    load_subscriptions,
     save_subscriptions,
     subscription_output_path,
     update_subscription_status,
@@ -39,6 +41,8 @@ class SubscriptionJobState:
     chunks: int = 0
     index_error: str = ""
     message: str = ""
+    updated_files: list[str] = field(default_factory=list)
+    pending_modified_by_url: dict[str, str] = field(default_factory=dict)
     logs: list[str] = field(default_factory=list)
 
 
@@ -69,6 +73,21 @@ def read_job_state(config: RagConfig) -> SubscriptionJobState:
     return SubscriptionJobState(**defaults)
 
 
+def is_subscription_worker_alive() -> bool:
+    return bool(_worker and _worker.is_alive())
+
+
+def recover_interrupted_subscription_job(config: RagConfig) -> SubscriptionJobState:
+    state = read_job_state(config)
+    if state.status in {"running", "rebuilding", "stopping"} and not is_subscription_worker_alive():
+        state.status = "error"
+        state.finished_at = _now()
+        state.message = "任务已中断：服务重启或后台 worker 已不存在"
+        _add_log(state, state.message)
+        _write_state(config, state)
+    return state
+
+
 def start_subscription_job(
     config: RagConfig,
     subscriptions_path: Path,
@@ -77,7 +96,7 @@ def start_subscription_job(
 ) -> SubscriptionJobState:
     global _worker
     with _lock:
-        state = read_job_state(config)
+        state = recover_interrupted_subscription_job(config)
         if state.status in {"running", "rebuilding", "stopping"} and _worker and _worker.is_alive():
             return state
         stop_flag_path(config).unlink(missing_ok=True)
@@ -87,7 +106,7 @@ def start_subscription_job(
             status="running",
             started_at=_now(),
             total=len(subscriptions),
-            message="后台更新已启动",
+            message="订阅下载已启动",
         )
         _write_state(config, state)
         _worker = threading.Thread(
@@ -122,7 +141,7 @@ def _run_subscription_job(
     cookie: str,
     job_id: str,
 ) -> None:
-    downloaded_paths: list[tuple[Path, list[str]]] = []
+    downloaded_paths: list[Path] = []
     next_subscriptions = subscriptions
     state = read_job_state(config)
     try:
@@ -136,12 +155,25 @@ def _run_subscription_job(
             state.current_downloaded = 0
             state.current_total = None
             state.message = f"正在更新：{subscription.name}"
-            _add_log(state, f"{subscription.name} 开始检查")
+            next_subscriptions = update_subscription_status(next_subscriptions, subscription.url, "更新中")
+            save_subscriptions(subscriptions_path, next_subscriptions)
+            _add_log(
+                state,
+                f"{subscription.name} 开始检查；本地记录最后修改={subscription.last_modified or '空'}",
+            )
             _write_state(config, state)
 
             try:
                 remote_modified = fetch_subscription_last_modified(subscription, cookie)
                 output_path = subscription_output_path(subscription, config.raw_data_dir)
+                local_exists = output_path.exists()
+                _add_log(
+                    state,
+                    (
+                        f"{subscription.name} 远端最后修改={remote_modified or '未读取到'}；"
+                        f"本地文件={'存在' if local_exists else '不存在'}；路径={output_path}"
+                    ),
+                )
                 if remote_modified and remote_modified == subscription.last_modified and output_path.exists():
                     state.skipped += 1
                     next_subscriptions = update_subscription_status(
@@ -150,14 +182,41 @@ def _run_subscription_job(
                         "跳过：文件未变化",
                         last_modified=remote_modified,
                     )
-                    _add_log(state, f"{subscription.name} 跳过：文件未变化")
+                    save_subscriptions(subscriptions_path, next_subscriptions)
+                    _add_log(
+                        state,
+                        (
+                            f"{subscription.name} 跳过：远端最后修改与已入库记录一致 "
+                            f"({remote_modified})，且本地文件存在"
+                        ),
+                    )
                     _write_state(config, state)
                     continue
 
+                if not remote_modified:
+                    _add_log(state, f"{subscription.name} 决定下载：未读取到远端最后修改时间，无法确认本地是否最新")
+                elif remote_modified != subscription.last_modified:
+                    _add_log(
+                        state,
+                        (
+                            f"{subscription.name} 决定下载：远端最后修改 {remote_modified} "
+                            f"!= 已入库记录 {subscription.last_modified or '空'}"
+                        ),
+                    )
+                elif not local_exists:
+                    _add_log(state, f"{subscription.name} 决定下载：远端时间未变化但本地文件不存在")
+
+                last_progress_write = 0.0
+
                 def progress(downloaded: int, total: int | None) -> None:
+                    nonlocal last_progress_write
                     state.current_downloaded = downloaded
                     state.current_total = total
                     state.message = f"正在下载：{subscription.name}"
+                    now = time.monotonic()
+                    if total and downloaded < total and now - last_progress_write < 0.5:
+                        return
+                    last_progress_write = now
                     _write_state(config, state)
 
                 downloaded_path = download_subscription(
@@ -166,19 +225,29 @@ def _run_subscription_job(
                     cookie,
                     progress_callback=progress,
                 )
-                downloaded_paths.append((downloaded_path, subscription.tags))
+                downloaded_paths.append(downloaded_path)
+                state.updated_files.append(str(downloaded_path.resolve()))
+                if remote_modified:
+                    state.pending_modified_by_url[subscription.url] = remote_modified
                 state.downloaded += 1
                 next_subscriptions = update_subscription_status(
                     next_subscriptions,
                     subscription.url,
-                    "成功",
-                    last_modified=remote_modified,
+                    "已下载待解析",
                 )
-                _add_log(state, f"{subscription.name} 下载完成")
+                save_subscriptions(subscriptions_path, next_subscriptions)
+                _add_log(
+                    state,
+                    (
+                        f"{subscription.name} 下载完成；保存到={downloaded_path}；"
+                        f"待提交远端最后修改={remote_modified or '空'}"
+                    ),
+                )
                 _write_state(config, state)
             except RuntimeError as exc:
                 state.failed += 1
                 next_subscriptions = update_subscription_status(next_subscriptions, subscription.url, f"失败：{exc}")
+                save_subscriptions(subscriptions_path, next_subscriptions)
                 _add_log(state, f"{subscription.name} 更新失败：{exc}")
                 _write_state(config, state)
 
@@ -187,21 +256,13 @@ def _run_subscription_job(
             state.finished_at = _now()
             _write_state(config, state)
             return
-        if downloaded_paths:
-            state.status = "rebuilding"
-            state.current_name = "重建向量索引"
-            state.message = "正在替换导入订阅语料并重建索引"
-            _write_state(config, state)
-            stats = RagPipeline(config).replace_files_with_tags(downloaded_paths)
-            state.removed = int(stats.get("removed") or 0)
-            state.documents = int(stats.get("documents") or 0)
-            state.items = int(stats.get("items") or 0)
-            state.chunks = int(stats.get("chunks") or 0)
-            state.index_error = str(stats.get("index_error") or "")
-            _add_log(state, f"重建完成：新增 {state.items} 条语料，索引 {state.chunks} 个片段")
         state.status = "completed"
         state.finished_at = _now()
-        state.message = "订阅更新完成"
+        if downloaded_paths:
+            state.message = "下载完成。请在下方点击重新解析文件完成后再重构索引。"
+            _add_log(state, f"下载完成：新增/更新 {len(downloaded_paths)} 个原始文件，等待手动解析和重构索引")
+        else:
+            state.message = "订阅检查完成，无需下载。"
         _write_state(config, state)
     except Exception as exc:  # noqa: BLE001 - background jobs must persist diagnostics.
         state.status = "error"
@@ -214,14 +275,64 @@ def _run_subscription_job(
 def _write_state(config: RagConfig, state: SubscriptionJobState) -> None:
     path = job_state_path(config)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(".json.tmp")
-    tmp_path.write_text(json.dumps(asdict(state), ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp_path.replace(path)
+    payload = json.dumps(asdict(state), ensure_ascii=False, indent=2)
+    last_error: OSError | None = None
+    for attempt in range(8):
+        tmp_path = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
+        try:
+            tmp_path.write_text(payload, encoding="utf-8")
+            os.replace(tmp_path, path)
+            return
+        except OSError as exc:
+            last_error = exc
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            time.sleep(0.08 * (attempt + 1))
+    try:
+        path.write_text(payload, encoding="utf-8")
+    except OSError as exc:
+        raise last_error or exc
+
+
+def commit_pending_subscription_updates(config: RagConfig, subscriptions_path: Path) -> int:
+    state = read_job_state(config)
+    pending = dict(state.pending_modified_by_url or {})
+    if not pending:
+        return 0
+    subscriptions = load_subscriptions(subscriptions_path)
+    updated: list[TencentDocSubscription] = []
+    changed = 0
+    for subscription in subscriptions:
+        pending_modified = pending.get(subscription.url)
+        if pending_modified:
+            updated.append(
+                TencentDocSubscription(
+                    name=subscription.name,
+                    url=subscription.url,
+                    tags=subscription.tags,
+                    enabled=subscription.enabled,
+                    last_updated=subscription.last_updated,
+                    last_status="已同步",
+                    last_modified=pending_modified,
+                )
+            )
+            changed += 1
+        else:
+            updated.append(subscription)
+    save_subscriptions(subscriptions_path, updated)
+    state.pending_modified_by_url = {}
+    state.updated_files = []
+    state.message = "订阅远端最后修改时间已在索引重建完成后提交"
+    _add_log(state, f"索引重建完成后提交订阅最后修改时间：{changed} 个")
+    _write_state(config, state)
+    return changed
 
 
 def _add_log(state: SubscriptionJobState, message: str) -> None:
     state.logs.append(f"{_now()} {message}")
-    state.logs = state.logs[-30:]
+    state.logs = state.logs[-300:]
 
 
 def _stop_requested(config: RagConfig) -> bool:

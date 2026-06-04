@@ -1,0 +1,1124 @@
+categories:
+  电饭煲:
+    aliases:
+    - 饭煲
+  电磁炉:
+    aliases: []
+  电压力锅:
+    aliases:
+    - 压力锅
+    - 锅
+  破壁机:
+    aliases: []
+  电蒸锅:
+    aliases:
+    - 蒸锅
+  微波炉:
+    aliases: []
+  水波炉:
+    aliases: []
+  咖啡机:
+    aliases: []
+  按摩椅:
+    aliases: []
+  床:
+    aliases:
+    - 实木床
+    - 软床
+    - 箱体床
+  床头柜:
+    aliases: []
+  刀具:
+    aliases:
+    - 菜刀
+    - 刀
+    - 切片工具
+    - 钛刀
+  沙发:
+    aliases:
+    - 布艺沙发
+    - 皮艺沙发
+    - 功能沙发
+  餐桌:
+    aliases: []
+  椅:
+    aliases:
+    - 餐椅
+    - 椅子
+  柜:
+    aliases:
+    - 衣柜
+    - 电视柜
+    - 边柜
+  电动皮沙发:
+    aliases: []
+  功能布沙发:
+    aliases: []
+  功能皮沙发:
+    aliases: []
+  布单椅:
+    aliases: []
+  皮单椅:
+    aliases: []
+  单椅:
+    aliases: []
+  电动皮单椅:
+    aliases: []
+  电动布沙发:
+    aliases: []
+  全友多件多折:
+    aliases: []
+  弹簧床垫:
+    aliases: []
+  皮沙发:
+    aliases: []
+  岛台:
+    aliases: []
+  皮沙发-U标:
+    aliases:
+    - U标
+  布沙发-U标:
+    aliases: []
+  皮艺床:
+    aliases: []
+  皮床:
+    aliases: []
+  布床:
+    aliases: []
+  板式床:
+    aliases: []
+  皮床-U标:
+    aliases: []
+  床垫-U标:
+    aliases: []
+  床垫:
+    aliases: []
+  乳胶床垫:
+    aliases: []
+  餐桌椅-实木:
+    aliases:
+    - 实木
+  餐桌椅:
+    aliases: []
+  岛台餐桌:
+    aliases: []
+  岩板餐桌:
+    aliases: []
+  边桌:
+    aliases: []
+  茶几:
+    aliases: []
+  斗柜:
+    aliases: []
+  梳妆台:
+    aliases: []
+  茶几电视柜:
+    aliases: []
+  储物柜:
+    aliases: []
+  休闲椅:
+    aliases: []
+  单人椅:
+    aliases: []
+  书桌:
+    aliases: []
+  书柜:
+    aliases: []
+  穿衣镜:
+    aliases: []
+  置物架:
+    aliases: []
+  茶几-U标:
+    aliases: []
+  智能床-U标:
+    aliases: []
+  皮艺床-U标:
+    aliases: []
+  实木沙发:
+    aliases: []
+  软包床:
+    aliases: []
+  软包板式床:
+    aliases: []
+  智能床:
+    aliases: []
+  儿童床:
+    aliases: []
+  沙发床:
+    aliases: []
+  棉麻沙发:
+    aliases: []
+  布沙发:
+    aliases: []
+  功能单椅:
+    aliases: []
+  书椅:
+    aliases: []
+  功能餐桌椅:
+    aliases: []
+  茶台:
+    aliases: []
+  备餐柜:
+    aliases: []
+  卡门柜:
+    aliases: []
+  妆台:
+    aliases: []
+  儿童衣柜:
+    aliases: []
+  书桌椅:
+    aliases: []
+  儿童书桌:
+    aliases: []
+  鞋柜:
+    aliases: []
+  转角柜:
+    aliases: []
+  边几:
+    aliases: []
+  换鞋凳:
+    aliases: []
+  一:
+    aliases: []
+  清单商品可参与店铺活动:
+    aliases: []
+  餐边柜:
+    aliases: []
+  小茶车:
+    aliases: []
+  小推车:
+    aliases: []
+  茶水柜:
+    aliases: []
+  组合柜:
+    aliases: []
+  展示柜:
+    aliases: []
+  茶车:
+    aliases: []
+  电视架:
+    aliases: []
+  凳:
+    aliases: []
+  懒人沙发:
+    aliases: []
+  电动床:
+    aliases: []
+  床垫-弹簧床垫:
+    aliases: []
+  床垫-薄垫:
+    aliases:
+    - 薄垫
+  组合套餐-床+床垫套餐:
+    aliases:
+    - 组合套餐
+    - 床+床垫套餐
+  床垫套餐:
+    aliases: []
+  床-软包床:
+    aliases: []
+  家纺-床笠:
+    aliases:
+    - 床笠
+  家纺-被子:
+    aliases:
+    - 被子
+  组合套餐-智能床垫套餐:
+    aliases:
+    - 智能床垫套餐
+  床-儿童软包床:
+    aliases:
+    - 儿童软包床
+  布艺床:
+    aliases: []
+  休闲皮沙发:
+    aliases: []
+  休闲布沙发:
+    aliases: []
+  柜类:
+    aliases: []
+  布艺功能沙发:
+    aliases: []
+  休闲皮艺沙发:
+    aliases: []
+  休闲布艺沙发:
+    aliases: []
+  皮艺功能沙发:
+    aliases: []
+  家纺:
+    aliases: []
+  宠物床垫:
+    aliases: []
+  沙发椅:
+    aliases: []
+  化妆桌:
+    aliases: []
+  玄关柜:
+    aliases: []
+  堆叠凳:
+    aliases: []
+  榻榻米:
+    aliases: []
+  儿童书柜:
+    aliases: []
+  儿童:
+    aliases: []
+  架:
+    aliases: []
+  衣架:
+    aliases: []
+  鞋架:
+    aliases: []
+  悬浮床头柜:
+    aliases: []
+  铺板升级:
+    aliases: []
+  功能床:
+    aliases: []
+  电动储物床:
+    aliases: []
+  床+床垫:
+    aliases: []
+  儿童沙发:
+    aliases: []
+  桌:
+    aliases: []
+  梳妆凳:
+    aliases: []
+  茶桌:
+    aliases: []
+  儿童储物收纳:
+    aliases: []
+  角柜:
+    aliases: []
+  床架套餐:
+    aliases: []
+  净水-前置过滤器:
+    aliases:
+    - 净水
+    - 前置过滤器
+  净水-厨下:
+    aliases:
+    - 厨下
+  净水-净热一体:
+    aliases:
+    - 净热一体
+  净水-加热净水器:
+    aliases:
+    - 加热净水器
+  空净类:
+    aliases: []
+  热水器-电热:
+    aliases:
+    - 热水器
+    - 电热
+  净水-台式:
+    aliases:
+    - 台式
+  加湿净化器:
+    aliases: []
+  空净类-加湿器:
+    aliases:
+    - 加湿器
+  热水器-燃热:
+    aliases:
+    - 燃热
+  净水-管线机:
+    aliases:
+    - 管线机
+  净水-茶吧机:
+    aliases:
+    - 茶吧机
+  净水-龙头过滤器:
+    aliases:
+    - 龙头过滤器
+  净水-软水机:
+    aliases:
+    - 软水机
+  电视-MiniLED:
+    aliases:
+    - 电视
+    - MiniLED
+  电视-激光:
+    aliases:
+    - 激光
+  冰箱-法式多门:
+    aliases:
+    - 冰箱
+    - 法式多门
+  冰箱-日式多门:
+    aliases:
+    - 日式多门
+  冰箱-法式五门:
+    aliases:
+    - 法式五门
+  冰箱-十字门:
+    aliases:
+    - 十字门
+  冰箱-对开门:
+    aliases:
+    - 对开门
+  冰箱-冷柜:
+    aliases:
+    - 冷柜
+  空调-挂机1.5匹:
+    aliases:
+    - 空调
+    - 挂机1.5匹
+  空调-柜机3匹:
+    aliases:
+    - 柜机3匹
+  空调-挂机1匹:
+    aliases:
+    - 挂机1匹
+  数码3C-回音壁:
+    aliases:
+    - 数码3C
+    - 回音壁
+  数码3C-投影仪:
+    aliases:
+    - 投影仪
+  洗衣机-洗烘一体:
+    aliases:
+    - 洗衣机
+    - 洗烘一体
+  洗衣机-洗烘套装:
+    aliases:
+    - 洗烘套装
+  洗衣机-双子舱:
+    aliases:
+    - 双子舱
+  洗衣机-滚筒:
+    aliases:
+    - 滚筒
+  洗衣机-洗脱一体:
+    aliases:
+    - 洗脱一体
+  数码3C-显示器:
+    aliases:
+    - 显示器
+  电视-会议电视:
+    aliases:
+    - 会议电视
+  空调-挂机2匹:
+    aliases:
+    - 挂机2匹
+  空调-挂机3匹:
+    aliases:
+    - 挂机3匹
+  空调-柜机2匹:
+    aliases:
+    - 柜机2匹
+  清洁电器-扫地机:
+    aliases:
+    - 清洁电器
+    - 扫地机
+  清洁电器-洗地机:
+    aliases:
+    - 洗地机
+  清洁电器-擦窗机:
+    aliases:
+    - 擦窗机
+  擦窗机器人:
+    aliases: []
+  厨房电器-电饭煲:
+    aliases:
+    - 厨房电器
+  个护电器-按摩椅:
+    aliases:
+    - 个护电器
+  厨房电器-微蒸烤:
+    aliases:
+    - 微蒸烤
+  净饮机:
+    aliases: []
+  厨房电器-微波炉:
+    aliases: []
+  厨房电器-烤箱:
+    aliases:
+    - 烤箱
+  洗衣机—内衣机:
+    aliases:
+    - 内衣机
+  小家电-空气炸锅:
+    aliases:
+    - 小家电
+    - 空气炸锅
+  小家电-烤箱:
+    aliases: []
+  小家电-厨师机:
+    aliases:
+    - 厨师机
+  小家电-面包机:
+    aliases:
+    - 面包机
+  小家电-咖啡机:
+    aliases: []
+  生活电器-内衣机:
+    aliases:
+    - 生活电器
+  煮蛋器:
+    aliases: []
+  个护电器-按摩仪:
+    aliases:
+    - 按摩仪
+  个护电器-按摩垫:
+    aliases:
+    - 按摩垫
+  清洁电器—吸尘器:
+    aliases:
+    - 吸尘器
+  厨房电器—破壁机:
+    aliases: []
+  厨房电器—空气炸锅:
+    aliases: []
+  厨房电器—榨汁机:
+    aliases:
+    - 榨汁机
+  生活电器—布艺清洗机:
+    aliases:
+    - 布艺清洗机
+  生活电器—厨师机:
+    aliases: []
+  厨房电器—蒸汽拖把:
+    aliases:
+    - 蒸汽拖把
+  厨房电器—面包机:
+    aliases: []
+  厨房电器—果蔬机:
+    aliases:
+    - 果蔬机
+  厨房电器—电蒸锅:
+    aliases: []
+  厨房电器—绞肉机:
+    aliases:
+    - 绞肉机
+  小家电-循环扇:
+    aliases:
+    - 循环扇
+  烟灶-单烟机:
+    aliases:
+    - 烟灶
+    - 单烟机
+  烟灶-套装:
+    aliases:
+    - 套装
+  洗碗机-10套:
+    aliases:
+    - 洗碗机
+    - 10套
+  烟灶-烟灶消套装:
+    aliases:
+    - 烟灶消套装
+  洗碗机-21套:
+    aliases:
+    - 21套
+  洗碗机-15套:
+    aliases:
+    - 15套
+  蒸烤-蒸烤:
+    aliases:
+    - 蒸烤
+  消毒柜:
+    aliases: []
+  洗碗机-16套:
+    aliases:
+    - 16套
+  蒸烤-微蒸烤:
+    aliases: []
+  烟灶-灶具:
+    aliases:
+    - 灶具
+  洗碗机-23套:
+    aliases:
+    - 23套
+  价格待定：以直播间为准:
+    aliases: []
+  海信璀璨系列:
+    aliases: []
+  海信大薄荷系列:
+    aliases: []
+  海信:
+    aliases: []
+  容声:
+    aliases: []
+  科龙:
+    aliases: []
+  古洛尼:
+    aliases: []
+  ASKO:
+    aliases: []
+  海信-天猫:
+    aliases:
+    - 天猫
+  容声-天猫:
+    aliases: []
+  Vidda-天猫:
+    aliases:
+    - Vidda
+  Vidda-京东:
+    aliases:
+    - 京东
+  空调-挂1.5P:
+    aliases:
+    - 挂1.5P
+  空调-柜3P:
+    aliases:
+    - 柜3P
+  净水-台下净饮机:
+    aliases:
+    - 台下净饮机
+  洗衣机-壁挂:
+    aliases:
+    - 壁挂
+  洗衣机-波轮:
+    aliases:
+    - 波轮
+  净水-前置:
+    aliases:
+    - 前置
+  热水器-壁挂炉:
+    aliases:
+    - 壁挂炉
+  空调-挂2P:
+    aliases:
+    - 挂2P
+  空调-风管机3p:
+    aliases:
+    - 风管机3p
+  洗衣机-双子:
+    aliases:
+    - 双子
+  烟灶-烟灶套装:
+    aliases:
+    - 烟灶套装
+  洗碗机-22套:
+    aliases:
+    - 22套
+  热水器-空气能:
+    aliases:
+    - 空气能
+  烟灶-单灶具:
+    aliases:
+    - 单灶具
+  蒸烤-蒸烤箱:
+    aliases:
+    - 蒸烤箱
+  蒸烤箱-微蒸烤:
+    aliases: []
+  洗碗机-20套:
+    aliases:
+    - 20套
+  洗碗机-灶下16套:
+    aliases:
+    - 灶下16套
+  洗碗机-17套:
+    aliases:
+    - 17套
+  洗碗机-台上8套:
+    aliases:
+    - 台上8套
+  净水-台净:
+    aliases:
+    - 台净
+  空调-柜2P:
+    aliases:
+    - 柜2P
+  空气净化器:
+    aliases: []
+  洗衣机-壁挂洗衣机:
+    aliases:
+    - 壁挂洗衣机
+  净水器-厨下净水器:
+    aliases:
+    - 净水器
+    - 厨下净水器
+  嵌入式微蒸烤:
+    aliases: []
+  空调-柜机:
+    aliases:
+    - 柜机
+  洗碗机-24套:
+    aliases:
+    - 24套
+  嵌入式蒸烤箱:
+    aliases: []
+  洗碗机-18套:
+    aliases:
+    - 18套
+  净水-台下净水器:
+    aliases:
+    - 台下净水器
+  净水器-台上净饮机:
+    aliases:
+    - 台上净饮机
+  空调-挂机:
+    aliases:
+    - 挂机
+  空调-挂1.5匹:
+    aliases:
+    - 挂1.5匹
+  空调-1.5匹挂:
+    aliases:
+    - 1.5匹挂
+  洗碗机-6套:
+    aliases:
+    - 6套
+  净水-软净一体:
+    aliases:
+    - 软净一体
+  风扇:
+    aliases: []
+  小家电-电磁双灶:
+    aliases:
+    - 电磁双灶
+  电热火锅:
+    aliases: []
+  小家电-猛火灶:
+    aliases:
+    - 猛火灶
+  照烧炉:
+    aliases: []
+  电烤箱:
+    aliases: []
+  浴霸:
+    aliases: []
+  制冰机:
+    aliases: []
+  洗衣机-单洗:
+    aliases:
+    - 单洗
+  洗衣机-台式洗衣机:
+    aliases:
+    - 台式洗衣机
+  洗衣机-单烘干:
+    aliases:
+    - 单烘干
+  空调-3匹柜:
+    aliases:
+    - 3匹柜
+  空调-2匹挂:
+    aliases:
+    - 2匹挂
+  净水器-嵌入式直饮机:
+    aliases:
+    - 嵌入式直饮机
+  净水器-管线机:
+    aliases: []
+  洗碗机-17+3套:
+    aliases:
+    - 17+3套
+  蒸烤箱-嵌入式:
+    aliases:
+    - 嵌入式
+  净水器-嵌入式净饮机:
+    aliases:
+    - 嵌入式净饮机
+  洗衣机-滚筒洗衣机:
+    aliases:
+    - 滚筒洗衣机
+  油烟机-单烟机:
+    aliases:
+    - 油烟机
+  油烟机-灶具:
+    aliases: []
+  洗碗机-15+2套:
+    aliases:
+    - 15+2套
+  洗衣机-单洗滚筒:
+    aliases:
+    - 单洗滚筒
+  厨房电器-炒菜机器人:
+    aliases:
+    - 炒菜机器人
+  洗碗机-14套:
+    aliases:
+    - 14套
+  清洁电器-吸尘器:
+    aliases: []
+  清洁电器-除螨仪:
+    aliases:
+    - 除螨仪
+  清洁电器-车载吸尘器:
+    aliases:
+    - 车载吸尘器
+  清洁电器-洗车机:
+    aliases:
+    - 洗车机
+  清洁电器-擦窗机器人:
+    aliases: []
+  清洁电器-空气净化器:
+    aliases: []
+  正典:
+    aliases: []
+  智能马桶:
+    aliases: []
+  轻智能马桶:
+    aliases: []
+  恒温花洒:
+    aliases: []
+  普通花洒:
+    aliases: []
+  浴室柜:
+    aliases: []
+  水槽:
+    aliases: []
+  电热毛巾架:
+    aliases: []
+  五金置物架:
+    aliases: []
+  面盆龙头:
+    aliases: []
+  厨房龙头:
+    aliases: []
+  淋浴房:
+    aliases: []
+  音乐花洒:
+    aliases: []
+  智能马桶盖:
+    aliases: []
+  普通马桶:
+    aliases: []
+  花洒:
+    aliases: []
+  分体普通花洒:
+    aliases: []
+  厨卫挂件:
+    aliases: []
+  角阀:
+    aliases: []
+  地漏:
+    aliases: []
+  普通花洒套装:
+    aliases: []
+  线性灯:
+    aliases: []
+  厨卫龙头:
+    aliases: []
+  马桶:
+    aliases: []
+  智能壁挂马桶:
+    aliases: []
+  轻智能壁挂马桶:
+    aliases: []
+  垃圾处理器:
+    aliases: []
+  拉篮:
+    aliases: []
+  卫浴挂件:
+    aliases: []
+  厨房挂件:
+    aliases: []
+  厨卫拉篮:
+    aliases: []
+  浴室柜下柜:
+    aliases: []
+  镜柜:
+    aliases: []
+  厨房水槽:
+    aliases: []
+  淋浴花洒:
+    aliases: []
+  浴缸:
+    aliases: []
+  京东专供-智能马桶:
+    aliases:
+    - 京东专供
+  地漏角阀:
+    aliases: []
+  智能门锁:
+    aliases: []
+  电动晾衣机:
+    aliases: []
+  落地晾衣架:
+    aliases: []
+  步梯:
+    aliases: []
+  灯具-吸顶灯:
+    aliases:
+    - 灯具
+    - 吸顶灯
+  灯具-筒灯:
+    aliases:
+    - 筒灯
+  灯具-射灯:
+    aliases:
+    - 射灯
+  灯具-灯带:
+    aliases:
+    - 灯带
+  灯具-大路灯:
+    aliases:
+    - 大路灯
+  灯具-风扇灯:
+    aliases:
+    - 风扇灯
+  灯具-餐吊灯:
+    aliases:
+    - 餐吊灯
+  灯具-筒射灯:
+    aliases:
+    - 筒射灯
+  灯具-吊灯:
+    aliases:
+    - 吊灯
+  灯具-浴霸:
+    aliases: []
+  灯具-读写灯饰:
+    aliases:
+    - 读写灯饰
+  灯具-餐厅吊灯:
+    aliases:
+    - 餐厅吊灯
+  灯具-地脚灯:
+    aliases:
+    - 地脚灯
+  灯具-护眼灯:
+    aliases:
+    - 护眼灯
+  灯具-面板灯:
+    aliases:
+    - 面板灯
+  光控器:
+    aliases: []
+  灯具-落地灯:
+    aliases:
+    - 落地灯
+  过道吸顶灯:
+    aliases: []
+  床头吊灯:
+    aliases: []
+  卧室吊灯:
+    aliases: []
+  室内壁灯:
+    aliases: []
+  装饰落地灯:
+    aliases: []
+  灯具-立式护眼灯:
+    aliases:
+    - 立式护眼灯
+  电动窗帘:
+    aliases: []
+  电动梦幻窗帘:
+    aliases: []
+  电动香格里拉窗帘:
+    aliases: []
+  科创者蜂巢帘:
+    aliases: []
+  智能开关:
+    aliases: []
+  智能传感器:
+    aliases: []
+  家装-开关:
+    aliases:
+    - 家装
+    - 开关
+  插座:
+    aliases: []
+  家装电动工具:
+    aliases: []
+  智能小件:
+    aliases: []
+  智能电动窗帘:
+    aliases: []
+  智能管状电机成品帘套装:
+    aliases: []
+  智能墙壁开关:
+    aliases: []
+  智能墙壁插座:
+    aliases: []
+  全屋智能套餐:
+    aliases: []
+  智能灯:
+    aliases: []
+  传感器:
+    aliases: []
+  智能卷帘伴侣:
+    aliases: []
+  智能无线开关:
+    aliases: []
+  电脑椅:
+    aliases: []
+  电脑桌:
+    aliases: []
+  人体工学椅:
+    aliases: []
+  工学桌椅-工学椅:
+    aliases:
+    - 工学桌椅
+    - 工学椅
+  电动升降桌:
+    aliases: []
+  电竞椅:
+    aliases: []
+  电竞桌:
+    aliases: []
+  吐司小皮椅:
+    aliases: []
+  可颂皮椅:
+    aliases: []
+  学习桌椅:
+    aliases: []
+  升降桌:
+    aliases: []
+  显示器支架:
+    aliases: []
+  升降台:
+    aliases: []
+  桌面增高架:
+    aliases: []
+  洞洞板:
+    aliases: []
+  墙地面材料丨乳胶漆:
+    aliases: []
+  墙地面材料丨艺术漆:
+    aliases: []
+  墙地面材料丨其他:
+    aliases: []
+  墙地面材料丨腻子膏:
+    aliases: []
+  墙地面材料丨墙面加固剂:
+    aliases: []
+  墙地面材料丨防水:
+    aliases: []
+  墙地面材料丨美缝剂:
+    aliases: []
+  墙地面材料丨玻璃胶:
+    aliases: []
+  26年618-Mr迷瞪&铂耐金属衣柜专属团购清单:
+    aliases:
+    - 26年618
+    - Mr迷瞪&铂耐金属衣柜专属团购清单
+  全屋定制丨权益金:
+    aliases: []
+  全屋定制丨衣柜:
+    aliases: []
+  全屋定制丨定制尾款:
+    aliases: []
+  室内门丨木门:
+    aliases: []
+  室内门丨套餐:
+    aliases: []
+  室内门丨铝玻门:
+    aliases: []
+  室内门丨其他:
+    aliases: []
+  测量金:
+    aliases: []
+  补差:
+    aliases: []
+  地板:
+    aliases: []
+  全屋定制:
+    aliases: []
+  权益金:
+    aliases: []
+  橱柜:
+    aliases: []
+  入户门丨防盗门:
+    aliases: []
+  26年618-Mr迷瞪&汉纱纱窗专属团购清单:
+    aliases:
+    - Mr迷瞪&汉纱纱窗专属团购清单
+  纱窗:
+    aliases: []
+  H2纱窗纱门套餐:
+    aliases: []
+  H18m:
+    aliases: []
+  PC防护纱窗套餐:
+    aliases: []
+  纱门:
+    aliases: []
+  纱窗纱门套餐:
+    aliases: []
+  品类:
+    aliases: []
+  窗帘布:
+    aliases: []
+  纱帘:
+    aliases: []
+  装饰画:
+    aliases: []
+  四件套:
+    aliases: []
+  夏被:
+    aliases: []
+  子母被:
+    aliases: []
+  被芯:
+    aliases: []
+  枕芯:
+    aliases: []
+  蚕丝被:
+    aliases: []
+  凉席:
+    aliases: []
+  乳胶凉垫:
+    aliases: []
+  凉感席:
+    aliases: []
+  牛皮席:
+    aliases: []
+  御藤席三件套:
+    aliases: []
+  大豆被:
+    aliases: []
+  客厅毯:
+    aliases: []
+  圆毯:
+    aliases: []
+  客厅地毯:
+    aliases: []
+  地毯:
+    aliases: []
+  入户门垫:
+    aliases: []
+  浴室垫:
+    aliases: []
+  地毯-床边毯:
+    aliases:
+    - 床边毯
+  地毯-圆毯:
+    aliases: []
+  地毯-双层地毯:
+    aliases:
+    - 双层地毯
+  地毯-羊毛地毯:
+    aliases:
+    - 羊毛地毯
+  地毯-无胶地毯:
+    aliases:
+    - 无胶地毯
+  地毯-厨房垫:
+    aliases:
+    - 厨房垫
+  尚拉维窗帘春装活动:
+    aliases: []
+  尚拉维窗帘:
+    aliases: []
+  尚拉维:
+    aliases: []
+  窗帘-布帘:
+    aliases:
+    - 窗帘
+    - 布帘
+  窗帘-纱帘:
+    aliases: []
+  莫兰迪窗帘:
+    aliases: []
+  窗帘-其他:
+    aliases:
+    - 其他
+  窗帘-杆轨配件:
+    aliases:
+    - 杆轨配件
+  窗帘-权益金:
+    aliases: []
+  窗帘-电机:
+    aliases:
+    - 电机
+  金蝉-功能帘:
+    aliases:
+    - 金蝉
+    - 功能帘

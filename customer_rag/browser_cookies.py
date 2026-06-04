@@ -44,6 +44,15 @@ def open_tencent_docs_login_window(port: int = DEBUG_PORT) -> None:
     subprocess.Popen(args)
 
 
+def is_tencent_docs_login_window_open(port: int = DEBUG_PORT) -> bool:
+    version_url = f"http://127.0.0.1:{port}/json/version"
+    try:
+        with urllib.request.urlopen(version_url, timeout=1) as response:
+            return response.status == 200
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
+
+
 def read_tencent_docs_cookie_from_login_window(port: int = DEBUG_PORT) -> BrowserCookieResult:
     try:
         cookies = _read_cdp_cookies(port)

@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from customer_rag.config import load_config
 from customer_rag.pipeline import RagPipeline
+from customer_rag.prompt_defaults import DEFAULT_SYSTEM_PROMPT
 
 
 DEFAULT_PROMPT_SUFFIX = """
@@ -57,12 +58,12 @@ def main() -> int:
 
 def load_system_prompt(path: Path) -> str:
     if not path.exists():
-        return ""
+        return DEFAULT_SYSTEM_PROMPT
     try:
         payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
-        return ""
-    return str(payload.get("system_prompt", "")).strip()
+        return DEFAULT_SYSTEM_PROMPT
+    return str(payload.get("system_prompt", "")).strip() or DEFAULT_SYSTEM_PROMPT
 
 
 def format_wechat_answer(answer: str) -> str:

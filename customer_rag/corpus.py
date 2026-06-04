@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from customer_rag.attributes import extract_attributes
 from customer_rag.loaders import LoadedDocument
 
 
@@ -20,6 +21,7 @@ class CorpusItem:
     updated_at: str
     image_paths: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    attributes: dict = field(default_factory=dict)
 
 
 class CorpusStore:
@@ -54,6 +56,7 @@ class CorpusStore:
             created_at=now,
             updated_at=now,
             tags=_clean_tags(tags or []),
+            attributes={},
         )
         if not item.text:
             raise ValueError("语料内容不能为空。")
@@ -84,6 +87,7 @@ class CorpusStore:
                     updated_at=now,
                     image_paths=doc.image_paths or [],
                     tags=_clean_tags((doc.tags or []) + (tags or [])),
+                    attributes=doc.attributes or {},
                 )
             )
         self.replace_all(items)
@@ -120,6 +124,7 @@ class CorpusStore:
                     updated_at=_now(),
                     image_paths=item.image_paths,
                     tags=_clean_tags(tags if tags is not None else item.tags),
+                    attributes=item.attributes,
                 )
                 next_items.append(updated)
             else:
@@ -146,9 +151,9 @@ class CorpusStore:
     def delete_by_sources(self, sources: set[str]) -> int:
         if not sources:
             return 0
-        normalized_sources = {str(source) for source in sources}
+        normalized_sources = {_normalize_source(source) for source in sources}
         items = self.list_items()
-        next_items = [item for item in items if item.source not in normalized_sources]
+        next_items = [item for item in items if _normalize_source(item.source) not in normalized_sources]
         self.replace_all(next_items)
         return len(items) - len(next_items)
 
@@ -174,6 +179,7 @@ class CorpusStore:
                         updated_at=_now(),
                         image_paths=item.image_paths,
                         tags=merged_tags,
+                        attributes=item.attributes,
                     )
                 )
             else:
@@ -194,6 +200,8 @@ class CorpusStore:
 def _item_from_payload(payload: dict) -> CorpusItem:
     payload.setdefault("image_paths", [])
     payload.setdefault("tags", [])
+    if not payload.get("attributes"):
+        payload["attributes"] = extract_attributes(str(payload.get("text", "")))
     return CorpusItem(**payload)
 
 
@@ -202,7 +210,17 @@ def _now() -> str:
 
 
 def _dedupe_key(source: str, location: str, text: str) -> tuple[str, str, str]:
-    return (source, location, text.strip())
+    return (_normalize_source(source), location, text.strip())
+
+
+def _normalize_source(source: str) -> str:
+    value = str(source).strip()
+    if not value:
+        return ""
+    try:
+        return str(Path(value).resolve()).lower()
+    except OSError:
+        return value.replace("/", "\\").lower()
 
 
 def _clean_tags(tags: list[str]) -> list[str]:

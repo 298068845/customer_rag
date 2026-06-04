@@ -14,6 +14,8 @@ from pathlib import Path
 import pystray
 from PIL import Image, ImageDraw
 
+from customer_rag.config import load_config
+from customer_rag.llama_server import build_llama_server_plan, is_llama_server_healthy
 
 ROOT = Path(__file__).resolve().parent
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
@@ -31,6 +33,7 @@ status_text = "启动中"
 wechat_running = False
 wechat_busy = False
 streamlit_process: subprocess.Popen | None = None
+llama_server_process: subprocess.Popen | None = None
 rag_ready = False
 
 
@@ -71,6 +74,7 @@ def start_all(icon: pystray.Icon) -> None:
         set_status(icon, "RAG 服务启动失败", "paused")
         notify(icon, "RAG 服务启动失败", "代码自检未通过，请查看 streamlit.err.log。")
         return
+    start_llama_server(icon)
     start_streamlit()
     if not wait_for_streamlit():
         set_status(icon, "RAG 服务启动失败", "paused")
@@ -113,11 +117,13 @@ def restart_streamlit(icon: pystray.Icon, _: object = None) -> None:
         set_rag_ready(False)
         notify(icon, "正在重启 RAG 服务", "请稍候，重启完成前不会打开 RAG 页面。")
         stop_streamlit()
+        stop_llama_server()
         time.sleep(1)
         if not preflight_check():
             set_status(icon, "RAG 服务启动失败", "paused")
             notify(icon, "RAG 服务启动失败", "代码自检未通过，请查看 streamlit.err.log。")
             return
+        start_llama_server(icon)
         start_streamlit()
         if wait_for_streamlit():
             set_status(icon, current_ready_status(), current_icon_kind())
@@ -142,6 +148,65 @@ def stop_streamlit() -> None:
 
     for owner in port_owner_pids(APP_PORT):
         run_powershell(f"Stop-Process -Id {owner} -Force")
+
+
+def start_llama_server(icon: pystray.Icon | None = None) -> None:
+    global llama_server_process
+    config = load_config(ROOT / "config.yaml")
+    plan = build_llama_server_plan(config, ROOT)
+    if not plan.enabled:
+        if config.llm.backend == "llama_cpp_server" and icon:
+            notify(icon, "llama.cpp server 未启动", plan.reason)
+        return
+    if is_llama_server_healthy(config):
+        return
+    if is_port_listening(config.llm.llama_server_port):
+        for owner in port_owner_pids(config.llm.llama_server_port):
+            run_powershell(f"Stop-Process -Id {owner} -Force")
+        time.sleep(1)
+    log_path = ROOT / "llama-server.log"
+    err_path = ROOT / "llama-server.err.log"
+    with log_path.open("ab") as stdout, err_path.open("ab") as stderr:
+        env = dict(os.environ)
+        env["LLAMA_ARG_NO_DISPLAY_PROMPT"] = "1"
+        llama_server_process = subprocess.Popen(
+            plan.args,
+            cwd=ROOT,
+            stdout=stdout,
+            stderr=stderr,
+            env=env,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    if icon and config.llm.backend == "llama_cpp_server":
+        notify(icon, "正在启动 llama.cpp server", f"后端：{plan.backend}")
+    if config.llm.backend == "llama_cpp_server" and not wait_for_llama_server(config):
+        if icon:
+            notify(icon, "llama.cpp server 启动超时", "RAG 页面仍会启动，问答会临时回退到检索结果或 Ollama。")
+
+
+def stop_llama_server() -> None:
+    global llama_server_process
+    config = load_config(ROOT / "config.yaml")
+    if llama_server_process and llama_server_process.poll() is None:
+        llama_server_process.terminate()
+        try:
+            llama_server_process.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            llama_server_process.kill()
+    llama_server_process = None
+    for owner in port_owner_pids(config.llm.llama_server_port):
+        run_powershell(f"Stop-Process -Id {owner} -Force")
+
+
+def wait_for_llama_server(config, timeout_seconds: int = 60) -> bool:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if is_llama_server_healthy(config):
+            return True
+        if llama_server_process and llama_server_process.poll() is not None:
+            return False
+        time.sleep(0.75)
+    return False
 
 
 def wait_for_streamlit(timeout_seconds: int = 60) -> bool:
@@ -208,6 +273,8 @@ def toggle_wechat_plugin(icon: pystray.Icon, _: object = None) -> None:
 def quit_launcher(icon: pystray.Icon, _: object = None) -> None:
     def worker() -> None:
         stop_wechat_plugin()
+        stop_llama_server()
+        stop_streamlit()
         icon.visible = False
         icon.stop()
 

@@ -9,10 +9,16 @@ embedding_batch_size: 32
 top_k: 5
 
 llm:
-  backend: ollama
+  backend: llama_cpp_server
   ollama_url: http://localhost:11434
   ollama_model: deepseek-r1:1.5b
-  n_ctx: 2048
+  llama_server_url: http://127.0.0.1:8081
+  llama_server_host: 127.0.0.1
+  llama_server_port: 8081
+  llama_server_executable: ''
+  llama_server_backend: auto
+  n_gpu_layers: 0
+  n_ctx: 4096
   n_threads: 4
   temperature: 0.2
   max_tokens: 512

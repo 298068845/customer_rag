@@ -14,6 +14,7 @@ class Chunk:
     chunk_id: str
     image_paths: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    attributes: dict = field(default_factory=dict)
 
 
 def split_documents(
@@ -33,6 +34,7 @@ def split_documents(
                     chunk_id=f"{doc_index}-{chunk_index}",
                     image_paths=doc.image_paths or [],
                     tags=doc.tags or [],
+                    attributes=doc.attributes or {},
                 )
             )
     return chunks

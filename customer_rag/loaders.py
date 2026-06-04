@@ -3,10 +3,14 @@ from __future__ import annotations
 import tempfile
 import zipfile
 import posixpath
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from xml.etree import ElementTree as ET
+
+from customer_rag.attributes import extract_attributes
+from customer_rag.order_flow_image import create_order_flow_image
 
 
 SUPPORTED_SUFFIXES = {".txt", ".md", ".csv", ".xlsx", ".xls", ".docx", ".pdf"}
@@ -25,23 +29,38 @@ class LoadedDocument:
     location: str
     image_paths: list[str] | None = None
     tags: list[str] | None = None
+    attributes: dict[str, Any] | None = None
 
 
-def load_documents(raw_data_dir: Path) -> list[LoadedDocument]:
+LoadDocumentsProgressCallback = Callable[[int, int, Path], None]
+
+
+def load_documents(
+    raw_data_dir: Path,
+    progress_callback: LoadDocumentsProgressCallback | None = None,
+    source_tags: dict[str, list[str]] | None = None,
+) -> list[LoadedDocument]:
     raw_data_dir.mkdir(parents=True, exist_ok=True)
     docs: list[LoadedDocument] = []
-    for path in sorted(raw_data_dir.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in SUPPORTED_SUFFIXES:
-            continue
-        docs.extend(load_document_file(path))
+    paths = [
+        path
+        for path in sorted(raw_data_dir.rglob("*"))
+        if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
+    ]
+    total = len(paths)
+    for index, path in enumerate(paths, start=1):
+        docs.extend(load_document_file(path, tags=_tags_for_source(path, source_tags or {})))
+        if progress_callback:
+            progress_callback(index, total, path)
     return [doc for doc in docs if doc.text.strip()]
 
 
-def load_document_file(path: Path) -> list[LoadedDocument]:
+def load_document_file(path: Path, tags: list[str] | None = None) -> list[LoadedDocument]:
     if not path.is_file() or path.suffix.lower() not in SUPPORTED_SUFFIXES:
         return []
     try:
-        return [doc for doc in _load_file(path) if doc.text.strip()]
+        initial_tags = _clean_tags(tags or [])
+        return [_with_tags(doc, initial_tags) for doc in _load_file(path) if doc.text.strip()]
     except RuntimeError:
         raise
     except Exception as exc:
@@ -51,11 +70,13 @@ def load_document_file(path: Path) -> list[LoadedDocument]:
 def _load_file(path: Path) -> Iterable[LoadedDocument]:
     suffix = path.suffix.lower()
     if suffix in {".txt", ".md"}:
+        text = path.read_text(encoding="utf-8", errors="ignore")
         yield LoadedDocument(
-            text=path.read_text(encoding="utf-8", errors="ignore"),
+            text=text,
             source=str(path),
             title=path.name,
             location=path.name,
+            attributes=extract_attributes(text),
         )
     elif suffix == ".docx":
         yield from _load_docx(path)
@@ -83,11 +104,13 @@ def _load_docx(path: Path) -> Iterable[LoadedDocument]:
             values = [cell.text.strip() for cell in row.cells if cell.text.strip()]
             if values:
                 parts.append(f"表{table_index} 行{row_index}: " + " | ".join(values))
+    text = "\n".join(parts)
     yield LoadedDocument(
-        text="\n".join(parts),
+        text=text,
         source=str(path),
         title=path.name,
         location=path.name,
+        attributes=extract_attributes(text),
     )
 
 
@@ -106,6 +129,7 @@ def _load_pdf(path: Path) -> Iterable[LoadedDocument]:
                 source=str(path),
                 title=path.name,
                 location=f"{path.name} 第 {page_index} 页",
+                attributes=extract_attributes(text),
             )
 
 
@@ -131,17 +155,25 @@ def _rows_to_documents(path: Path, df: Any, title: str) -> Iterable[LoadedDocume
     df = df.fillna("")
     headers = [str(column) for column in df.columns]
     for row_number, row in enumerate(df.itertuples(index=False), start=2):
-        pairs = []
+        fields: dict[str, str] = {}
         for key, value in zip(headers, row):
+            field_name = _allowed_field_name(key)
+            if not field_name:
+                continue
             value_text = str(value).strip()
             if value_text:
-                pairs.append(f"{key}: {value_text}")
-        if pairs:
+                fields[field_name] = value_text
+        fields = _prepare_row_fields(fields)
+        if _has_core_product_fields(fields):
+            text = _fields_to_text(fields)
+            image_paths = _order_flow_image_paths(path, row_number, fields)
             yield LoadedDocument(
-                text="；".join(pairs),
+                text=text,
                 source=str(path),
                 title=title,
                 location=f"{title} 行 {row_number}",
+                image_paths=image_paths,
+                attributes=extract_attributes(text),
             )
 
 
@@ -165,33 +197,117 @@ def _load_xlsx_package(path: Path) -> list[LoadedDocument]:
                 if row_number <= 1:
                     continue
                 row = rows[row_number]
-                pairs: list[str] = []
+                fields: dict[str, str] = {}
                 for col_index in sorted(headers):
                     header = headers[col_index]
+                    field_name = _allowed_field_name(header)
+                    if not field_name:
+                        continue
                     value = row.get(col_index, "").strip()
                     if not value and _should_fill_down(header):
                         value = carry_values.get(col_index, "")
                     if value:
-                        pairs.append(f"{header}: {value}")
+                        fields[field_name] = value
                         if _should_fill_down(header):
                             carry_values[col_index] = value
 
                 images = image_map.get((sheet_path, row_number), [])
-                if images:
-                    pairs.append("图片: " + "；".join(images))
+                fields = _prepare_row_fields(fields)
 
-                if pairs:
+                if _has_core_product_fields(fields):
+                    text = _fields_to_text(fields)
+                    order_flow_images = _order_flow_image_paths(path, row_number, fields)
                     title = _build_row_title(path.name, sheet_name, row, headers)
                     docs.append(
                         LoadedDocument(
-                            text="；".join(pairs),
+                            text=text,
                             source=str(path),
                             title=title,
                             location=f"{path.name} / {sheet_name} 行 {row_number}",
-                            image_paths=images,
+                            image_paths=order_flow_images + images,
+                            attributes=extract_attributes(text),
                         )
                     )
     return docs
+
+
+def _with_tags(doc: LoadedDocument, initial_tags: list[str]) -> LoadedDocument:
+    return LoadedDocument(
+        text=doc.text,
+        source=doc.source,
+        title=doc.title,
+        location=doc.location,
+        image_paths=doc.image_paths,
+        attributes=doc.attributes or extract_attributes(doc.text),
+        tags=_clean_tags(
+            initial_tags
+            + (doc.tags or [])
+            + brand_tags_from_text(doc.text)
+            + category_tags_from_text(doc.text)
+        ),
+    )
+
+
+def brand_tags_from_text(text: str) -> list[str]:
+    tags: list[str] = []
+    for match in re.finditer(r"(?:^|[；;\n])\s*品牌\s*[:：]\s*([^；;\n]+)", text):
+        value = match.group(1).strip()
+        if value:
+            tags.extend(_split_tag_value(value))
+    return _clean_tags(tags)
+
+
+def category_tags_from_text(text: str) -> list[str]:
+    tags: list[str] = []
+    for key in ("品类", "类别", "分类"):
+        for match in re.finditer(rf"(?:^|[；;\n])\s*{re.escape(key)}\s*[:：]\s*([^；;\n]+)", text):
+            value = match.group(1).strip()
+            if value:
+                tags.extend(_split_tag_value(value))
+    return _clean_tags(tags)
+
+
+def _split_tag_value(value: str) -> list[str]:
+    cleaned = re.sub(r"https?://\S+", "", value)
+    parts = re.split(r"[,，;；|、/\s]+", cleaned)
+    tags: list[str] = []
+    for part in parts:
+        tag = part.strip(" ：:()（）[]【】")
+        if _is_valid_tag_value(tag):
+            tags.append(tag)
+    return tags
+
+
+def _is_valid_tag_value(tag: str) -> bool:
+    if not (1 <= len(tag) <= 24):
+        return False
+    if re.fullmatch(r"[-+]?\d+(?:\.\d+)?", tag):
+        return False
+    blocked_keywords = ("链接", "商品ID", "请勿下单", "隐藏", "http")
+    return not any(keyword in tag for keyword in blocked_keywords)
+
+
+def _tags_for_source(path: Path, source_tags: dict[str, list[str]]) -> list[str]:
+    candidates = (
+        str(path),
+        str(path.resolve()),
+        path.name,
+        path.stem,
+    )
+    for candidate in candidates:
+        tags = source_tags.get(candidate)
+        if tags:
+            return tags
+    return []
+
+
+def _clean_tags(tags: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    for tag in tags:
+        value = str(tag).strip()
+        if value and value not in cleaned:
+            cleaned.append(value)
+    return cleaned
 
 
 def _read_shared_strings(archive: zipfile.ZipFile) -> list[str]:
@@ -350,24 +466,94 @@ def _column_index(cell_ref: str) -> int:
 
 
 def _should_fill_down(header: str) -> bool:
-    return any(
-        keyword in header
-        for keyword in (
-            "品牌",
-            "品类",
-            "类别",
-            "分类",
-            "商品链接",
-            "链接",
-            "其他说明",
-            "特殊信息",
-            "限制",
-            "迷住权益",
-            "权益",
-            "赠品",
-            "国补地区",
-        )
+    return _allowed_field_name(header) in {"品牌", "品类", "商品链接", "其他说明"}
+
+
+def _order_flow_image_paths(path: Path, row_number: int, fields: dict[str, str]) -> list[str]:
+    image_path = create_order_flow_image(
+        fields.get("产品信息", ""),
+        fields.get("下单流程", ""),
+        fields.get("其他说明", ""),
+        source_path=path,
+        row_number=row_number,
+        output_root=path.parent / "_generated" / "order_flow",
     )
+    return [image_path] if image_path else []
+
+
+def _allowed_field_name(header: str) -> str | None:
+    normalized = re.sub(r"\s+", "", str(header)).lower()
+    if not normalized:
+        return None
+    if "商品id" in normalized or "skuid" in normalized or "skuid" in normalized.replace("/", ""):
+        return None
+    if "图片" in normalized or "图片" in str(header):
+        return None
+    if "品牌" in normalized:
+        return "品牌"
+    if "品类" in normalized or "类别" in normalized or "分类" in normalized:
+        return "品类"
+    if "产品信息" in normalized or "型号" in normalized or "规格" in normalized:
+        return "产品信息"
+    if "下单流程" in normalized or "付款流程" in normalized:
+        return "下单流程"
+    if "商品链接" in normalized or "礼金短链接" in normalized or normalized == "链接":
+        return "商品链接"
+    if "其他说明" in normalized or "特殊信息" in normalized or "限制" in normalized:
+        return "其他说明"
+    if "其他链接" in normalized:
+        return "其他链接"
+    return None
+
+
+def _has_core_product_fields(fields: dict[str, str]) -> bool:
+    field_names = {field for field, value in fields.items() if str(value).strip()}
+    core_fields = {"品牌", "品类", "产品信息", "下单流程", "其他说明"}
+    return bool(field_names & core_fields)
+
+
+def _prepare_row_fields(fields: dict[str, str]) -> dict[str, str]:
+    prepared = {key: str(value).strip() for key, value in fields.items() if str(value).strip()}
+    extracted_links: list[str] = []
+    for field_name in ("产品信息", "下单流程", "其他说明"):
+        value = prepared.get(field_name, "")
+        if not value:
+            continue
+        cleaned, links = _extract_links(value)
+        prepared[field_name] = cleaned
+        extracted_links.extend(links)
+    if extracted_links:
+        prepared["其他链接"] = _join_unique_links([prepared.get("其他链接", ""), *extracted_links])
+    return {key: value for key, value in prepared.items() if value}
+
+
+def _fields_to_text(fields: dict[str, str]) -> str:
+    order = ("品牌", "品类", "产品信息", "下单流程", "商品链接", "其他说明", "其他链接")
+    pairs = [f"{field}: {fields[field]}" for field in order if fields.get(field)]
+    pairs.extend(f"{field}: {value}" for field, value in fields.items() if field not in order and value)
+    return "；".join(pairs)
+
+
+def _extract_links(text: str) -> tuple[str, list[str]]:
+    links = re.findall(r"https?://[^\s，,；;。)）】]+", text)
+    if not links:
+        return text.strip(), []
+    cleaned = text
+    for link in links:
+        cleaned = cleaned.replace(link, "")
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r"\s*([，,；;。])\s*", r"\1", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip(" ，,；;。")
+    return cleaned.strip(), links
+
+
+def _join_unique_links(values: list[str]) -> str:
+    links: list[str] = []
+    for value in values:
+        for link in re.findall(r"https?://[^\s，,；;。)）】]+", str(value)):
+            if link not in links:
+                links.append(link)
+    return "\n".join(links)
 
 
 def _build_row_title(file_name: str, sheet_name: str, row: dict[int, str], headers: dict[int, str]) -> str:

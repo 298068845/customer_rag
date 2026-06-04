@@ -18,6 +18,12 @@ class LlmConfig:
     keep_alive: str = "0s"
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "deepseek-r1:1.5b"
+    llama_server_url: str = "http://127.0.0.1:8081"
+    llama_server_host: str = "127.0.0.1"
+    llama_server_port: int = 8081
+    llama_server_executable: str = ""
+    llama_server_backend: str = "auto"
+    n_gpu_layers: int = 0
 
 
 @dataclass(frozen=True)
@@ -59,5 +65,11 @@ def load_config(path: str | Path = "config.yaml") -> RagConfig:
             keep_alive=str(llm_data.get("keep_alive", "0s")),
             ollama_url=str(llm_data.get("ollama_url", "http://localhost:11434")),
             ollama_model=str(llm_data.get("ollama_model", "deepseek-r1:1.5b")),
+            llama_server_url=str(llm_data.get("llama_server_url", "http://127.0.0.1:8081")),
+            llama_server_host=str(llm_data.get("llama_server_host", "127.0.0.1")),
+            llama_server_port=int(llm_data.get("llama_server_port", 8081)),
+            llama_server_executable=str(llm_data.get("llama_server_executable", "")),
+            llama_server_backend=str(llm_data.get("llama_server_backend", "auto")),
+            n_gpu_layers=int(llm_data.get("n_gpu_layers", 0)),
         ),
     )

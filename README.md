@@ -58,13 +58,34 @@ models/llm/model.gguf
 
 如果暂时没有 GGUF，系统仍可检索并展示相关语料片段，只是不会生成整合答案。
 
-也可以使用本机 Ollama 作为生成模型后端。当前默认配置为：
+默认推荐使用项目内置托管的 `llama.cpp` 原生 `llama-server.exe`。启动器会按配置启动本地
+`llama-server`，RAG 程序通过 HTTP 调用它；这样打包后用户不需要额外安装 Ollama 或
+`llama-cpp-python`。
+
+把对应后端的 `llama-server.exe` 放到以下任一目录：
+
+```text
+tools/llama.cpp/cpu/llama-server.exe
+tools/llama.cpp/vulkan/llama-server.exe
+tools/llama.cpp/cuda/llama-server.exe
+```
+
+当 `llama_server_backend: auto` 时，启动器会优先检测 NVIDIA/CUDA，其次 Vulkan，最后 CPU。
+也可以手动指定 `cpu`、`vulkan` 或 `cuda`。
+
+当前默认配置为：
 
 ```yaml
 llm:
-  backend: ollama
+  backend: llama_cpp_server
   ollama_url: http://localhost:11434
   ollama_model: deepseek-r1:1.5b
+  llama_server_url: http://127.0.0.1:8081
+  llama_server_host: 127.0.0.1
+  llama_server_port: 8081
+  llama_server_executable: ''
+  llama_server_backend: auto
+  n_gpu_layers: 0
   n_ctx: 2048
   n_threads: 4
   max_tokens: 512
@@ -72,7 +93,9 @@ llm:
   keep_alive: 0s
 ```
 
-如果你已经在 Ollama 中安装了其他模型，可以把 `ollama_model` 改成对应名称，例如 `qwen2.5:3b` 或 `llama3:8b`。这种方式不需要安装 `llama-cpp-python`。
+如果你仍想使用本机 Ollama，可以把 `backend` 改成 `ollama`，并把 `ollama_model`
+改成对应名称，例如 `qwen2.5:3b` 或 `llama3:8b`。这种方式不需要项目内置
+`llama-server.exe`。
 
 为了减少内存占用，默认配置会限制上下文长度和生成长度，并在每次回答后让 Ollama 尽快释放模型内存：
 
@@ -80,6 +103,7 @@ llm:
 - `max_tokens: 512`：限制单次回复长度。
 - `n_threads: 4`：减少 CPU 并发压力。
 - `num_batch: 128`：降低推理批大小。
+- `n_gpu_layers: 0`：CPU 模式不占用显存；使用 CUDA/Vulkan 时可逐步调大。
 - `keep_alive: 0s`：回答结束后不长期常驻模型。
 
 如果机器内存仍然紧张，优先把 `ollama_model` 换成更小的模型，例如 `deepseek-r1:1.5b` 或 Qwen 1.5B 量化模型。

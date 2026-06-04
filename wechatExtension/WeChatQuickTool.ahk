@@ -11,6 +11,7 @@ global SEND_TEXT_PATH := A_ScriptDir "\send-text.txt"
 global LAST_SELECTED_PATH := A_ScriptDir "\last-selected.txt"
 global PREVIEW_TEST_PATH := A_ScriptDir "\preview-test-result.ini"
 global CUSTOM_TAB_PATHS := [
+    A_ScriptDir "\custom-tab-1.txt",
     A_ScriptDir "\custom-tab-2.txt",
     A_ScriptDir "\custom-tab-3.txt",
     A_ScriptDir "\custom-tab-4.txt",
@@ -30,6 +31,7 @@ global PREVIEW_EDIT := 0
 global PREVIEW_LIST := 0
 global PREVIEW_STATUS := 0
 global PREVIEW_TABS := 0
+global PREVIEW_SHOW_TABS := false
 global PREVIEW_MODE_ALL := 0
 global PREVIEW_MODE_SPLIT := 0
 global PREVIEW_CLOSE_BUTTON := 0
@@ -38,6 +40,8 @@ global MIN_SEND_INTERVAL_MS := 300
 global STATUS_GUI := 0
 global STATUS_TITLE := 0
 global STATUS_BODY := 0
+global RAG_QUERY_PID := 0
+global STATUS_TEST_FORCE_MONITOR := 0
 
 EnsureBootstrapFiles()
 
@@ -46,13 +50,29 @@ if HasArg("--preview-test") {
     ExitApp
 }
 
+if HasArg("--status-test") {
+    RunStatusSelfTest()
+    ExitApp
+}
+
+if HasArg("--clipboard-file-test") {
+    RunClipboardFileSelfTest()
+    ExitApp
+}
+
+if HasArg("--clipboard-image-test") {
+    RunClipboardImageSelfTest()
+    ExitApp
+}
+
 #HotIf IsWeChatActive()
-Tab::CaptureSelectedText()
+Tab::HandleTabHotkey()
 vkC0::PreviewOrSendNext()
 F8::CalibrateSendBoxPoint()
 #HotIf
 
 #HotIf IsPreviewVisible()
+Tab::SendNextPreviewPart()
 vkC0::PreviewOrSendNext()
 Esc::ClosePreview()
 #HotIf
@@ -75,6 +95,17 @@ IsPreviewVisible() {
     return PREVIEW_VISIBLE
 }
 
+HandleTabHotkey() {
+    global PREVIEW_VISIBLE
+
+    if PREVIEW_VISIBLE {
+        SendNextPreviewPart()
+        return
+    }
+
+    CaptureSelectedText()
+}
+
 CaptureSelectedText() {
     oldClipboard := ClipboardAll()
     A_Clipboard := ""
@@ -82,7 +113,7 @@ CaptureSelectedText() {
 
     if !ClipWait(ReadFloatConfig("capture", "timeout_seconds", 0.6)) {
         A_Clipboard := oldClipboard
-        ShowTip("娌℃湁澶嶅埗鍒伴€変腑鏂囧瓧")
+        ShowTip("没有复制到选中文字")
         return
     }
 
@@ -90,18 +121,25 @@ CaptureSelectedText() {
     A_Clipboard := oldClipboard
 
     if (Trim(selectedText) = "") {
-        ShowTip("閫変腑鏂囧瓧涓虹┖")
+        ShowTip("选中文字为空")
         return
     }
 
     FileDeleteSafe(LAST_SELECTED_PATH)
     FileAppend selectedText, LAST_SELECTED_PATH, "UTF-8"
-    ShowTip("宸茶幏鍙栵細" SubStr(CleanOneLine(selectedText), 1, 36))
+    ShowTip("已获取：" SubStr(CleanOneLine(selectedText), 1, 36))
     AskRagForSelection()
 }
 
 AskRagForSelection() {
+    global RAG_QUERY_PID
+
     if !ReadBoolConfig("rag", "enabled", false) {
+        return
+    }
+
+    if (RAG_QUERY_PID && ProcessExist(RAG_QUERY_PID)) {
+        ShowStatus("loading", "RAG 查询中", "上一次查询还在进行，请稍等...")
         return
     }
 
@@ -121,14 +159,48 @@ AskRagForSelection() {
     }
 
     ShowStatus("loading", "RAG 查询中", "正在根据选中文字生成回复，请稍等...")
+    FileDeleteSafe(SEND_TEXT_PATH)
     command := QuoteArg(python) " " QuoteArg(bridge) " --question-file " QuoteArg(LAST_SELECTED_PATH) " --output-file " QuoteArg(SEND_TEXT_PATH) " --project-root " QuoteArg(projectRoot) " --log-file " QuoteArg(logPath)
-    exitCode := RunWait(command, projectRoot, "Hide")
+    try {
+        Run command, projectRoot, "Hide", &RAG_QUERY_PID
+        SetTimer CheckRagQueryDone, 250
+    } catch as exc {
+        RAG_QUERY_PID := 0
+        ShowStatus("error", "查询启动失败", exc.Message, 4200)
+    }
+}
 
-    if exitCode = 0 {
-        ShowStatus("success", "查询完成", "回答已写入发送列表，按 ~ 预览并发送。", 3200)
+CheckRagQueryDone() {
+    global RAG_QUERY_PID
+
+    if !RAG_QUERY_PID {
+        SetTimer CheckRagQueryDone, 0
+        return
+    }
+
+    if ProcessExist(RAG_QUERY_PID) {
+        return
+    }
+
+    RAG_QUERY_PID := 0
+    SetTimer CheckRagQueryDone, 0
+
+    if FileExist(SEND_TEXT_PATH) && Trim(ReadSendText()) != "" {
+        ShowRagResultPreview()
     } else {
         ShowStatus("error", "查询失败", "请查看 rag-bridge.log 后重试。", 4200)
     }
+}
+
+ShowRagResultPreview() {
+    text := ReadSendText()
+    if (Trim(text) = "") {
+        ShowStatus("error", "查询完成但结果为空", "send-text.txt 为空，请查看 rag-bridge.log。", 4200)
+        return
+    }
+
+    CloseStatus()
+    ShowSendPreview(text, "", "", "query")
 }
 
 PreviewOrSendNext() {
@@ -139,26 +211,21 @@ PreviewOrSendNext() {
         return
     }
 
-    text := ReadSendText()
-    if (Trim(text) = "") {
-        ShowTip("send-text.txt 涓虹┖")
-        return
-    }
-
-    ShowSendPreview(text)
+    ShowSendPreview("", "", "", "custom")
 }
 
-ShowSendPreview(text, mouseX := "", mouseY := "") {
+ShowSendPreview(text, mouseX := "", mouseY := "", mode := "query") {
     global PREVIEW_GUI, PREVIEW_VISIBLE, PREVIEW_TARGET_HWND, PREVIEW_SOURCE_TEXT
     global PREVIEW_EDIT, PREVIEW_LIST, PREVIEW_STATUS, PREVIEW_MODE_ALL, PREVIEW_MODE_SPLIT
-    global PREVIEW_CLOSE_BUTTON, PREVIEW_TABS, PREVIEW_TAB_TEXTS, PREVIEW_ACTIVE_TAB
+    global PREVIEW_CLOSE_BUTTON, PREVIEW_TABS, PREVIEW_TAB_TEXTS, PREVIEW_ACTIVE_TAB, PREVIEW_SHOW_TABS
 
     ClosePreview()
     DebugPreviewTest("show_after_close")
 
     PREVIEW_TARGET_HWND := WinGetID("A")
     PREVIEW_SOURCE_TEXT := text
-    PREVIEW_TAB_TEXTS := BuildPreviewTabTexts(text)
+    PREVIEW_SHOW_TABS := mode = "custom"
+    PREVIEW_TAB_TEXTS := PREVIEW_SHOW_TABS ? BuildCustomTabTexts() : [text]
     PREVIEW_ACTIVE_TAB := 1
     DebugPreviewTest("show_after_target")
 
@@ -183,18 +250,21 @@ ShowSendPreview(text, mouseX := "", mouseY := "") {
     PREVIEW_MODE_ALL.OnEvent("Click", (*) => SetPreviewMode("all"))
     PREVIEW_MODE_SPLIT.OnEvent("Click", (*) => SetPreviewMode("split"))
 
-    PREVIEW_GUI.SetFont("s9 bold", "Microsoft YaHei")
-    PREVIEW_TABS := [
-        PREVIEW_GUI.AddText("xm y+14 w76 h28 Center 0x200 +0x100", "查询结果"),
-        PREVIEW_GUI.AddText("x+5 yp w76 h28 Center 0x200 +0x100", "自定义1"),
-        PREVIEW_GUI.AddText("x+5 yp w76 h28 Center 0x200 +0x100", "自定义2"),
-        PREVIEW_GUI.AddText("x+5 yp w76 h28 Center 0x200 +0x100", "自定义3"),
-        PREVIEW_GUI.AddText("x+5 yp w76 h28 Center 0x200 +0x100", "自定义4")
-    ]
-    for index, tabControl in PREVIEW_TABS {
-        tabControl.OnEvent("Click", SetPreviewTab.Bind(index))
+    PREVIEW_TABS := 0
+    if PREVIEW_SHOW_TABS {
+        PREVIEW_GUI.SetFont("s9 bold", "Microsoft YaHei")
+        PREVIEW_TABS := [
+            PREVIEW_GUI.AddText("xm y+14 w76 h28 Center 0x200 +0x100", "tab1"),
+            PREVIEW_GUI.AddText("x+5 yp w76 h28 Center 0x200 +0x100", "tab2"),
+            PREVIEW_GUI.AddText("x+5 yp w76 h28 Center 0x200 +0x100", "tab3"),
+            PREVIEW_GUI.AddText("x+5 yp w76 h28 Center 0x200 +0x100", "tab4"),
+            PREVIEW_GUI.AddText("x+5 yp w76 h28 Center 0x200 +0x100", "tab5")
+        ]
+        for index, tabControl in PREVIEW_TABS {
+            tabControl.OnEvent("Click", SetPreviewTab.Bind(index))
+        }
+        RefreshPreviewTabs()
     }
-    RefreshPreviewTabs()
 
     PREVIEW_GUI.SetFont("s9 c2F2620", "Microsoft YaHei")
     PREVIEW_LIST := PREVIEW_GUI.AddListView("xm y+8 w400 h132 Checked -Multi BackgroundFFF9F2 c2F2620", [T("list_header"), "full_text"])
@@ -225,14 +295,14 @@ SetPreviewMode(mode) {
 
 RebuildPreviewQueue() {
     global PREVIEW_SOURCE_TEXT, PREVIEW_PARTS, PREVIEW_INDEX, PREVIEW_TAB_TEXTS
-    global PREVIEW_ACTIVE_TAB, PREVIEW_TAB_DEFAULT_CHECKED
+    global PREVIEW_ACTIVE_TAB, PREVIEW_TAB_DEFAULT_CHECKED, PREVIEW_SHOW_TABS
 
     PREVIEW_INDEX := 1
     sourceText := PREVIEW_SOURCE_TEXT
     if IsObject(PREVIEW_TAB_TEXTS) && PREVIEW_ACTIVE_TAB >= 1 && PREVIEW_ACTIVE_TAB <= PREVIEW_TAB_TEXTS.Length {
         sourceText := PREVIEW_TAB_TEXTS[PREVIEW_ACTIVE_TAB]
     }
-    PREVIEW_TAB_DEFAULT_CHECKED := PREVIEW_ACTIVE_TAB = 1
+    PREVIEW_TAB_DEFAULT_CHECKED := !PREVIEW_SHOW_TABS
 
     if GetPreviewMode() = "split" {
         PREVIEW_PARTS := SplitSendText(sourceText)
@@ -293,9 +363,17 @@ UpdatePreviewText() {
 
     PREVIEW_LIST.Delete()
     for index, part in PREVIEW_PARTS {
-        options := PREVIEW_TAB_DEFAULT_CHECKED ? "Check" : ""
+        options := (PREVIEW_TAB_DEFAULT_CHECKED && ShouldDefaultCheckPart(part)) ? "Check" : ""
         PREVIEW_LIST.Add(options, MakeListPreview(part), part)
     }
+}
+
+ShouldDefaultCheckPart(text) {
+    cleaned := CleanOneLine(text)
+    if InStr(cleaned, "截团") {
+        return false
+    }
+    return true
 }
 
 SendPreviewNow(*) {
@@ -333,7 +411,7 @@ CancelPreview(*) {
 ClosePreview(*) {
     global PREVIEW_GUI, PREVIEW_VISIBLE, PREVIEW_TARGET_HWND, PREVIEW_SOURCE_TEXT
     global PREVIEW_PARTS, PREVIEW_INDEX, PREVIEW_EDIT, PREVIEW_STATUS, PREVIEW_MODE_ALL, PREVIEW_MODE_SPLIT
-    global PREVIEW_LIST, PREVIEW_CLOSE_BUTTON, PREVIEW_TABS, PREVIEW_TAB_TEXTS, PREVIEW_ACTIVE_TAB
+    global PREVIEW_LIST, PREVIEW_CLOSE_BUTTON, PREVIEW_TABS, PREVIEW_TAB_TEXTS, PREVIEW_ACTIVE_TAB, PREVIEW_SHOW_TABS
 
     if IsObject(PREVIEW_GUI) {
         PREVIEW_GUI.Destroy()
@@ -351,6 +429,7 @@ ClosePreview(*) {
     PREVIEW_LIST := 0
     PREVIEW_STATUS := 0
     PREVIEW_TABS := 0
+    PREVIEW_SHOW_TABS := false
     PREVIEW_MODE_ALL := 0
     PREVIEW_MODE_SPLIT := 0
     PREVIEW_CLOSE_BUTTON := 0
@@ -359,19 +438,33 @@ ClosePreview(*) {
 PasteTextToWeChat(text) {
     global LAST_SEND_TICK, MIN_SEND_INTERVAL_MS
 
-    if (Trim(text) = "") {
-        ShowTip("娑堟伅涓虹┖")
+    imagePath := ExtractImagePath(text)
+    textToSend := RemoveImageLines(text)
+    if (Trim(textToSend) = "" && imagePath = "") {
+        ShowTip("消息为空")
         return
     }
 
     WaitForSendInterval()
     oldClipboard := ClipboardAll()
-    A_Clipboard := text
-    Sleep ReadIntConfig("send", "clipboard_settle_ms", 80)
 
     FocusSendBox()
-    Send "^v"
-    Sleep ReadIntConfig("send", "before_enter_ms", 120)
+    if (imagePath != "" && FileExist(imagePath)) {
+        if SetClipboardImage(imagePath) {
+            Sleep ReadIntConfig("send", "clipboard_settle_ms", 80)
+            Send "^v"
+            Sleep ReadIntConfig("send", "after_image_paste_ms", 900)
+        } else {
+            ShowTip("图片复制失败")
+        }
+    }
+
+    if (Trim(textToSend) != "") {
+        A_Clipboard := textToSend
+        Sleep ReadIntConfig("send", "clipboard_settle_ms", 80)
+        Send "^v"
+        Sleep ReadIntConfig("send", "before_enter_ms", 120)
+    }
 
     if ReadBoolConfig("send", "press_enter", true) {
         Send "{Enter}"
@@ -380,6 +473,110 @@ PasteTextToWeChat(text) {
     A_Clipboard := oldClipboard
     LAST_SEND_TICK := A_TickCount
     ShowTip("Sent")
+}
+
+ExtractImagePath(text) {
+    normalized := StrReplace(text, "`r`n", "`n")
+    normalized := StrReplace(normalized, "`r", "`n")
+    for line in StrSplit(normalized, "`n") {
+        if RegExMatch(line, "i)^\s*(?:[-•]\s*)?图片\s*[：:]\s*(.+?)\s*$", &match) {
+            path := Trim(match[1], " `t`"")
+            return ResolveProjectPath(path)
+        }
+    }
+    return ""
+}
+
+RemoveImageLines(text) {
+    normalized := StrReplace(text, "`r`n", "`n")
+    normalized := StrReplace(normalized, "`r", "`n")
+    output := ""
+    for line in StrSplit(normalized, "`n") {
+        if RegExMatch(line, "i)^\s*(?:[-•]\s*)?图片\s*[：:].*$") {
+            continue
+        }
+        output .= (output = "" ? "" : "`r`n") line
+    }
+    return Trim(output, "`r`n `t")
+}
+
+ResolveProjectPath(path) {
+    if (path = "") {
+        return ""
+    }
+    if FileExist(path) {
+        return path
+    }
+    projectRoot := A_ScriptDir "\.."
+    candidate := projectRoot "\" path
+    if FileExist(candidate) {
+        return candidate
+    }
+    return path
+}
+
+SetClipboardFile(path) {
+    absolutePath := path
+    bytes := StrPut(absolutePath, "UTF-16") * 2 + 2
+    size := 20 + bytes
+    hDrop := DllCall("GlobalAlloc", "UInt", 0x42, "UPtr", size, "UPtr")
+    if !hDrop {
+        return false
+    }
+    ptr := DllCall("GlobalLock", "UPtr", hDrop, "UPtr")
+    if !ptr {
+        DllCall("GlobalFree", "UPtr", hDrop)
+        return false
+    }
+    NumPut("UInt", 20, ptr, 0)
+    NumPut("Int", 0, ptr, 4)
+    NumPut("Int", 0, ptr, 8)
+    NumPut("Int", 0, ptr, 12)
+    NumPut("Int", 1, ptr, 16)
+    StrPut(absolutePath, ptr + 20, "UTF-16")
+    NumPut("UShort", 0, ptr, 20 + StrPut(absolutePath, "UTF-16") * 2)
+    DllCall("GlobalUnlock", "UPtr", hDrop)
+    if !DllCall("OpenClipboard", "UPtr", 0) {
+        DllCall("GlobalFree", "UPtr", hDrop)
+        return false
+    }
+    DllCall("EmptyClipboard")
+    if !DllCall("SetClipboardData", "UInt", 15, "UPtr", hDrop, "UPtr") {
+        DllCall("CloseClipboard")
+        DllCall("GlobalFree", "UPtr", hDrop)
+        return false
+    }
+    DllCall("CloseClipboard")
+    return true
+}
+
+SetClipboardImage(path) {
+    imagePath := ResolveProjectPath(path)
+    if !FileExist(imagePath) {
+        return false
+    }
+    scriptPath := A_Temp "\wechat-set-image-clipboard.ps1"
+    escapedPath := StrReplace(imagePath, "'", "''")
+    script := "$ErrorActionPreference = 'Stop'`r`n"
+        . "Add-Type -AssemblyName System.Windows.Forms`r`n"
+        . "Add-Type -AssemblyName System.Drawing`r`n"
+        . "$imagePath = '" escapedPath "'`r`n"
+        . "$img = [System.Drawing.Image]::FromFile($imagePath)`r`n"
+        . "try {`r`n"
+        . "    [System.Windows.Forms.Clipboard]::Clear()`r`n"
+        . "    [System.Windows.Forms.Clipboard]::SetImage($img)`r`n"
+        . "} finally {`r`n"
+        . "    $img.Dispose()`r`n"
+        . "}`r`n"
+    FileDeleteSafe(scriptPath)
+    FileAppend script, scriptPath, "UTF-8"
+    command := "powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File " QuoteArg(scriptPath)
+    try {
+        exitCode := RunWait(command, , "Hide")
+        return exitCode = 0
+    } catch {
+        return false
+    }
 }
 
 WaitForSendInterval() {
@@ -555,10 +752,10 @@ ReadSendText() {
     return IniRead(CONFIG_PATH, "send", "text", "")
 }
 
-BuildPreviewTabTexts(queryResultText) {
+BuildCustomTabTexts() {
     global CUSTOM_TAB_PATHS
 
-    texts := [queryResultText]
+    texts := []
     for path in CUSTOM_TAB_PATHS {
         if FileExist(path) {
             texts.Push(StripBom(FileRead(path, "UTF-8")))
@@ -728,6 +925,7 @@ input_x=520
 input_y=690
 after_click_ms=100
 clipboard_settle_ms=80
+after_image_paste_ms=900
 before_enter_ms=120
 press_enter=1
 
@@ -774,6 +972,58 @@ RunPreviewSelfTest() {
     ClosePreview()
 }
 
+RunStatusSelfTest() {
+    global STATUS_TEST_FORCE_MONITOR
+
+    resultPath := A_ScriptDir "\status-test-result.ini"
+    FileDeleteSafe(resultPath)
+    FileAppend "[debug]`nstarted=1`n", resultPath, "UTF-8"
+    count := MonitorGetCount()
+    FileAppend "monitor_count=" count "`n", resultPath, "UTF-8"
+    Loop count {
+        MonitorGetWorkArea A_Index, &ml, &mt, &mr, &mb
+        FileAppend "monitor" A_Index "=" ml "," mt "," mr "," mb "`n", resultPath, "UTF-8"
+    }
+    STATUS_TEST_FORCE_MONITOR := 2
+    ShowStatus("loading", "RAG 查询中", "正在根据选中文字生成回复，请稍等...")
+    if IsObject(STATUS_GUI) {
+        try {
+            WinGetPos &x, &y, &w, &h, "ahk_id " STATUS_GUI.Hwnd
+            FileAppend "hwnd=" STATUS_GUI.Hwnd "`nx=" x "`ny=" y "`nw=" w "`nh=" h "`n", resultPath, "UTF-8"
+            FileAppend "exists=" (WinExist("ahk_id " STATUS_GUI.Hwnd) ? "1" : "0") "`n", resultPath, "UTF-8"
+        } catch as exc {
+            FileAppend "pos_error=" exc.Message "`n", resultPath, "UTF-8"
+        }
+    } else {
+        FileAppend "status_gui=0`n", resultPath, "UTF-8"
+    }
+    Sleep 5000
+    CloseStatus()
+    STATUS_TEST_FORCE_MONITOR := 0
+}
+
+RunClipboardFileSelfTest() {
+    resultPath := A_ScriptDir "\clipboard-file-test-result.ini"
+    imagePath := A_ScriptDir "\..\data\tmp\order_flow_preview\test\row-2-330a5ea49e8d8164.png"
+    FileDeleteSafe(resultPath)
+    FileAppend "[debug]`nstarted=1`nimage=" imagePath "`nexists=" (FileExist(imagePath) ? "1" : "0") "`n", resultPath, "UTF-8"
+    if FileExist(imagePath) {
+        ok := SetClipboardFile(imagePath)
+        FileAppend "set_clipboard_file=" (ok ? "1" : "0") "`n", resultPath, "UTF-8"
+    }
+}
+
+RunClipboardImageSelfTest() {
+    resultPath := A_ScriptDir "\clipboard-image-test-result.ini"
+    imagePath := A_ScriptDir "\..\data\tmp\order_flow_preview\test\row-2-330a5ea49e8d8164.png"
+    FileDeleteSafe(resultPath)
+    FileAppend "[debug]`nstarted=1`nimage=" imagePath "`nexists=" (FileExist(imagePath) ? "1" : "0") "`n", resultPath, "UTF-8"
+    if FileExist(imagePath) {
+        ok := SetClipboardImage(imagePath)
+        FileAppend "set_clipboard_image=" (ok ? "1" : "0") "`n", resultPath, "UTF-8"
+    }
+}
+
 ReadBoolConfig(section, key, defaultValue) {
     value := IniRead(CONFIG_PATH, section, key, defaultValue ? "1" : "0")
     return value = "1" || StrLower(value) = "true" || StrLower(value) = "yes"
@@ -810,6 +1060,7 @@ QuoteArg(value) {
 ShowStatus(kind, title, body, autoCloseMs := 0) {
     global STATUS_GUI, STATUS_TITLE, STATUS_BODY
 
+    ToolTip()
     CloseStatus()
 
     colors := StatusColors(kind)
@@ -844,19 +1095,53 @@ CloseStatus(*) {
 }
 
 PositionStatus() {
-    global STATUS_GUI
+    global STATUS_GUI, STATUS_TEST_FORCE_MONITOR
 
     if !IsObject(STATUS_GUI) {
         return
     }
 
     MouseGetPos &mouseX, &mouseY
-    GetWorkAreaForPoint(mouseX, mouseY, &left, &top, &right, &bottom)
-    STATUS_GUI.Show("AutoSize Hide")
-    WinGetPos ,, &width, &height, "ahk_id " STATUS_GUI.Hwnd
-    x := right - width - 28
-    y := bottom - height - 64
-    STATUS_GUI.Show("x" x " y" y " AutoSize NoActivate")
+    if STATUS_TEST_FORCE_MONITOR {
+        MonitorGetWorkArea STATUS_TEST_FORCE_MONITOR, &left, &top, &right, &bottom
+        mouseX := left + Floor((right - left) / 2)
+        mouseY := top + Floor((bottom - top) / 2)
+    } else {
+        GetWorkAreaForPoint(mouseX, mouseY, &left, &top, &right, &bottom)
+    }
+    width := 340
+    height := 92
+    x := mouseX + 18
+    y := mouseY + 24
+    if (x + width > right) {
+        x := right - width - 20
+    }
+    if (y + height > bottom) {
+        y := mouseY - height - 20
+    }
+    if (x < left + 12) {
+        x := left + 12
+    }
+    if (y < top + 12) {
+        y := top + 12
+    }
+    try {
+        STATUS_GUI.Show("x" x " y" y " w" width " h" height)
+        DllCall(
+            "SetWindowPos",
+            "ptr", STATUS_GUI.Hwnd,
+            "ptr", -1,
+            "int", x,
+            "int", y,
+            "int", width,
+            "int", height,
+            "uint", 0x0040
+        )
+        DllCall("ShowWindow", "ptr", STATUS_GUI.Hwnd, "int", 5)
+        DllCall("RedrawWindow", "ptr", STATUS_GUI.Hwnd, "ptr", 0, "ptr", 0, "uint", 0x0101)
+    } catch {
+        CloseStatus()
+    }
 }
 
 ApplyStatusRegion() {
@@ -866,9 +1151,13 @@ ApplyStatusRegion() {
         return
     }
 
-    WinGetPos ,, &width, &height, "ahk_id " STATUS_GUI.Hwnd
     try {
-        WinSetRegion "0-0 w" width " h" height " r16-16", "ahk_id " STATUS_GUI.Hwnd
+        hwnd := STATUS_GUI.Hwnd
+        if !hwnd || !WinExist("ahk_id " hwnd) {
+            return
+        }
+        WinGetPos ,, &width, &height, "ahk_id " hwnd
+        WinSetRegion "0-0 w" width " h" height " r16-16", "ahk_id " hwnd
     }
 }
 

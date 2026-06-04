@@ -1,36 +1,50 @@
 from __future__ import annotations
 
 import json
+import html
 import importlib
+import re
+import time
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 import customer_rag.browser_cookies as browser_cookies
+import customer_rag.pipeline as pipeline_module
+import customer_rag.subscription_jobs as subscription_jobs_module
 from customer_rag.config import load_config
+from customer_rag.llama_server import build_llama_server_plan, is_llama_server_healthy
 
 browser_cookies = importlib.reload(browser_cookies)
+pipeline_module = importlib.reload(pipeline_module)
+subscription_jobs_module = importlib.reload(subscription_jobs_module)
 from customer_rag.browser_cookies import (
+    is_tencent_docs_login_window_open,
     open_tencent_docs_login_window,
     read_tencent_docs_cookie_from_login_window,
 )
+from customer_rag.category_config import category_aliases, save_category_aliases
+from customer_rag.local_task_api import ensure_local_task_api
 from customer_rag.loaders import SUPPORTED_SUFFIXES
-from customer_rag.pipeline import RagPipeline
-from customer_rag.subscription_jobs import (
-    is_subscription_job_running,
-    read_job_state,
-    request_stop_subscription_job,
-    start_subscription_job,
-)
+from customer_rag.prompt_defaults import DEFAULT_SYSTEM_PROMPT
+RagPipeline = pipeline_module.RagPipeline
+is_subscription_job_running = subscription_jobs_module.is_subscription_job_running
+read_job_state = subscription_jobs_module.read_job_state
+request_stop_subscription_job = subscription_jobs_module.request_stop_subscription_job
+start_subscription_job = subscription_jobs_module.start_subscription_job
 from customer_rag.tencent_docs import (
     TencentDocSubscription,
     load_subscriptions,
     save_subscriptions,
+    subscription_output_path,
 )
 
 
 st.set_page_config(page_title="本地腾讯文档 RAG", layout="wide")
+LOCAL_TASK_API_URL = ensure_local_task_api()
 st.markdown(
     """
     <style>
@@ -56,31 +70,189 @@ st.markdown(
         transform: translate(-50%, -50%) !important;
         margin: 0 !important;
     }
+    .import-action-style + div[data-testid="stHorizontalBlock"] button,
+    .upload-action-style + div[data-testid="stHorizontalBlock"] button,
+    .raw-action-style + div[data-testid="stHorizontalBlock"] button {
+        border-radius: 7px;
+        color: #fff;
+        font-weight: 650;
+        box-shadow: 0 2px 0 rgba(0, 0, 0, 0.10), 0 6px 12px rgba(25, 83, 157, 0.12);
+    }
+    .import-action-style + div[data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(1) button {
+        background: #e04b4b;
+        border-color: #bf3535;
+    }
+    .import-action-style + div[data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(2) button,
+    .upload-action-style + div[data-testid="stHorizontalBlock"] button,
+    .raw-action-style + div[data-testid="stHorizontalBlock"] button {
+        background: #2f7de1;
+        border-color: #1d64bb;
+    }
+    .import-action-style + div[data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(3) button {
+        background: #2fa66a;
+        border-color: #218654;
+    }
+    .import-action-style + div[data-testid="stHorizontalBlock"] button:hover,
+    .upload-action-style + div[data-testid="stHorizontalBlock"] button:hover,
+    .raw-action-style + div[data-testid="stHorizontalBlock"] button:hover {
+        filter: brightness(0.96);
+        color: #fff;
+    }
+    .st-key-subscription_start button,
+    .st-key-subscription_add button,
+    .st-key-subscription_save button,
+    .st-key-login_tencent_docs button,
+    .st-key-upload_import button,
+    .st-key-import_rebuild_raw_v2 button,
+    .st-key-import_rebuild_index_v2 button {
+        border-radius: 8px !important;
+        color: #fff !important;
+        font-weight: 650 !important;
+        height: 40px !important;
+        border-width: 1px !important;
+        background-image: none !important;
+        box-shadow: 0 2px 0 rgba(0, 0, 0, 0.10), 0 6px 12px rgba(25, 83, 157, 0.12) !important;
+        transform: translateY(0);
+    }
+    .st-key-subscription_start button {
+        background: #e04b4b !important;
+        border-color: #bf3535 !important;
+    }
+    .st-key-subscription_add button,
+    .st-key-login_tencent_docs button,
+    .st-key-upload_import button,
+    .st-key-import_rebuild_raw_v2 button,
+    .st-key-import_rebuild_index_v2 button {
+        background: #2f7de1 !important;
+        border-color: #1d64bb !important;
+    }
+    .st-key-subscription_save button {
+        background: #2fa66a !important;
+        border-color: #218654 !important;
+    }
+    .st-key-subscription_start button:hover,
+    .st-key-subscription_add button:hover,
+    .st-key-subscription_save button:hover,
+    .st-key-login_tencent_docs button:hover,
+    .st-key-upload_import button:hover,
+    .st-key-import_rebuild_raw_v2 button:hover,
+    .st-key-import_rebuild_index_v2 button:hover {
+        color: #fff !important;
+        filter: brightness(0.96);
+    }
+    .import-title {
+        font-size: 2rem;
+        line-height: 2.5rem;
+        font-weight: 750;
+        margin: 0.12rem 0 0.9rem 0;
+    }
+    .cookie-pill {
+        display: inline-flex;
+        align-items: center;
+        height: 40px;
+        margin-top: 0.1rem;
+        font-weight: 700;
+        color: #2f3340;
+        white-space: nowrap;
+    }
+    .upload-tag-spacer {
+        height: 1.58rem;
+    }
+    .upload-tag-row {
+        height: 0;
+        min-height: 0;
+        overflow: hidden;
+        margin: 0;
+        padding: 0;
+    }
+    .upload-tag-row + div[data-testid="stHorizontalBlock"] {
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        align-items: stretch !important;
+        gap: 1rem;
+    }
+    .upload-tag-row + div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        align-self: stretch !important;
+        min-width: 0 !important;
+    }
+    .upload-tag-row + div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-of-type(1) {
+        flex: 1 1 auto !important;
+        width: auto !important;
+    }
+    .upload-tag-row + div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-of-type(2) {
+        flex: 0 0 220px !important;
+        width: 220px !important;
+    }
+    .upload-tag-row + div[data-testid="stHorizontalBlock"] [data-testid="stTextInput"] {
+        margin-bottom: 0;
+    }
+    .upload-tag-row + div[data-testid="stHorizontalBlock"] .st-key-upload_import {
+        margin-top: 2.35rem !important;
+        margin-bottom: 0;
+    }
+    div[data-testid="stElementContainer"]:has(.upload-tag-row) + div[data-testid="stLayoutWrapper"] div[data-testid="stHorizontalBlock"] {
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        align-items: stretch !important;
+        gap: 1rem;
+    }
+    div[data-testid="stElementContainer"]:has(.upload-tag-row) + div[data-testid="stLayoutWrapper"] div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        align-self: stretch !important;
+        min-width: 0 !important;
+    }
+    div[data-testid="stElementContainer"]:has(.upload-tag-row) + div[data-testid="stLayoutWrapper"] div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:nth-of-type(1) {
+        flex: 1 1 auto !important;
+        width: auto !important;
+    }
+    div[data-testid="stElementContainer"]:has(.upload-tag-row) + div[data-testid="stLayoutWrapper"] div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:nth-of-type(2) {
+        flex: 0 0 220px !important;
+        width: 220px !important;
+    }
+    div[data-testid="stElementContainer"]:has(.upload-tag-row) + div[data-testid="stLayoutWrapper"] .st-key-upload_import {
+        margin-top: 2.35rem !important;
+        margin-bottom: 0;
+    }
+    @media (max-width: 1200px) {
+        .import-title {
+            font-size: 1.65rem;
+            line-height: 2.1rem;
+        }
+        .cookie-pill {
+            font-size: 0.92rem;
+        }
+        .st-key-subscription_start button,
+        .st-key-subscription_add button,
+        .st-key-subscription_save button,
+        .st-key-login_tencent_docs button,
+        .st-key-upload_import button {
+            font-size: 0.9rem !important;
+            padding-left: 0.45rem !important;
+            padding-right: 0.45rem !important;
+        }
+        .upload-tag-row + div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-of-type(2) {
+            flex-basis: 170px !important;
+            width: 170px !important;
+        }
+        div[data-testid="stElementContainer"]:has(.upload-tag-row) + div[data-testid="stLayoutWrapper"] div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:nth-of-type(2) {
+            flex-basis: 170px !important;
+            width: 170px !important;
+        }
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-DEFAULT_SYSTEM_PROMPT = """你是企业内部商品知识库助手。请只根据给定资料回答问题，不要编造。
-如果用户询问商品、品类、型号或推荐清单，必须按下面格式逐个列出商品：
-
-1. 商品名称（资料编号）
-   - 型号/规格：
-   - 下单流程：
-   - 权益：
-   - 商品链接：
-   - 确认收货后：
-
-要求：
-- 每个字段都必须出现。
-- 资料没有明确写出的字段，填写“资料中未找到”。
-- 商品链接必须使用资料里的原始链接，不要改写。
-- 不要编造特色、适合人群、价格、优惠或赠品，不需要单独列出品牌名。
-- 最多回答 5 个最相关商品。"""
-
-
 @st.cache_resource
-def get_pipeline(cache_version: str = "subscription-replace-v2") -> RagPipeline:
+def get_pipeline(cache_version: str = "llama-server-v1") -> RagPipeline:
     return RagPipeline(load_config())
 
 
@@ -104,20 +276,600 @@ def save_uploaded_files(uploaded_files: list) -> list[Path]:
     return saved_paths
 
 
+def remember_recent_raw_files(paths: list[Path]) -> None:
+    st.session_state["recent_raw_files"] = [str(path.resolve()) for path in paths]
+
+
+def recent_raw_files_from_state() -> list[str]:
+    job_state = read_job_state(cfg)
+    if not (job_state.pending_modified_by_url or {}):
+        return []
+    files: list[str] = []
+    for path in job_state.updated_files or []:
+        if path not in files:
+            files.append(path)
+    return files
+
+
+def latest_subscription_modified(subscriptions: list[TencentDocSubscription] | None = None) -> str:
+    items = subscriptions if subscriptions is not None else load_subscriptions(subscriptions_path())
+    values = [str(subscription.last_modified or "") for subscription in items if str(subscription.last_modified or "")]
+    return max(values) if values else ""
+
+
+def subscription_last_modified_by_file() -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for subscription in load_subscriptions(subscriptions_path()):
+        output_path = subscription_output_path(subscription, cfg.raw_data_dir)
+        modified = str(subscription.last_modified or "")
+        for key in _raw_file_keys(output_path):
+            mapping[key] = modified
+    return mapping
+
+
+def is_recent_raw_file(path: Path, recent_files: list[str]) -> bool:
+    if not recent_files:
+        return False
+    candidates = _raw_file_keys(path)
+    return any(_normalize_path_key(value) in candidates for value in recent_files)
+
+
+def _raw_file_keys(path: Path) -> set[str]:
+    keys = {str(path), str(path.resolve()), path.name}
+    try:
+        keys.add(str(path.relative_to(cfg.raw_data_dir)))
+    except ValueError:
+        pass
+    try:
+        keys.add(str(path.resolve().relative_to(Path.cwd().resolve())))
+    except ValueError:
+        pass
+    return {_normalize_path_key(value) for value in keys}
+
+
+def _normalize_path_key(value: str | Path) -> str:
+    return str(value).replace("\\", "/").lower()
+
+
+def render_raw_files_table(raw_files: list[Path], recent_files: list[str]) -> None:
+    if not raw_files:
+        st.info("暂无原始文件。")
+        return
+
+    rows = []
+    recent_count = 0
+    remote_modified_by_file = subscription_last_modified_by_file()
+    for path in raw_files:
+        is_recent = is_recent_raw_file(path, recent_files)
+        if is_recent:
+            recent_count += 1
+        remote_modified = remote_modified_by_file.get(_normalize_path_key(path))
+        rows.append(
+            {
+                "name": str(path.relative_to(cfg.raw_data_dir)),
+                "source": "腾讯文档" if "tencent_docs" in path.parts else "上传文件",
+                "status": "已保存",
+                "updated": remote_modified or datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="minutes"),
+                "recent": is_recent,
+            }
+        )
+
+    table_rows = "\n".join(
+        "<tr data-recent='{recent}'>"
+        "<td>{name}</td><td>{source}</td><td>{status}</td><td>{updated}</td>"
+        "</tr>".format(
+            recent="1" if row["recent"] else "0",
+            name=html.escape(row["name"]),
+            source=html.escape(row["source"]),
+            status=html.escape(row["status"]),
+            updated=html.escape(row["updated"]),
+        )
+        for row in rows
+    )
+    component_id = f"raw-file-table-{int(time.time() * 1000)}"
+    components.html(
+        f"""
+        <style>
+          .raw-filter-bar {{
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin: 0 0 8px 0;
+            color: #2f3440;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            font-size: 15px;
+          }}
+          .raw-filter-bar input {{
+            width: 16px;
+            height: 16px;
+            accent-color: #4b7fda;
+          }}
+          .raw-filter-count {{
+            color: #8a91a0;
+            font-size: 13px;
+          }}
+          .raw-table-wrap {{
+            height: 260px;
+            overflow: auto;
+            border: 1px solid #e6e9ef;
+            border-radius: 8px;
+            background: #fff;
+          }}
+          .raw-table {{
+            border-collapse: collapse;
+            width: 100%;
+            min-width: 860px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            font-size: 15px;
+            color: #2f3440;
+          }}
+          .raw-table th {{
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            background: #f7f8fb;
+            color: #8a91a0;
+            text-align: left;
+            font-weight: 600;
+            padding: 10px 12px;
+            border-bottom: 1px solid #e6e9ef;
+          }}
+          .raw-table td {{
+            padding: 10px 12px;
+            border-bottom: 1px solid #edf0f4;
+            white-space: nowrap;
+          }}
+          .raw-table td:first-child {{
+            max-width: 520px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }}
+          .raw-empty {{
+            display: none;
+            padding: 18px 12px;
+            color: #8a91a0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          }}
+        </style>
+        <div id="{component_id}">
+          <label class="raw-filter-bar">
+            <input type="checkbox" data-role="recent-toggle">
+            <span>仅待入库更新文件</span>
+            <span class="raw-filter-count" data-role="count">全量文件 {len(rows)} 个</span>
+          </label>
+          <div class="raw-table-wrap">
+            <table class="raw-table">
+              <thead>
+                <tr><th>文件名</th><th>来源</th><th>状态</th><th>最后修改</th></tr>
+              </thead>
+              <tbody>{table_rows}</tbody>
+            </table>
+            <div class="raw-empty" data-role="empty">当前没有已下载但尚未完成解析和重建索引的更新文件。</div>
+          </div>
+        </div>
+        <script>
+          (() => {{
+            const root = document.getElementById("{component_id}");
+            const toggle = root.querySelector('[data-role="recent-toggle"]');
+            const rows = Array.from(root.querySelectorAll('tbody tr'));
+            const count = root.querySelector('[data-role="count"]');
+            const empty = root.querySelector('[data-role="empty"]');
+            const total = rows.length;
+            const recentTotal = {recent_count};
+            function applyFilter() {{
+              const recentOnly = toggle.checked;
+              let visible = 0;
+              rows.forEach((row) => {{
+                const show = !recentOnly || row.dataset.recent === "1";
+                row.style.display = show ? "" : "none";
+                if (show) visible += 1;
+              }});
+              count.textContent = recentOnly
+                ? `当前筛选：待入库更新文件 ${{visible}} 个`
+                : `全量文件 ${{total}} 个`;
+              empty.style.display = recentOnly && visible === 0 ? "block" : "none";
+            }}
+            toggle.addEventListener("change", applyFilter);
+            applyFilter();
+          }})();
+        </script>
+        """,
+        height=306,
+        scrolling=False,
+    )
+
+
+def render_raw_action_panel(api_url: str) -> None:
+    component_id = f"raw-actions-{int(time.time() * 1000)}"
+    components.html(
+        f"""
+        <style>
+          .raw-actions {{
+            display: grid;
+            grid-template-columns: minmax(180px, 0.24fr) minmax(180px, 0.22fr) 1fr;
+            gap: 24px;
+            align-items: center;
+            margin: 0 0 22px 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          }}
+          .raw-actions button {{
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 42px;
+            border: 1px solid #1d64bb;
+            border-radius: 8px;
+            background: #2f7de1;
+            color: #fff;
+            font-weight: 650;
+            box-shadow: 0 2px 0 rgba(0,0,0,.10), 0 6px 12px rgba(25,83,157,.12);
+            cursor: pointer;
+          }}
+          .raw-actions button:disabled {{
+            cursor: not-allowed;
+            opacity: .58;
+          }}
+          .raw-actions button:hover:not(:disabled) {{
+            filter: brightness(.96);
+          }}
+          .raw-status {{
+            min-width: 0;
+          }}
+          .raw-status-line {{
+            color: #5f6673;
+            font-size: 14px;
+            margin-bottom: 8px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }}
+          .raw-progress {{
+            height: 8px;
+            border-radius: 999px;
+            background: #edf1f7;
+            overflow: hidden;
+          }}
+          .raw-progress > div {{
+            width: 0%;
+            height: 100%;
+            background: #2f7de1;
+            transition: width .22s ease;
+          }}
+          @media (max-width: 900px) {{
+            .raw-actions {{
+              grid-template-columns: 1fr;
+              gap: 10px;
+            }}
+          }}
+        </style>
+        <div id="{component_id}">
+          <div class="raw-actions">
+            <button data-task="rebuild_raw">① 重新解析原始文件</button>
+            <button data-task="rebuild_index">② 重建向量索引</button>
+            <div class="raw-status">
+              <div class="raw-status-line" data-role="line">空闲</div>
+              <div class="raw-progress"><div data-role="bar"></div></div>
+            </div>
+          </div>
+        </div>
+        <script>
+          (() => {{
+            const api = "{api_url}";
+            const root = document.getElementById("{component_id}");
+            const buttons = Array.from(root.querySelectorAll("button[data-task]"));
+            const line = root.querySelector('[data-role="line"]');
+            const bar = root.querySelector('[data-role="bar"]');
+            let polling = null;
+
+            function setBusy(busy) {{
+              buttons.forEach((button) => button.disabled = busy);
+            }}
+            function render(state) {{
+              const percent = Math.max(0, Math.min(100, Number(state.percent || 0)));
+              const message = state.message || state.error || "空闲";
+              bar.style.width = `${{percent}}%`;
+              line.textContent = state.status === "idle" ? "空闲" : `${{message}} · ${{percent}}%`;
+              if (state.status === "running") {{
+                setBusy(true);
+              }} else if (state.status === "completed") {{
+                setBusy(false);
+                const detail = state.chunks ? `${{message}}，索引 ${{state.chunks}} 个片段` : message;
+                line.textContent = detail;
+                bar.style.width = "100%";
+                stopPolling();
+                if (Number(state.committed_subscriptions || 0) > 0) {{
+                  line.textContent = `${{detail}}，订阅列表修改时间已提交`;
+                }}
+              }} else if (state.status === "error") {{
+                setBusy(false);
+                line.textContent = state.error || message;
+                stopPolling();
+              }} else {{
+                setBusy(false);
+              }}
+            }}
+            async function fetchStatus() {{
+              const response = await fetch(`${{api}}/raw/status`, {{ cache: "no-store" }});
+              return await response.json();
+            }}
+            function startPolling() {{
+              stopPolling();
+              polling = window.setInterval(async () => {{
+                try {{ render(await fetchStatus()); }}
+                catch (error) {{ line.textContent = `状态读取失败：${{String(error)}}`; }}
+              }}, 650);
+            }}
+            function stopPolling() {{
+              if (polling) window.clearInterval(polling);
+              polling = null;
+            }}
+            async function startTask(task) {{
+              setBusy(true);
+              line.textContent = "正在启动...";
+              const response = await fetch(`${{api}}/raw/start?task=${{encodeURIComponent(task)}}`, {{ cache: "no-store" }});
+              const state = await response.json();
+              render(state);
+              if (state.status === "running") startPolling();
+            }}
+            buttons.forEach((button) => {{
+              button.addEventListener("click", () => startTask(button.dataset.task).catch((error) => {{
+                setBusy(false);
+                line.textContent = `任务启动失败：${{String(error)}}`;
+              }}));
+            }});
+            fetchStatus().then((state) => {{
+              render(state);
+              if (state.status === "running") startPolling();
+            }}).catch(() => {{}});
+          }})();
+        </script>
+        """,
+        height=310,
+        scrolling=False,
+    )
+
+
+def render_subscription_task_panel(api_url: str) -> None:
+    component_id = f"subscription-task-{int(time.time() * 1000)}"
+    components.html(
+        f"""
+        <style>
+          .sub-task {{
+            margin: 18px 0 0 0;
+            padding: 12px 14px;
+            border: 1px solid #e6e9ef;
+            border-radius: 8px;
+            background: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            color: #2f3440;
+          }}
+          .sub-head {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 8px;
+          }}
+          .sub-title {{
+            font-weight: 700;
+          }}
+          .sub-stop {{
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            height: 32px;
+            padding: 0 14px;
+            border: 1px solid #bf3535;
+            border-radius: 7px;
+            background: #e04b4b;
+            color: #fff;
+            font-weight: 650;
+            cursor: pointer;
+          }}
+          .sub-stop:disabled {{
+            opacity: .55;
+            cursor: not-allowed;
+          }}
+          .sub-line {{
+            color: #5f6673;
+            font-size: 14px;
+            margin: 6px 0;
+          }}
+          .sub-progress {{
+            height: 8px;
+            border-radius: 999px;
+            background: #edf1f7;
+            overflow: hidden;
+            margin-top: 8px;
+          }}
+          .sub-progress > div {{
+            width: 0%;
+            height: 100%;
+            background: #2f7de1;
+            transition: width .22s ease;
+          }}
+          .sub-log {{
+            margin-top: 10px;
+            max-height: 180px;
+            overflow: auto;
+            padding: 10px 12px;
+            border: 1px solid #edf0f4;
+            border-radius: 7px;
+            background: #f8fafc;
+            color: #4e5665;
+            font-size: 12px;
+            line-height: 1.55;
+            white-space: pre-wrap;
+          }}
+        </style>
+        <div id="{component_id}" class="sub-task" style="display:none">
+          <div class="sub-head">
+            <div class="sub-title">后台任务</div>
+            <button class="sub-stop" data-role="stop">停止当前任务</button>
+          </div>
+          <div class="sub-line" data-role="status">读取中...</div>
+          <div class="sub-line" data-role="detail"></div>
+          <div class="sub-progress"><div data-role="bar"></div></div>
+          <div class="sub-log" data-role="logs"></div>
+        </div>
+        <script>
+          (() => {{
+            const api = "{api_url}";
+            const root = document.getElementById("{component_id}");
+            const stopButton = root.querySelector('[data-role="stop"]');
+            const statusLine = root.querySelector('[data-role="status"]');
+            const detailLine = root.querySelector('[data-role="detail"]');
+            const bar = root.querySelector('[data-role="bar"]');
+            const logsBox = root.querySelector('[data-role="logs"]');
+            const runningStatuses = new Set(["running", "rebuilding", "stopping"]);
+            const labels = {{
+              running: "运行中",
+              rebuilding: "处理中",
+              stopping: "停止中",
+              stopped: "已停止",
+              completed: "已完成",
+              error: "异常",
+              idle: "空闲"
+            }};
+
+            function render(state) {{
+              if (!state.status || state.status === "idle") {{
+                root.style.display = "none";
+                return;
+              }}
+              root.style.display = "block";
+              const total = Number(state.total || 0);
+              const current = Number(state.current_index || 0);
+              const percent = total ? Math.min(100, Math.round(current / total * 100)) : 0;
+              bar.style.width = `${{percent}}%`;
+              const message = state.message === "订阅更新完成"
+                ? "下载完成。请在下方点击重新解析文件完成后再重构索引。"
+                : String(state.message || "").includes("解析完成后提交")
+                  ? "当前没有待解析订阅文件。订阅修改时间只会在重建向量索引完成后提交。"
+                : (state.message || state.current_name || "");
+              statusLine.textContent = `状态：${{labels[state.status] || state.status}} · ${{message}}`;
+              detailLine.textContent = `进度：${{current}} / ${{total}} · 下载 ${{state.downloaded || 0}} 个，跳过 ${{state.skipped || 0}} 个，失败 ${{state.failed || 0}} 个`;
+              const logs = Array.isArray(state.logs) ? state.logs : [];
+              logsBox.textContent = logs.length ? logs.join("\\n") : "暂无详细日志";
+              logsBox.scrollTop = logsBox.scrollHeight;
+              stopButton.style.display = runningStatuses.has(state.status) ? "inline-flex" : "none";
+              stopButton.disabled = state.status === "stopping";
+            }}
+            async function fetchStatus() {{
+              const response = await fetch(`${{api}}/subscription/status`, {{ cache: "no-store" }});
+              render(await response.json());
+            }}
+            stopButton.addEventListener("click", async () => {{
+              stopButton.disabled = true;
+              await fetch(`${{api}}/subscription/stop`, {{ cache: "no-store" }});
+              await fetchStatus();
+            }});
+            fetchStatus().catch(() => {{}});
+            window.setInterval(() => fetchStatus().catch(() => {{}}), 1800);
+          }})();
+        </script>
+        """,
+        height=310,
+        scrolling=False,
+    )
+
+
 def existing_images(paths: list[str]) -> list[str]:
     return [path for path in paths if Path(path).exists()]
 
 
 def render_images(paths: list[str], limit: int = 3) -> None:
     images = existing_images(paths)[:limit]
-    if images:
-        st.image(images, width=180)
+    for image in images:
+        width = 720 if "/_generated/order_flow/" in image.replace("\\", "/") else 180
+        st.image(image, width=width)
+
+
+def order_flow_images(paths: list[str]) -> list[str]:
+    return [
+        path
+        for path in existing_images(paths)
+        if "/_generated/order_flow/" in path.replace("\\", "/")
+    ]
+
+
+def render_answer_with_inline_images(answer: str) -> None:
+    buffer: list[str] = []
+    image_pattern = re.compile(r"^\s*(?:[-•]\s*)?图片\s*[：:]\s*(.+?)\s*$")
+    for line in str(answer or "").splitlines():
+        match = image_pattern.match(line)
+        if not match:
+            buffer.append(line)
+            continue
+
+        if buffer:
+            st.markdown("\n".join(buffer))
+            buffer = []
+
+        image_path = resolve_answer_image_path(match.group(1))
+        if image_path:
+            st.image(str(image_path), width=760)
+        else:
+            st.caption("图片文件不存在，可能需要重新解析原始文件。")
+
+    if buffer:
+        st.markdown("\n".join(buffer))
+
+
+def resolve_answer_image_path(raw_path: str) -> Path | None:
+    cleaned = str(raw_path or "").strip().strip('"').strip("'")
+    cleaned = cleaned.replace("\\\\", "\\")
+    if not cleaned:
+        return None
+    variants = [cleaned]
+    if "tencent_docs_generated" in cleaned:
+        variants.append(cleaned.replace("tencent_docs_generated", "tencent_docs\\_generated"))
+    candidates: list[Path] = []
+    for variant in variants:
+        path = Path(variant)
+        candidates.append(path)
+        if not path.is_absolute():
+            candidates.append(Path.cwd() / path)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def source_label(source: str) -> str:
     if source == "manual":
         return "手动录入"
     return Path(source).name
+
+
+def format_elapsed(seconds: float) -> str:
+    total = max(0, int(seconds))
+    minutes, secs = divmod(total, 60)
+    if minutes:
+        return f"{minutes}分{secs:02d}秒"
+    return f"{secs}秒"
+
+
+def make_task_progress_updater(progress_bar, status_slot, task_name: str):
+    started_at = time.monotonic()
+    last_percent = 0
+
+    def update(percent: int, message: str) -> None:
+        nonlocal last_percent
+        percent = max(0, min(percent, 100))
+        last_percent = percent
+        elapsed = format_elapsed(time.monotonic() - started_at)
+        updated_at = datetime.now().strftime("%H:%M:%S")
+        progress_bar.progress(
+            percent,
+            text=f"{task_name} {percent}%：{message}",
+        )
+        status_slot.caption(
+            f"状态：运行中｜耗时 {elapsed}｜刷新时间 {updated_at}｜"
+            "如果长时间停在同一阶段，优先看这行时间是否仍在刷新。"
+        )
+
+    return update
 
 
 def parse_tags(text: str) -> list[str]:
@@ -143,6 +895,31 @@ def tag_text(tags: list[str]) -> str:
 
 def tag_badges(tags: list[str]) -> str:
     return "、".join(tags) if tags else "未分类"
+
+
+def category_alias_rows() -> list[dict[str, str]]:
+    return [
+        {"标准类目": category, "同义词": "、".join(aliases)}
+        for category, aliases in category_aliases().items()
+    ]
+
+
+def category_alias_rows_to_config(rows: list[dict]) -> tuple[dict[str, list[str]], list[str]]:
+    aliases: dict[str, list[str]] = {}
+    errors: list[str] = []
+    for index, row in enumerate(rows, start=1):
+        category = str(row.get("标准类目", "") or "").strip()
+        if not category:
+            continue
+        if category in aliases:
+            errors.append(f"第 {index} 行类目重复：{category}")
+            continue
+        alias_text = str(row.get("同义词", "") or "")
+        alias_values = [alias for alias in parse_tags(alias_text) if alias != category]
+        aliases[category] = alias_values
+    if not aliases:
+        errors.append("至少需要保留一个商品类目。")
+    return aliases, errors
 
 
 def format_bytes(size: int | None) -> str:
@@ -206,6 +983,14 @@ def save_system_prompt(prompt: str) -> None:
         json.dumps({"system_prompt": prompt.strip()}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    st.session_state["system_prompt_override"] = prompt.strip() or DEFAULT_SYSTEM_PROMPT
+
+
+def current_system_prompt() -> str:
+    value = st.session_state.get("system_prompt_override")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return load_system_prompt()
 
 
 def subscription_rows_to_items(rows: list[dict]) -> list[TencentDocSubscription]:
@@ -221,7 +1006,6 @@ def subscription_rows_to_items(rows: list[dict]) -> list[TencentDocSubscription]
                 url=url,
                 tags=parse_tags(str(row.get("Tag", ""))),
                 enabled=bool(row.get("启用", True)),
-                last_updated=str(row.get("上次更新", "") or ""),
                 last_status=str(row.get("状态", "") or ""),
                 last_modified=str(row.get("最后修改", "") or ""),
             )
@@ -229,43 +1013,107 @@ def subscription_rows_to_items(rows: list[dict]) -> list[TencentDocSubscription]
     return subscriptions
 
 
-def rebuild_index_button(key: str, label: str = "重建向量索引") -> None:
-    if st.button(label, use_container_width=True, key=key):
-        with st.spinner("正在重建索引..."):
-            try:
-                chunk_count = pipeline.rebuild_index()
-                st.success(f"索引已重建：{chunk_count} 个片段")
-            except RuntimeError as exc:
-                st.error(str(exc))
+def parse_batch_subscription_text(text: str, default_tags: str = "") -> tuple[list[dict], list[str]]:
+    rows: list[dict] = []
+    errors: list[str] = []
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        name = ""
+        url = ""
+        bracket_match = re.fullmatch(r"[【\[](.+?)[】\]]", line)
+        if bracket_match:
+            name = bracket_match.group(1).strip()
+            index += 1
+            if index < len(lines):
+                url = lines[index].strip()
+        elif line.startswith("http"):
+            errors.append(f"第 {index + 1} 行缺少订阅名称：{line}")
+            index += 1
+            continue
+        else:
+            name = line.strip("【】[] ")
+            index += 1
+            if index < len(lines):
+                url = lines[index].strip()
+
+        if not name or not url:
+            errors.append(f"订阅信息不完整：{line}")
+            index += 1
+            continue
+        if not re.match(r"^https://docs\.qq\.com/(?:sheet|doc|slide)/", url):
+            errors.append(f"{name} 的腾讯文档链接格式不正确：{url}")
+            index += 1
+            continue
+        rows.append(
+            {
+                "": True,
+                "名称": name,
+                "最后修改": "",
+                "状态": "待同步",
+                "腾讯文档地址": url,
+                "Tag": default_tags,
+            }
+        )
+        index += 1
+    return rows, errors
 
 
-@st.dialog("确认重建索引", width="small")
-def confirm_rebuild_index_dialog() -> None:
-    st.warning("重建向量索引可能需要一些时间，确认现在执行？")
-    st.caption("取消请直接关闭弹窗。")
-    _, confirm_col, _ = st.columns([1, 2, 1])
-    if confirm_col.button("确认重建", type="primary", use_container_width=True):
-        with st.spinner("正在重建索引..."):
-            try:
-                chunk_count = pipeline.rebuild_index()
-                st.success(f"索引已重建：{chunk_count} 个片段")
-            except RuntimeError as exc:
-                st.error(str(exc))
-
-
-def rebuild_raw_button(key: str) -> None:
-    if st.button("重新解析全部原始文件", use_container_width=True, key=key):
-        with st.spinner("正在重新解析 data/raw 并重建语料库..."):
-            try:
-                stats = pipeline.rebuild_corpus_from_raw()
-                st.success(f"完成：解析 {stats['documents']} 个文档单元，语料 {stats['items']} 条")
-                if stats.get("index_error"):
-                    st.warning(f"语料已重建，但索引暂未重建：{stats['index_error']}")
-                else:
-                    st.success(f"索引已重建：{stats['chunks']} 个片段")
-                st.rerun()
-            except RuntimeError as exc:
-                st.error(str(exc))
+@st.dialog("批量增加订阅", width="large")
+def batch_add_subscription_dialog() -> None:
+    st.caption("按“名称 + 链接”的顺序粘贴；每个订阅占两行，第一行名称，第二行腾讯文档链接。")
+    pasted_text = st.text_area(
+        "粘贴订阅清单",
+        height=360,
+        placeholder="6月电视清单-26年618\nhttps://docs.qq.com/sheet/DVnZMQ055cnFHQmRL\n海尔清单-26年618\nhttps://docs.qq.com/sheet/DVkhVTWZmZ2t0U1Zo",
+    )
+    st.markdown(
+        """
+        <style>
+          div[data-testid="stElementContainer"]:has(.batch-subscription-footer)
+          + div[data-testid="stLayoutWrapper"] div[data-testid="stHorizontalBlock"] {
+              display: flex !important;
+              align-items: flex-end !important;
+              gap: 1rem;
+          }
+          div[data-testid="stElementContainer"]:has(.batch-subscription-footer)
+          + div[data-testid="stLayoutWrapper"] div[data-testid="stColumn"] {
+              display: flex !important;
+              flex-direction: column !important;
+              justify-content: flex-end !important;
+          }
+          div[data-testid="stElementContainer"]:has(.batch-subscription-footer)
+          + div[data-testid="stLayoutWrapper"] button {
+              display: flex !important;
+              align-items: center !important;
+              justify-content: center !important;
+              height: 48px !important;
+              margin: 0 !important;
+          }
+        </style>
+        <div class="batch-subscription-footer"></div>
+        """,
+        unsafe_allow_html=True,
+    )
+    tag_col, confirm_col = st.columns([0.68, 0.32], gap="small")
+    default_tags = tag_col.text_input("总体 Tag", value="", placeholder="例如：家电, 618")
+    confirm = confirm_col.button("确认增加", type="primary", use_container_width=True)
+    if confirm:
+        rows, errors = parse_batch_subscription_text(pasted_text, default_tags=default_tags)
+        if errors:
+            for error in errors:
+                st.warning(error)
+        if not rows:
+            st.warning("没有识别到可增加的订阅。")
+            return
+        existing_rows = list(st.session_state.get("import_subscription_rows", []))
+        existing_urls = {str(row.get("腾讯文档地址", "")).strip() for row in existing_rows}
+        new_rows = [row for row in rows if row["腾讯文档地址"] not in existing_urls]
+        skipped = len(rows) - len(new_rows)
+        st.session_state["import_subscription_rows"] = new_rows + existing_rows
+        st.success(f"已增加 {len(new_rows)} 个订阅" + (f"，跳过重复 {skipped} 个" if skipped else ""))
+        st.rerun()
 
 
 cfg = load_config()
@@ -278,7 +1126,9 @@ tag_options = sorted({tag for item in items for tag in item.tags})
 st.title("本地腾讯文档 RAG")
 st.caption("离线语料管理、向量检索和本地大模型问答")
 
-tab_qa, tab_corpus, tab_import, tab_prompt = st.tabs(["问答", "语料管理", "导入文件", "Prompt 设置"])
+tab_qa, tab_corpus, tab_import, tab_prompt, tab_categories = st.tabs(
+    ["问答", "语料管理", "导入文件", "Prompt 设置", "商品类目"]
+)
 
 with tab_qa:
     left, right = st.columns([0.28, 0.72], gap="large")
@@ -299,13 +1149,13 @@ with tab_qa:
         question = st.text_input("问题", placeholder="例如：有什么电饭煲？")
         if question:
             with st.spinner("正在检索并生成答案..."):
-                result = pipeline.ask(question, system_prompt=system_prompt, tags=qa_tags)
+                result = pipeline.ask(question, system_prompt=current_system_prompt(), tags=qa_tags)
 
             if result.warning:
                 st.warning(result.warning)
 
             st.markdown("#### 答案")
-            st.write(result.answer)
+            render_answer_with_inline_images(result.answer)
 
             st.markdown("#### 引用资料")
             for i, source in enumerate(result.sources, start=1):
@@ -416,8 +1266,7 @@ with tab_corpus:
                     st.info("请先勾选语料。")
                 else:
                     st.session_state["confirm_delete_selected"] = True
-            if toolbar[7].button("重建索引", type="primary", use_container_width=True):
-                confirm_rebuild_index_dialog()
+            toolbar[7].caption("索引重建请使用“导入文件”页的异步按钮")
 
             if st.session_state.get("show_add_corpus_form", False):
                 with st.form("add_corpus_form", clear_on_submit=True):
@@ -535,28 +1384,218 @@ with tab_corpus:
 
 with tab_import:
     st.subheader("导入文件")
-    left, right = st.columns([0.45, 0.55], gap="large")
+    job_state = read_job_state(cfg)
+    job_running = is_subscription_job_running(cfg)
 
+    def display_subscription_status(subscription: TencentDocSubscription) -> str:
+        raw_status = str(subscription.last_status or "")
+        if "更新中" in raw_status:
+            return "更新中"
+        if "失败" in raw_status:
+            return "失败"
+        if "待解析" in raw_status:
+            return "已下载待解析"
+        if "跳过" in raw_status:
+            return "已同步"
+        if "成功" in raw_status or "已同步" in raw_status:
+            return "已同步"
+        if subscription.last_modified:
+            return "待同步"
+        return raw_status or "待同步"
+
+    def edited_subscription_items(rows: list[dict]) -> tuple[list[TencentDocSubscription], list[str]]:
+        result: list[TencentDocSubscription] = []
+        errors: list[str] = []
+        for index, row in enumerate(rows, start=1):
+            name = str(row.get("名称", "")).strip()
+            url = str(row.get("腾讯文档地址", "")).strip()
+            if not name or not url:
+                errors.append(f"第 {index} 行订阅必须填写名称和腾讯文档地址。")
+                continue
+            result.append(
+                TencentDocSubscription(
+                    name=name,
+                    url=url,
+                    tags=parse_tags(str(row.get("Tag", ""))),
+                    enabled=bool(row.get("", True)),
+                    last_modified=str(row.get("最后修改", "") or ""),
+                    last_status=str(row.get("状态", "") or ""),
+                )
+            )
+        return result, errors
+
+    def subscription_rows_from_items(subscriptions: list[TencentDocSubscription]) -> list[dict]:
+        return [
+            {
+                "": subscription.enabled,
+                "名称": subscription.name,
+                "最后修改": subscription.last_modified,
+                "状态": display_subscription_status(subscription),
+                "腾讯文档地址": subscription.url,
+                "Tag": tag_text(subscription.tags),
+            }
+            for subscription in subscriptions
+        ]
+
+    def subscription_table_height(row_count: int) -> int:
+        return min(360, 54 + max(4, min(row_count, 8)) * 40)
+
+    def render_subscription_dataframe(rows: list[dict]) -> None:
+        st.dataframe(
+            pd.DataFrame(rows),
+            hide_index=True,
+            use_container_width=True,
+            height=subscription_table_height(len(rows)),
+            column_order=["", "名称", "最后修改", "状态", "腾讯文档地址", "Tag"],
+        )
+
+    @st.fragment(run_every="2s")
+    def render_live_subscription_table() -> None:
+        rows = subscription_rows_from_items(load_subscriptions(subscriptions_path()))
+        st.session_state["import_subscription_rows"] = rows
+        render_subscription_dataframe(rows)
+
+    left, right = st.columns([0.55, 0.45], gap="large")
     with left:
-        st.markdown("#### 上传并导入")
-        st.caption("支持从腾讯文档导出的 docx、xlsx、csv、pdf、txt、md。文件会保存到 data/raw/。")
+        title_col, login_col, cookie_col = st.columns([0.48, 0.31, 0.21], gap="small")
+        title_col.markdown('<div class="import-title">订阅获取</div>', unsafe_allow_html=True)
+        login_window_open = is_tencent_docs_login_window_open()
+        login_button_label = "点击获取 Cookie" if login_window_open else "登录腾讯文档"
+        if login_col.button(login_button_label, use_container_width=True, disabled=job_running, key="login_tencent_docs"):
+            if login_window_open:
+                try:
+                    cookie_result = read_tencent_docs_cookie_from_login_window()
+                    st.session_state["qq_cookie"] = cookie_result.cookie
+                    st.success(f"Cookie 已获取：{cookie_result.count} 个")
+                except RuntimeError as exc:
+                    st.warning(f"读取 Cookie 失败：{exc}")
+            else:
+                try:
+                    open_tencent_docs_login_window()
+                    st.info("登录窗口已打开，完成登录后点击“点击获取 Cookie”。")
+                except RuntimeError as exc:
+                    st.warning(f"打开登录窗口失败：{exc}")
+        cookie_col.markdown(
+            f'<div class="cookie-pill">Cookie：{"已获取" if st.session_state.get("qq_cookie") else "未获取"}</div>',
+            unsafe_allow_html=True,
+        )
+
+        st.markdown('<div class="import-action-style"></div>', unsafe_allow_html=True)
+        start_col, add_col, save_col = st.columns([1.1, 0.9, 0.9], gap="small")
+        start_label = "后台更新中..." if job_running else "开始后台更新"
+        start_clicked = start_col.button(
+            start_label,
+            use_container_width=True,
+            disabled=job_running,
+            key="subscription_start",
+        )
+        add_clicked = add_col.button("增加订阅", use_container_width=True, disabled=job_running, key="subscription_add")
+        save_clicked = save_col.button("保存订阅", use_container_width=True, disabled=job_running, key="subscription_save")
+
+        subscriptions = load_subscriptions(subscriptions_path())
+        base_subscription_rows = subscription_rows_from_items(subscriptions)
+        if "import_subscription_rows" not in st.session_state:
+            st.session_state["import_subscription_rows"] = base_subscription_rows
+        subscription_rows = list(st.session_state["import_subscription_rows"])
+        if add_clicked:
+            batch_add_subscription_dialog()
+
+        if job_running:
+            render_live_subscription_table()
+            edited_subscription_records = list(st.session_state.get("import_subscription_rows", base_subscription_rows))
+        else:
+            edited_subscriptions = st.data_editor(
+                pd.DataFrame(subscription_rows),
+                key="tencent_doc_subscriptions_v2",
+                hide_index=True,
+                use_container_width=True,
+                height=subscription_table_height(len(subscription_rows)),
+                num_rows="fixed",
+                disabled=["最后修改", "状态"],
+                column_order=["", "名称", "最后修改", "状态", "腾讯文档地址", "Tag"],
+                column_config={
+                    "": st.column_config.CheckboxColumn("", width="small"),
+                    "名称": st.column_config.TextColumn("名称", width="medium"),
+                    "最后修改": st.column_config.TextColumn("最后修改", width="small"),
+                    "状态": st.column_config.TextColumn("状态", width="small"),
+                    "腾讯文档地址": st.column_config.TextColumn("腾讯文档地址", width="large"),
+                    "Tag": st.column_config.TextColumn("Tag", width="small"),
+                },
+            )
+            edited_subscription_records = edited_subscriptions.to_dict("records")
+        st.session_state["import_subscription_rows"] = edited_subscription_records
+        current_subscriptions, subscription_errors = edited_subscription_items(edited_subscription_records)
+
+        if start_clicked:
+            if subscription_errors:
+                for error in subscription_errors:
+                    st.warning(error)
+            else:
+                save_subscriptions(subscriptions_path(), current_subscriptions)
+                enabled_subscriptions = [subscription for subscription in current_subscriptions if subscription.enabled]
+                if not enabled_subscriptions:
+                    st.info("请先启用至少一个订阅。")
+                else:
+                    start_subscription_job(
+                        cfg,
+                        subscriptions_path(),
+                        enabled_subscriptions,
+                        st.session_state.get("qq_cookie", ""),
+                    )
+                    remember_recent_raw_files([])
+                    job_running = True
+
+        if save_clicked:
+            if subscription_errors:
+                for error in subscription_errors:
+                    st.warning(error)
+            else:
+                save_subscriptions(subscriptions_path(), current_subscriptions)
+                st.success("订阅已保存。")
+
+        render_subscription_task_panel(LOCAL_TASK_API_URL)
+
+    with right:
+        st.markdown("### 上传文件")
         uploaded_files = st.file_uploader(
             "选择文件",
             type=[suffix.removeprefix(".") for suffix in sorted(SUPPORTED_SUFFIXES)],
             accept_multiple_files=True,
+            label_visibility="collapsed",
         )
-        shared_tags = st.text_input(
+        st.markdown('<div class="upload-tag-row">&nbsp;</div>', unsafe_allow_html=True)
+        upload_tag_col, upload_button_col = st.columns([0.68, 0.32], gap="small")
+        upload_tag_col.caption("总体 Tag")
+        shared_tags = upload_tag_col.text_input(
             "总体 Tag",
             placeholder="例如：618, 小家电, 迷住专属",
+            label_visibility="collapsed",
         )
-        st.caption("总体 Tag 会作为默认值。右侧某个文件填写了自己的 Tag 时，该文件优先使用右侧 Tag。")
+        upload_clicked = upload_button_col.button(
+            "保存并导入",
+            use_container_width=True,
+            disabled=not uploaded_files,
+            key="upload_import",
+        )
 
         if uploaded_files:
-            st.markdown("#### 待导入文件")
-            for uploaded_file in uploaded_files:
-                st.caption(f"{uploaded_file.name} · {uploaded_file.size / 1024:.1f} KB")
+            upload_list_height = min(330, 82 + max(2, min(len(uploaded_files), 5)) * 56)
+            with st.container(height=upload_list_height):
+                for index, uploaded_file in enumerate(uploaded_files):
+                    name_col, status_col, tag_col, remove_col = st.columns([0.34, 0.16, 0.42, 0.08], gap="small")
+                    name_col.write(uploaded_file.name)
+                    status_col.caption("已上传")
+                    tag_col.text_input(
+                        f"{uploaded_file.name} 的 Tag",
+                        placeholder="单独 Tag",
+                        key=uploaded_file_tag_key(index, uploaded_file.name, uploaded_file.size),
+                        label_visibility="collapsed",
+                    )
+                    remove_col.caption("×")
+        else:
+            st.info("选择文件后，可在列表中为每个文件设置单独 Tag。")
 
-        if uploaded_files and st.button("保存并导入", type="primary", use_container_width=True):
+        if upload_clicked and uploaded_files:
             saved_paths = save_uploaded_files(uploaded_files)
             with st.spinner("正在解析文件、写入语料库并重建索引..."):
                 try:
@@ -570,195 +1609,26 @@ with tab_import:
                         file_tags = parse_tags(file_tag_text) if str(file_tag_text).strip() else default_tags
                         path_tags.append((saved_path, file_tags))
                     stats = pipeline.ingest_files_with_tags(path_tags)
+                    remember_recent_raw_files(saved_paths)
                     st.success(f"完成：解析 {stats['documents']} 个文档单元，新增 {stats['items']} 条语料")
                     if stats.get("index_error"):
                         st.warning(f"语料已导入，但索引暂未重建：{stats['index_error']}")
                     else:
                         st.success(f"索引已重建：{stats['chunks']} 个片段")
-                    st.rerun()
                 except RuntimeError as exc:
                     st.error(str(exc))
 
-    with right:
-        if uploaded_files:
-            st.markdown("#### 文件 Tag 设置")
-            st.caption("不填写则使用左侧总体 Tag；填写后该文件只使用这里的 Tag。")
-            for index, uploaded_file in enumerate(uploaded_files):
-                cols = st.columns([0.46, 0.54], gap="medium")
-                cols[0].caption(f"{uploaded_file.name} · {uploaded_file.size / 1024:.1f} KB")
-                cols[1].text_input(
-                    f"{uploaded_file.name} 的 Tag",
-                    placeholder="例如：618, 小家电",
-                    key=uploaded_file_tag_key(index, uploaded_file.name, uploaded_file.size),
-                    label_visibility="collapsed",
-                )
-            st.divider()
-
-        st.markdown("#### 原始文件")
-        raw_actions = st.columns([1, 1], gap="medium")
-        with raw_actions[0]:
-            rebuild_raw_button("import_rebuild_raw")
-        with raw_actions[1]:
-            rebuild_index_button("import_rebuild_index")
-
-        raw_files = (
-            sorted([path for path in cfg.raw_data_dir.glob("**/*") if path.is_file() and is_user_source_file(path)])
-            if cfg.raw_data_dir.exists()
-            else []
-        )
-        if raw_files:
-            for path in raw_files:
-                rel = path.relative_to(cfg.raw_data_dir)
-                size_kb = path.stat().st_size / 1024
-                st.caption(f"{rel} · {size_kb:.1f} KB")
-        else:
-            st.info("暂无文件。")
-
     st.divider()
-    st.markdown("### 在线腾讯文档订阅")
-    st.caption("订阅更新会自动从腾讯文档导出表格，保存到 data/raw/tencent_docs/，再替换导入到语料库。")
+    st.markdown("### 原始文件与索引")
+    render_raw_action_panel(LOCAL_TASK_API_URL)
 
-    job_state = read_job_state(cfg)
-    job_running = is_subscription_job_running(cfg)
-    if job_running:
-        st.markdown("<meta http-equiv='refresh' content='2'>", unsafe_allow_html=True)
-
-    st.markdown("#### 腾讯文档登录凭证")
-    st.caption("推荐使用专用登录窗口：登录后点读取，系统会自动填入 Cookie。全程不用打开开发者工具。")
-    cookie_guide_a, cookie_guide_b, cookie_guide_c = st.columns([1, 1, 2.2], gap="medium")
-    with cookie_guide_a:
-        if st.button("打开登录窗口", use_container_width=True, disabled=job_running):
-            try:
-                open_tencent_docs_login_window()
-                st.success("已打开专用登录窗口，请在里面登录腾讯文档。")
-            except RuntimeError as exc:
-                st.warning(f"打开登录窗口失败：{exc}")
-    with cookie_guide_b:
-        if st.button("读取登录窗口 Cookie", use_container_width=True, disabled=job_running):
-            try:
-                cookie_result = read_tencent_docs_cookie_from_login_window()
-                st.session_state["qq_cookie"] = cookie_result.cookie
-                st.success(f"已读取专用登录窗口的 {cookie_result.count} 个 Cookie。")
-            except RuntimeError as exc:
-                st.warning(f"读取失败：{exc}")
-    with cookie_guide_c:
-        st.info("操作顺序：打开登录窗口 -> 登录腾讯文档 -> 读取登录窗口 Cookie")
-
-    st.markdown("#### 腾讯文档订阅")
-    control_col, cookie_col = st.columns([0.28, 0.72], gap="large")
-    with control_col:
-        st.caption("更新启用订阅")
-        start_label = "后台更新中..." if job_running else "开始后台更新"
-        if st.button(start_label, type="primary", use_container_width=True, disabled=job_running):
-            st.session_state["start_subscription_update_requested"] = True
-        if job_running and st.button("停止当前任务", use_container_width=True):
-            request_stop_subscription_job(cfg)
-            st.warning("已请求停止，任务会在安全点退出。")
-            st.rerun()
-    with cookie_col:
-        qq_cookie = st.text_input(
-            "腾讯文档 Cookie",
-            type="password",
-            placeholder="先点击上方读取；失败时可手动粘贴已登录 docs.qq.com 的 Cookie",
-            key="qq_cookie",
-            disabled=job_running,
-        )
-
-    subscriptions = load_subscriptions(subscriptions_path())
-    subscription_rows = [
-        {
-            "启用": subscription.enabled,
-            "名称": subscription.name,
-            "腾讯文档地址": subscription.url,
-            "Tag": tag_text(subscription.tags),
-            "最后修改": subscription.last_modified,
-            "上次更新": subscription.last_updated,
-            "状态": subscription.last_status,
-        }
-        for subscription in subscriptions
-    ]
-    list_title_col, list_action_col = st.columns([0.72, 0.28], gap="large")
-    with list_title_col:
-        st.markdown("#### 订阅列表")
-    with list_action_col:
-        save_col, add_hint_col = st.columns([1, 1], gap="medium")
-        save_clicked = save_col.button("保存订阅配置", use_container_width=True, disabled=job_running)
-        add_hint_col.caption("表格底部可新增订阅")
-
-    edited_subscriptions = st.data_editor(
-        pd.DataFrame(subscription_rows),
-        key="tencent_doc_subscriptions",
-        hide_index=True,
-        use_container_width=True,
-        num_rows="dynamic",
-        disabled=True if job_running else ["最后修改", "上次更新", "状态"],
-        column_config={
-            "启用": st.column_config.CheckboxColumn("启用", width="small"),
-            "名称": st.column_config.TextColumn("名称", width="medium"),
-            "腾讯文档地址": st.column_config.TextColumn("腾讯文档地址", width="large"),
-            "Tag": st.column_config.TextColumn("Tag", width="small"),
-            "最后修改": st.column_config.TextColumn("最后修改", width="small"),
-            "上次更新": st.column_config.TextColumn("上次更新", width="small"),
-            "状态": st.column_config.TextColumn("状态", width="medium"),
-        },
+    raw_files = (
+        sorted([path for path in cfg.raw_data_dir.glob("**/*") if path.is_file() and is_user_source_file(path)])
+        if cfg.raw_data_dir.exists()
+        else []
     )
-    current_subscriptions = subscription_rows_to_items(edited_subscriptions.to_dict("records"))
-
-    if st.session_state.pop("start_subscription_update_requested", False):
-        save_subscriptions(subscriptions_path(), current_subscriptions)
-        enabled_subscriptions = [subscription for subscription in current_subscriptions if subscription.enabled]
-        if not enabled_subscriptions:
-            st.info("请先启用至少一个订阅。")
-        else:
-            start_subscription_job(cfg, subscriptions_path(), enabled_subscriptions, st.session_state.get("qq_cookie", ""))
-            st.success("后台更新已启动，刷新页面不会中断任务。")
-            st.rerun()
-
-    if save_clicked:
-        save_subscriptions(subscriptions_path(), current_subscriptions)
-        st.success("订阅已保存。")
-        st.rerun()
-
-    if job_state.status != "idle":
-        st.markdown("#### 后台任务")
-        status_text = {
-            "running": "运行中",
-            "rebuilding": "正在重建索引",
-            "stopping": "停止中",
-            "stopped": "已停止",
-            "completed": "已完成",
-            "error": "异常",
-        }.get(job_state.status, job_state.status)
-        st.caption(
-            f"状态：{status_text}    开始时间：{job_state.started_at or '-'}    "
-            f"完成时间：{job_state.finished_at or '-'}"
-        )
-        total_progress = job_state.current_index / job_state.total if job_state.total else 0
-        st.progress(min(total_progress, 1.0))
-        st.info(
-            f"总进度：{job_state.current_index} / {job_state.total}，"
-            f"{job_state.message or job_state.current_name}"
-        )
-        if job_state.current_downloaded:
-            if job_state.current_total:
-                download_progress = min(job_state.current_downloaded / job_state.current_total, 1.0)
-                st.progress(download_progress)
-                st.caption(
-                    f"当前文件下载进度：{download_progress:.0%}    "
-                    f"已下载：{format_bytes(job_state.current_downloaded)} / {format_bytes(job_state.current_total)}"
-                )
-            else:
-                st.progress(0)
-                st.caption(f"当前文件下载进度：已下载 {format_bytes(job_state.current_downloaded)}")
-        st.caption(
-            f"下载 {job_state.downloaded} 个，跳过 {job_state.skipped} 个，失败 {job_state.failed} 个，"
-            f"移除旧语料 {job_state.removed} 条，新增 {job_state.items} 条语料，索引 {job_state.chunks} 个片段。"
-        )
-        if job_state.index_error:
-            st.warning(f"语料已更新，但索引暂未重建：{job_state.index_error}")
-        if job_state.logs:
-            with st.expander("最近日志", expanded=job_running):
-                st.write("\n".join(job_state.logs[-12:]))
+    recent_raw_files = recent_raw_files_from_state()
+    render_raw_files_table(raw_files, recent_raw_files)
 
 with tab_prompt:
     st.subheader("Prompt 设置")
@@ -768,22 +1638,67 @@ with tab_prompt:
         st.markdown("#### 系统提示词")
         st.caption("保存后会立即用于下一次提问。")
         with st.form("prompt_settings_form"):
-            edited_prompt = st.text_area("Prompt", value=system_prompt, height=360, label_visibility="collapsed")
+            edited_prompt = st.text_area("Prompt", value=current_system_prompt(), height=360, label_visibility="collapsed")
             save_prompt = st.form_submit_button("保存 Prompt", type="primary")
         if save_prompt:
             save_system_prompt(edited_prompt)
-            st.success("Prompt 已保存。下一次提问会使用新的设置。")
+            st.success("Prompt 已保存，并已立即生效。")
             st.rerun()
 
     with right:
         st.markdown("#### 本地模型")
+        llama_plan = build_llama_server_plan(cfg)
+        llama_status = "已启动" if is_llama_server_healthy(cfg) else "未启动"
+        st.caption(f"后端：`{cfg.llm.backend}`")
+        st.caption(f"llama.cpp server：`{llama_status}` `{cfg.llm.llama_server_url}`")
+        st.caption(f"llama.cpp 后端选择：`{llama_plan.backend}`")
+        if not llama_plan.enabled and cfg.llm.backend in {"llama_cpp_server", "auto"}:
+            st.warning(llama_plan.reason)
         st.caption(f"Ollama：`{cfg.llm.ollama_model}`")
         st.caption(f"GGUF：`{cfg.llm_model_path}`")
         st.caption(f"上下文 / 输出：`{cfg.llm.n_ctx}` / `{cfg.llm.max_tokens}`")
-        st.caption(f"线程 / 批大小：`{cfg.llm.n_threads}` / `{cfg.llm.num_batch}`")
+        st.caption(f"线程 / 批大小 / GPU 层：`{cfg.llm.n_threads}` / `{cfg.llm.num_batch}` / `{cfg.llm.n_gpu_layers}`")
         st.caption(f"keep_alive：`{cfg.llm.keep_alive}`")
         st.divider()
         if st.button("恢复默认 Prompt", use_container_width=True):
             save_system_prompt(DEFAULT_SYSTEM_PROMPT)
             st.success("已恢复默认 Prompt。")
             st.rerun()
+
+with tab_categories:
+    st.subheader("商品类目")
+    st.caption("维护商品类目和同义词。用户问到标准类目或任一同义词时，检索和结构化回答都会按同一组词扩展匹配。")
+
+    category_rows = st.data_editor(
+        pd.DataFrame(category_alias_rows()),
+        hide_index=True,
+        use_container_width=True,
+        num_rows="dynamic",
+        height=460,
+        column_config={
+            "标准类目": st.column_config.TextColumn(
+                "标准类目",
+                help="例如：刀具、床、电饭煲",
+                required=True,
+            ),
+            "同义词": st.column_config.TextColumn(
+                "同义词",
+                help="用逗号、顿号、分号或空格分隔。例如：菜刀、刀、切片工具",
+            ),
+        },
+        key="category_alias_editor",
+    )
+
+    action_col, hint_col = st.columns([0.18, 0.82], gap="medium")
+    if action_col.button("保存类目", type="primary", use_container_width=True):
+        rows = category_rows.fillna("").to_dict("records") if isinstance(category_rows, pd.DataFrame) else []
+        aliases, category_errors = category_alias_rows_to_config(rows)
+        if category_errors:
+            for error in category_errors:
+                st.warning(error)
+        else:
+            save_category_aliases(aliases)
+            get_pipeline.clear()
+            st.success("商品类目已保存，下一次提问会使用新的类目和同义词。")
+            st.rerun()
+    hint_col.caption("新增类目：直接在表格底部新增一行；删除类目：清空该行标准类目或用表格自带删除行操作。")
