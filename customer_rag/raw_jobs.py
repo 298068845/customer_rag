@@ -70,7 +70,7 @@ def recover_interrupted_raw_job(config: RagConfig) -> RawJobState:
     return state
 
 
-def start_raw_job(config: RagConfig, task: str) -> RawJobState:
+def start_raw_job(config: RagConfig, task: str, scope: str = "all") -> RawJobState:
     global _worker
     if task not in {"rebuild_raw", "rebuild_index"}:
         return RawJobState(status="error", error=f"未知任务：{task}")
@@ -87,12 +87,12 @@ def start_raw_job(config: RagConfig, task: str) -> RawJobState:
             message=_task_label(task) + "已启动",
         )
         _write_state(config, state)
-        _worker = threading.Thread(target=_run_raw_job, args=(config, task, state.job_id), daemon=True)
+        _worker = threading.Thread(target=_run_raw_job, args=(config, task, state.job_id, scope), daemon=True)
         _worker.start()
         return state
 
 
-def _run_raw_job(config: RagConfig, task: str, job_id: str) -> None:
+def _run_raw_job(config: RagConfig, task: str, job_id: str, scope: str = "all") -> None:
     state = read_raw_job_state(config)
 
     def update(percent: int, message: str) -> None:
@@ -105,7 +105,7 @@ def _run_raw_job(config: RagConfig, task: str, job_id: str) -> None:
     try:
         pipeline = RagPipeline(config)
         if task == "rebuild_raw":
-            pending_path_tags = _pending_subscription_path_tags(config)
+            pending_path_tags = _pending_subscription_path_tags(config) if scope == "pending" else []
             if pending_path_tags:
                 update(5, f"正在解析本次下载文件：{len(pending_path_tags)} 个")
                 stats = pipeline.replace_files_with_tags(pending_path_tags, rebuild_index=False)

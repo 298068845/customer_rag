@@ -43,6 +43,7 @@ global STATUS_GUI := 0
 global STATUS_TITLE := 0
 global STATUS_BODY := 0
 global RAG_QUERY_PID := 0
+global RAG_QUERY_STARTED_AT := 0
 global RAG_TALK_ONLY_PENDING := false
 global STATUS_TEST_FORCE_MONITOR := 0
 global QUERY_GUI := 0
@@ -224,7 +225,7 @@ CloseQueryDialog(*) {
 }
 
 AskRagForSelection(tags := "", talkOnly := false) {
-    global RAG_QUERY_PID, RAG_TALK_ONLY_PENDING
+    global RAG_QUERY_PID, RAG_QUERY_STARTED_AT, RAG_TALK_ONLY_PENDING
 
     if !ReadBoolConfig("rag", "enabled", false) {
         return
@@ -262,27 +263,46 @@ AskRagForSelection(tags := "", talkOnly := false) {
     }
     try {
         Run command, projectRoot, "Hide", &RAG_QUERY_PID
+        RAG_QUERY_STARTED_AT := A_TickCount
         SetTimer CheckRagQueryDone, 250
     } catch as exc {
         RAG_QUERY_PID := 0
+        RAG_QUERY_STARTED_AT := 0
         RAG_TALK_ONLY_PENDING := false
         ShowStatus("error", "查询启动失败", exc.Message, 4200)
     }
 }
 
 CheckRagQueryDone() {
-    global RAG_QUERY_PID, RAG_TALK_ONLY_PENDING
+    global RAG_QUERY_PID, RAG_QUERY_STARTED_AT, RAG_TALK_ONLY_PENDING
 
     if !RAG_QUERY_PID {
         SetTimer CheckRagQueryDone, 0
+        RAG_QUERY_STARTED_AT := 0
         return
     }
 
     if ProcessExist(RAG_QUERY_PID) {
+        fallbackMs := Max(1, ReadFloatConfig("rag", "fallback_seconds", 3.0)) * 1000
+        if (RAG_QUERY_STARTED_AT && A_TickCount - RAG_QUERY_STARTED_AT >= fallbackMs) {
+            try ProcessClose RAG_QUERY_PID
+            RAG_QUERY_PID := 0
+            RAG_QUERY_STARTED_AT := 0
+            SetTimer CheckRagQueryDone, 0
+            if (RAG_TALK_ONLY_PENDING) {
+                RAG_TALK_ONLY_PENDING := false
+                ShowStatus("error", "话术查询超时", "超过 " Round(fallbackMs / 1000, 1) " 秒未返回，请稍后重试。", 4200)
+            } else {
+                WriteRagFallbackResult()
+                RAG_TALK_ONLY_PENDING := false
+                ShowRagResultPreview()
+            }
+        }
         return
     }
 
     RAG_QUERY_PID := 0
+    RAG_QUERY_STARTED_AT := 0
     SetTimer CheckRagQueryDone, 0
 
     if FileExist(SEND_TEXT_PATH) && Trim(ReadSendText()) != "" {
@@ -298,6 +318,11 @@ CheckRagQueryDone() {
         RAG_TALK_ONLY_PENDING := false
         ShowStatus("error", "查询失败", "请查看 rag-bridge.log 后重试。", 4200)
     }
+}
+
+WriteRagFallbackResult() {
+    FileDeleteSafe(SEND_TEXT_PATH)
+    FileAppend "__RAG_FUZZY_FALLBACK__`n资料中未找到相关信息", SEND_TEXT_PATH, "UTF-8"
 }
 
 ShowRagResultPreview() {
@@ -1267,6 +1292,7 @@ restore_clipboard_after_paste=0
 
 [rag]
 enabled=1
+fallback_seconds=3
 )"
 }
 

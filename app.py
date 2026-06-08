@@ -434,7 +434,7 @@ def render_raw_files_table(raw_files: list[Path], recent_files: list[str]) -> No
         <div id="{component_id}">
           <label class="raw-filter-bar">
             <input type="checkbox" data-role="recent-toggle">
-            <span>仅待入库更新文件</span>
+            <span>仅显示待入库更新文件</span>
             <span class="raw-filter-count" data-role="count">全量文件 {len(rows)} 个</span>
           </label>
           <div class="raw-table-wrap">
@@ -548,14 +548,14 @@ def render_raw_files_loading() -> None:
     )
 
 
-def render_raw_action_panel(api_url: str) -> None:
+def render_raw_action_panel(api_url: str, pending_count: int = 0) -> None:
     component_id = f"raw-actions-{int(time.time() * 1000)}"
     components.html(
         f"""
         <style>
           .raw-actions {{
             display: grid;
-            grid-template-columns: minmax(180px, 0.24fr) minmax(180px, 0.22fr) 1fr;
+            grid-template-columns: minmax(180px, 0.24fr) minmax(180px, 0.22fr) minmax(190px, 0.22fr) 1fr;
             gap: 24px;
             align-items: center;
             margin: 0;
@@ -583,6 +583,19 @@ def render_raw_action_panel(api_url: str) -> None:
           }}
           .raw-status {{
             min-width: 0;
+          }}
+          .raw-scope {{
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            color: #5f6673;
+            font-size: 14px;
+            white-space: nowrap;
+          }}
+          .raw-scope input {{
+            width: 16px;
+            height: 16px;
+            accent-color: #4b7fda;
           }}
           .raw-status-line {{
             color: #5f6673;
@@ -615,6 +628,10 @@ def render_raw_action_panel(api_url: str) -> None:
           <div class="raw-actions">
             <button data-task="rebuild_raw">① 重新解析原始文件</button>
             <button data-task="rebuild_index">② 重建向量索引</button>
+            <label class="raw-scope">
+              <input type="checkbox" data-role="pending-scope" {"disabled" if pending_count <= 0 else ""}>
+              <span>仅解析待入库更新文件</span>
+            </label>
             <div class="raw-status">
               <div class="raw-status-line" data-role="line">空闲</div>
               <div class="raw-progress"><div data-role="bar"></div></div>
@@ -626,6 +643,7 @@ def render_raw_action_panel(api_url: str) -> None:
             const api = "{api_url}";
             const root = document.getElementById("{component_id}");
             const buttons = Array.from(root.querySelectorAll("button[data-task]"));
+            const pendingScope = root.querySelector('[data-role="pending-scope"]');
             const line = root.querySelector('[data-role="line"]');
             const bar = root.querySelector('[data-role="bar"]');
             let polling = null;
@@ -675,7 +693,10 @@ def render_raw_action_panel(api_url: str) -> None:
             async function startTask(task) {{
               setBusy(true);
               line.textContent = "正在启动...";
-              const response = await fetch(`${{api}}/raw/start?task=${{encodeURIComponent(task)}}`, {{ cache: "no-store" }});
+              const scope = task === "rebuild_raw"
+                ? (pendingScope && pendingScope.checked ? "pending" : "all")
+                : "all";
+              const response = await fetch(`${{api}}/raw/start?task=${{encodeURIComponent(task)}}&scope=${{encodeURIComponent(scope)}}`, {{ cache: "no-store" }});
               const state = await response.json();
               render(state);
               if (state.status === "running") startPolling();
@@ -1727,7 +1748,8 @@ with tab_import:
 
     st.divider()
     st.markdown("### 原始文件与索引")
-    render_raw_action_panel(LOCAL_TASK_API_URL)
+    recent_raw_files = recent_raw_files_from_state()
+    render_raw_action_panel(LOCAL_TASK_API_URL, pending_count=len(recent_raw_files))
 
     raw_files_placeholder = st.empty()
     with raw_files_placeholder.container():
@@ -1737,7 +1759,6 @@ with tab_import:
         if cfg.raw_data_dir.exists()
         else []
     )
-    recent_raw_files = recent_raw_files_from_state()
     raw_files_placeholder.empty()
     with raw_files_placeholder.container():
         render_raw_files_table(raw_files, recent_raw_files)

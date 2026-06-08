@@ -38,7 +38,8 @@ class _TaskApiHandler(BaseHTTPRequestHandler):
         config = load_config()
         if parsed.path == "/raw/start":
             task = query.get("task", [""])[0]
-            self._send_json(asdict(start_raw_job(config, task)))
+            scope = query.get("scope", ["all"])[0]
+            self._send_json(asdict(start_raw_job(config, task, scope=scope)))
             return
         if parsed.path == "/raw/status":
             self._send_json(asdict(recover_interrupted_raw_job(config)))

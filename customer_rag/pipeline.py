@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass
 from pathlib import Path
+import queue
 import re
+import threading
 import time
 from typing import Callable
 
@@ -234,6 +235,7 @@ class RagPipeline:
         tags: list[str] | None = None,
     ) -> RagResult:
         started_at = time.monotonic()
+        deadline = started_at + FUZZY_FALLBACK_SECONDS
         selected_tags = _clean_tags(tags or [])
         warning = None
         precise_lookup = _is_precise_lookup(question)
@@ -246,12 +248,17 @@ class RagPipeline:
             self.config.top_k * 10,
             tags=search_tags,
             tag_match=tag_match,
+            deadline=deadline,
         )
+        if time.monotonic() >= deadline:
+            return self._fuzzy_fallback_result(question, keyword_sources, system_prompt, search_tags, None, deadline)
         if auto_tags and not keyword_sources:
             keyword_sources = _merge_sources(
                 keyword_sources,
-                self.keyword_search(question, self.config.top_k * 10),
+                self.keyword_search(question, self.config.top_k * 10, deadline=deadline),
             )
+            if time.monotonic() >= deadline:
+                return self._fuzzy_fallback_result(question, keyword_sources, system_prompt, search_tags, None, deadline)
 
         precise_product_lookup = precise_lookup or is_product_query(question)
         if precise_product_lookup and keyword_sources:
@@ -270,6 +277,7 @@ class RagPipeline:
                         system_prompt,
                         selected_tags,
                         None,
+                        deadline,
                     )
                 vector_sources = _filter_by_tags(vector_results, search_tags, match=tag_match)
                 if auto_tags and not vector_sources and not keyword_sources:
@@ -284,6 +292,7 @@ class RagPipeline:
                             system_prompt,
                             selected_tags,
                             None,
+                            deadline,
                         )
                     vector_sources = _merge_sources(vector_sources, fallback_vector_results)
                 sources = _merge_sources(keyword_sources[: self.config.top_k], vector_sources)[: self.config.top_k]
@@ -299,9 +308,14 @@ class RagPipeline:
                 self.config.top_k * 10,
                 tags=search_tags,
                 tag_match=tag_match,
+                deadline=deadline,
             )
+            if time.monotonic() >= deadline:
+                return self._fuzzy_fallback_result(question, keyword_sources or sources, system_prompt, search_tags, None, deadline)
             if auto_tags and not attribute_sources:
-                attribute_sources = self.attribute_search(question, conditions, self.config.top_k * 10)
+                attribute_sources = self.attribute_search(question, conditions, self.config.top_k * 10, deadline=deadline)
+                if time.monotonic() >= deadline:
+                    return self._fuzzy_fallback_result(question, keyword_sources or sources, system_prompt, search_tags, None, deadline)
             sources = _merge_sources(attribute_sources, sources)
         sources = _apply_numeric_conditions(
             _filter_weak_sources(_dedupe_sources_by_product(sources)),
@@ -328,6 +342,7 @@ class RagPipeline:
                     system_prompt,
                     search_tags,
                     None,
+                    deadline,
                 )
             else:
                 if time.monotonic() - started_at >= FUZZY_FALLBACK_SECONDS:
@@ -337,6 +352,7 @@ class RagPipeline:
                         system_prompt,
                         search_tags,
                         None,
+                        deadline,
                     )
                 llm_answer = _run_text_with_timeout(
                     lambda: self.llm.answer(question, sources, system_prompt=system_prompt),
@@ -349,6 +365,7 @@ class RagPipeline:
                         system_prompt,
                         search_tags,
                         None,
+                        deadline,
                     )
                 answer = llm_answer
         return RagResult(answer=strip_thinking(answer), sources=sources, warning=warning)
@@ -360,12 +377,13 @@ class RagPipeline:
         system_prompt: str | None,
         selected_tags: list[str],
         message: str | None,
+        deadline: float | None = None,
     ) -> RagResult:
         sources = candidates[: self.config.top_k]
-        if not sources:
-            sources = self.keyword_search(question, self.config.top_k, tags=selected_tags, tag_match="all")
-        if not sources:
-            sources = self.keyword_search(question, self.config.top_k)
+        if not sources and _has_time_left(deadline):
+            sources = self.keyword_search(question, self.config.top_k, tags=selected_tags, tag_match="all", deadline=deadline)
+        if not sources and _has_time_left(deadline):
+            sources = self.keyword_search(question, self.config.top_k, deadline=deadline)
         sources = _dedupe_sources_by_product(sources)[: self.config.top_k]
         answer = build_structured_product_answer(
             question,
@@ -384,7 +402,10 @@ class RagPipeline:
         tags: list[str] | None = None,
         *,
         tag_match: str = "all",
+        deadline: float | None = None,
     ) -> list[RetrievedChunk]:
+        if not _has_time_left(deadline):
+            return []
         terms = _query_terms(question)
         selected_tags = _clean_tags(tags or [])
         selected_tag_set = set(selected_tags)
@@ -405,7 +426,9 @@ class RagPipeline:
         brand_terms = _known_brand_terms(normalized_question)
         category_terms = _category_terms(normalized_question)
         code_terms = [term for term in terms if _is_model_code(term)]
-        for item in corpus_items:
+        for index, item in enumerate(corpus_items):
+            if index % 64 == 0 and not _has_time_left(deadline):
+                break
             if selected_tags and not _tags_match(item.tags, selected_tag_set, tag_match):
                 continue
             score = _keyword_score(
@@ -435,7 +458,8 @@ class RagPipeline:
             )
         results.sort(key=lambda source: source.score, reverse=True)
         sliced = results[:top_k]
-        self._keyword_cache[cache_key] = list(sliced)
+        if _has_time_left(deadline):
+            self._keyword_cache[cache_key] = list(sliced)
         return sliced
 
     def attribute_search(
@@ -446,8 +470,9 @@ class RagPipeline:
         tags: list[str] | None = None,
         *,
         tag_match: str = "all",
+        deadline: float | None = None,
     ) -> list[RetrievedChunk]:
-        if not conditions:
+        if not conditions or not _has_time_left(deadline):
             return []
 
         selected_tags = _clean_tags(tags or [])
@@ -460,7 +485,9 @@ class RagPipeline:
         code_terms = [term for term in terms if _is_model_code(term)]
 
         results: list[RetrievedChunk] = []
-        for item in corpus_items:
+        for index, item in enumerate(corpus_items):
+            if index % 64 == 0 and not _has_time_left(deadline):
+                break
             if selected_tags and not _tags_match(item.tags, selected_tag_set, tag_match):
                 continue
             searchable_text = "\n".join(
@@ -624,28 +651,36 @@ def _query_terms(question: str) -> list[str]:
     return list(dict.fromkeys(terms))
 
 
+def _has_time_left(deadline: float | None) -> bool:
+    return deadline is None or time.monotonic() < deadline
+
+
 def _run_with_timeout(callable_fn: Callable[[], list[RetrievedChunk]], timeout_seconds: float) -> list[RetrievedChunk] | None:
-    executor = ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(callable_fn)
-    try:
-        return future.result(timeout=max(0.1, timeout_seconds))
-    except TimeoutError:
-        future.cancel()
-        return None
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+    return _run_daemon_with_timeout(callable_fn, timeout_seconds)
 
 
 def _run_text_with_timeout(callable_fn: Callable[[], str], timeout_seconds: float) -> str | None:
-    executor = ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(callable_fn)
+    return _run_daemon_with_timeout(callable_fn, timeout_seconds)
+
+
+def _run_daemon_with_timeout(callable_fn: Callable[[], object], timeout_seconds: float):
+    result_queue: queue.Queue[tuple[bool, object]] = queue.Queue(maxsize=1)
+
+    def target() -> None:
+        try:
+            result_queue.put((True, callable_fn()), block=False)
+        except Exception as exc:  # noqa: BLE001 - preserve worker exceptions for caller.
+            result_queue.put((False, exc), block=False)
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
     try:
-        return future.result(timeout=max(0.1, timeout_seconds))
-    except TimeoutError:
-        future.cancel()
+        ok, value = result_queue.get(timeout=max(0.1, timeout_seconds))
+    except queue.Empty:
         return None
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+    if ok:
+        return value
+    raise value
 
 
 def _format_fuzzy_sources(sources: list[RetrievedChunk]) -> str:
