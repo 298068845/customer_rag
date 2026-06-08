@@ -15,7 +15,7 @@ from customer_rag.category_config import category_terms as configured_category_t
 from customer_rag.corpus import CorpusItem, CorpusStore
 from customer_rag.config import RagConfig
 from customer_rag.llm import LocalLlm, strip_thinking
-from customer_rag.loaders import LoadedDocument, category_tags_from_text
+from customer_rag.loaders import LoadedDocument, brand_tags_from_text, category_tags_from_text
 from customer_rag.loaders import load_document_file, load_documents
 from customer_rag.splitter import split_documents
 from customer_rag.tencent_docs import load_subscriptions, subscription_output_path
@@ -30,6 +30,7 @@ class RagResult:
     answer: str
     sources: list[RetrievedChunk]
     warning: str | None = None
+    fallback: bool = False
 
 
 class RagPipeline:
@@ -50,7 +51,10 @@ class RagPipeline:
     def ingest(self) -> dict[str, int]:
         source_tags = self._source_tags_from_subscriptions()
         documents = load_documents(self.config.raw_data_dir, source_tags=source_tags)
-        added_categories = add_category_terms(_category_terms_from_documents(documents, source_tags))
+        added_categories = add_category_terms(
+            _category_terms_from_documents(documents, source_tags),
+            category_brand_map=_category_brand_map_from_documents(documents, source_tags),
+        )
         before = len(self.corpus.list_items())
         self.corpus.add_documents(documents)
         stats = self._rebuild_stats(documents=len(documents), before=before)
@@ -80,7 +84,10 @@ class RagPipeline:
             source_tags=source_tags,
         )
         emit(62, "正在同步商品类目配置")
-        added_categories = add_category_terms(_category_terms_from_documents(documents, source_tags))
+        added_categories = add_category_terms(
+            _category_terms_from_documents(documents, source_tags),
+            category_brand_map=_category_brand_map_from_documents(documents, source_tags),
+        )
         emit(65, "正在写入语料库")
         self.corpus.clear()
         self.corpus.add_documents(documents)
@@ -110,7 +117,10 @@ class RagPipeline:
         file_tags = _clean_tags(tags or [])
         for path in paths:
             documents.extend(load_document_file(path, tags=file_tags))
-        added_categories = add_category_terms(_category_terms_from_documents(documents))
+        added_categories = add_category_terms(
+            _category_terms_from_documents(documents),
+            category_brand_map=_category_brand_map_from_documents(documents),
+        )
         before = len(self.corpus.list_items())
         self.corpus.add_documents(documents)
         stats = self._rebuild_stats(documents=len(documents), before=before)
@@ -133,7 +143,10 @@ class RagPipeline:
                         attributes=doc.attributes,
                     )
                 )
-        added_categories = add_category_terms(_category_terms_from_documents(documents))
+        added_categories = add_category_terms(
+            _category_terms_from_documents(documents),
+            category_brand_map=_category_brand_map_from_documents(documents),
+        )
         before = len(self.corpus.list_items())
         self.corpus.add_documents(documents)
         stats = self._rebuild_stats(documents=len(documents), before=before)
@@ -164,7 +177,10 @@ class RagPipeline:
                         attributes=doc.attributes,
                     )
                 )
-        added_categories = add_category_terms(_category_terms_from_documents(documents))
+        added_categories = add_category_terms(
+            _category_terms_from_documents(documents),
+            category_brand_map=_category_brand_map_from_documents(documents),
+        )
         self.corpus.add_documents(documents)
         if rebuild_index:
             stats = self._rebuild_stats(documents=len(documents), before=before)
@@ -359,7 +375,7 @@ class RagPipeline:
         )
         if answer is None:
             answer = _format_fuzzy_sources(sources)
-        return RagResult(answer=answer, sources=sources, warning=message)
+        return RagResult(answer=answer, sources=sources, warning=message, fallback=True)
 
     def keyword_search(
         self,
@@ -833,16 +849,28 @@ def _apply_numeric_conditions(sources: list[RetrievedChunk], conditions: list) -
 
 def _source_product_key(source: RetrievedChunk) -> str:
     text = source.text
+    product_info = _extract_product_key_field(text, ("产品信息", "型号", "规格"))
+    brand = _extract_product_key_field(text, ("品牌",))
+    if product_info:
+        return f"product:{_normalize_product_key_part(brand)}:{_normalize_product_key_part(product_info)}"
     link_match = re.search(r"(?:商品链接|礼金短链接|链接)[:：]\s*([^；\s]+)", text)
     if link_match:
         return "link:" + link_match.group(1).strip().lower()
-    model_match = re.search(r"(?:产品信息[^:：]*|型号[^:：]*|规格[^:：]*)[:：]\s*([^；]+)", text)
-    brand_match = re.search(r"品牌[:：]\s*([^；\s]+)", text)
-    if model_match:
-        model = re.sub(r"\s+", "", model_match.group(1)).lower()
-        brand = brand_match.group(1).strip().lower() if brand_match else ""
-        return f"product:{brand}:{model}"
     return f"chunk:{source.source}:{source.location}:{source.title}"
+
+
+def _extract_product_key_field(text: str, field_names: tuple[str, ...]) -> str:
+    for field_name in field_names:
+        match = re.search(rf"(?:^|[；\n])\s*{re.escape(field_name)}[^:：；\n]{{0,20}}[:：]\s*([^；]+)", text)
+        if match:
+            value = match.group(1).strip()
+            if value:
+                return value
+    return ""
+
+
+def _normalize_product_key_part(value: str) -> str:
+    return re.sub(r"\s+", "", str(value or "")).lower()
 
 
 def _source_richness(source: RetrievedChunk) -> int:
@@ -938,3 +966,22 @@ def _category_terms_from_documents(
             if tag not in initial_tags:
                 terms.append(tag)
     return _clean_tags(terms)
+
+
+def _category_brand_map_from_documents(
+    documents: list[LoadedDocument],
+    source_tags: dict[str, list[str]] | None = None,
+) -> dict[str, list[str]]:
+    initial_tags = {tag for tags in (source_tags or {}).values() for tag in _clean_tags(tags)}
+    category_brands: dict[str, list[str]] = {}
+    for doc in documents:
+        categories = [tag for tag in category_tags_from_text(doc.text) if tag not in initial_tags]
+        brands = brand_tags_from_text(doc.text)
+        if not categories or not brands:
+            continue
+        for category in categories:
+            values = category_brands.setdefault(category, [])
+            for brand in brands:
+                if brand not in values:
+                    values.append(brand)
+    return category_brands

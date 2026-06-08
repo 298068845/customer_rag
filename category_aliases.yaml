@@ -2,1123 +2,2521 @@ categories:
   电饭煲:
     aliases:
     - 饭煲
+    brands:
+    - 美的
+    - 东芝
+    - 九阳
+    - 大宇
   电磁炉:
     aliases: []
+    brands: []
   电压力锅:
     aliases:
     - 压力锅
     - 锅
+    brands:
+    - 美的
   破壁机:
     aliases: []
+    brands:
+    - 美的
+    - 大宇
+    - 九阳
   电蒸锅:
     aliases:
     - 蒸锅
+    brands:
+    - 美的
   微波炉:
     aliases: []
+    brands:
+    - 东芝
+    - 美的
   水波炉:
     aliases: []
+    brands:
+    - 东芝
   咖啡机:
     aliases: []
+    brands:
+    - 美的
   按摩椅:
     aliases: []
+    brands:
+    - 芝华仕
   床:
     aliases:
     - 实木床
     - 软床
     - 箱体床
+    brands:
+    - 喜临门
+    - 续写
+    - 小半
+    - MUU
+    - 浪度
   床头柜:
     aliases: []
+    brands:
+    - 喜临门-京东
+    - 全友
+    - 小半
+    - MUU
+    - 续写
   刀具:
     aliases:
     - 菜刀
     - 刀
     - 切片工具
     - 钛刀
+    brands:
+    - OOU
   沙发:
     aliases:
     - 布艺沙发
     - 皮艺沙发
     - 功能沙发
+    brands:
+    - 喜临门-京东
+    - 小半
+    - MUU
+    - 浪度
   餐桌:
     aliases: []
+    brands:
+    - 芝华仕
+    - 顾家
+    - 全友
+    - 小半
+    - MUU
+    - 续写
+    - 小写
   椅:
     aliases:
     - 餐椅
     - 椅子
+    brands: []
   柜:
     aliases:
     - 衣柜
     - 电视柜
     - 边柜
+    brands: []
   电动皮沙发:
     aliases: []
+    brands:
+    - 乐至宝
+    - 支吾·天猫
   功能布沙发:
     aliases: []
+    brands:
+    - 乐至宝
+    - 芝华仕
   功能皮沙发:
     aliases: []
+    brands:
+    - 乐至宝
+    - 支吾·京东
+    - 帕沙曼
+    - 芝华仕
+    - 顾家
   布单椅:
     aliases: []
+    brands:
+    - 乐至宝
   皮单椅:
     aliases: []
+    brands:
+    - 乐至宝
   单椅:
     aliases: []
+    brands:
+    - 乐至宝
+    - 支吾·天猫
+    - 支吾·京东
+    - 芝华仕
   电动皮单椅:
     aliases: []
+    brands:
+    - 乐至宝
   电动布沙发:
     aliases: []
+    brands:
+    - 乐至宝
   全友多件多折:
     aliases: []
+    brands:
+    - 全友
   弹簧床垫:
     aliases: []
+    brands:
+    - 全友
   皮沙发:
     aliases: []
+    brands:
+    - 全友
   岛台:
     aliases: []
+    brands:
+    - 全友
   皮沙发-U标:
     aliases:
     - U标
+    brands:
+    - 全友
   布沙发-U标:
     aliases: []
+    brands:
+    - 全友
   皮艺床:
     aliases: []
+    brands:
+    - 支吾·天猫
+    - 支吾·京东
+    - 帕沙曼
+    - 芝华仕
+    - 顾家
+    - 全友
   皮床:
     aliases: []
+    brands:
+    - 全友
   布床:
     aliases: []
+    brands:
+    - 全友
   板式床:
     aliases: []
+    brands:
+    - 全友
   皮床-U标:
     aliases: []
+    brands:
+    - 全友
   床垫-U标:
     aliases: []
+    brands:
+    - 全友
   床垫:
     aliases: []
+    brands:
+    - 半日闲
+    - 舒达·天猫
+    - 舒达·京东
+    - 林芃
+    - 麻大师
+    - 大自然
+    - 金可儿
+    - 栖作
+    - 菠萝斑马
+    - 芝华仕
+    - 全友
+    - 雅兰
   乳胶床垫:
     aliases: []
+    brands:
+    - 全友
   餐桌椅-实木:
     aliases:
     - 实木
+    brands:
+    - 全友
   餐桌椅:
     aliases: []
+    brands:
+    - 全友
   岛台餐桌:
     aliases: []
+    brands:
+    - 全友
   岩板餐桌:
     aliases: []
+    brands:
+    - 全友
   边桌:
     aliases: []
+    brands:
+    - 全友
   茶几:
     aliases: []
+    brands:
+    - 芝华仕
+    - 全友
+    - 小半
+    - MUU
+    - 续写
   斗柜:
     aliases: []
+    brands:
+    - 全友
+    - 小半
+    - MUU
   梳妆台:
     aliases: []
+    brands:
+    - 全友
+    - 小半
+    - MUU
+    - 续写
   茶几电视柜:
     aliases: []
+    brands:
+    - 全友
   储物柜:
     aliases: []
+    brands:
+    - 全友
   休闲椅:
     aliases: []
+    brands:
+    - 全友
+    - 小半
+    - MUU
   单人椅:
     aliases: []
+    brands:
+    - 全友
   书桌:
     aliases: []
+    brands:
+    - 全友
+    - MUU
+    - 续写
   书柜:
     aliases: []
+    brands:
+    - 全友
+    - 小半
+    - MUU
+    - 续写
   穿衣镜:
     aliases: []
+    brands:
+    - 全友
   置物架:
     aliases: []
+    brands:
+    - 全友
   茶几-U标:
     aliases: []
+    brands:
+    - 全友
   智能床-U标:
     aliases: []
+    brands:
+    - 全友
   皮艺床-U标:
     aliases: []
+    brands:
+    - 全友
   实木沙发:
     aliases: []
+    brands:
+    - 全友
   软包床:
     aliases: []
+    brands:
+    - 全友
   软包板式床:
     aliases: []
+    brands:
+    - 全友
   智能床:
     aliases: []
+    brands:
+    - 全友
   儿童床:
     aliases: []
+    brands:
+    - 全友
   沙发床:
     aliases: []
+    brands:
+    - 全友
   棉麻沙发:
     aliases: []
+    brands:
+    - 全友
   布沙发:
     aliases: []
+    brands:
+    - 全友
   功能单椅:
     aliases: []
+    brands:
+    - 全友
   书椅:
     aliases: []
+    brands:
+    - 全友
   功能餐桌椅:
     aliases: []
+    brands:
+    - 全友
   茶台:
     aliases: []
+    brands:
+    - 全友
   备餐柜:
     aliases: []
+    brands:
+    - 全友
   卡门柜:
     aliases: []
+    brands:
+    - 全友
+    - MUU
   妆台:
     aliases: []
+    brands:
+    - 全友
   儿童衣柜:
     aliases: []
+    brands:
+    - 全友
   书桌椅:
     aliases: []
+    brands:
+    - 全友
   儿童书桌:
     aliases: []
+    brands:
+    - 全友
   鞋柜:
     aliases: []
+    brands:
+    - 全友
   转角柜:
     aliases: []
+    brands:
+    - 全友
   边几:
     aliases: []
+    brands:
+    - 全友
   换鞋凳:
     aliases: []
+    brands:
+    - 全友
   一:
     aliases: []
+    brands: []
   清单商品可参与店铺活动:
     aliases: []
+    brands: []
   餐边柜:
     aliases: []
+    brands:
+    - 小半
+    - MUU
+    - 续写
+    - 小写
   小茶车:
     aliases: []
+    brands:
+    - 小半
   小推车:
     aliases: []
+    brands:
+    - 小半
+    - MUU
+    - 续写
   茶水柜:
     aliases: []
+    brands:
+    - 小半
   组合柜:
     aliases: []
+    brands:
+    - MUU
   展示柜:
     aliases: []
+    brands:
+    - MUU
   茶车:
     aliases: []
+    brands:
+    - MUU
+    - 续写
   电视架:
     aliases: []
+    brands:
+    - 北弧
+    - MUU
   凳:
     aliases: []
+    brands:
+    - 小写
   懒人沙发:
     aliases: []
+    brands:
+    - 小写
   电动床:
     aliases: []
+    brands:
+    - 半日闲
+    - 菠萝斑马
   床垫-弹簧床垫:
     aliases: []
+    brands:
+    - 喜临门-京东
+    - 喜临门
+    - 喜临门-天猫
   床垫-薄垫:
     aliases:
     - 薄垫
+    brands:
+    - 喜临门-京东
   组合套餐-床+床垫套餐:
     aliases:
     - 组合套餐
     - 床+床垫套餐
+    brands:
+    - 喜临门-京东
   床垫套餐:
     aliases: []
+    brands:
+    - 喜临门-京东
   床-软包床:
     aliases: []
+    brands:
+    - 喜临门-京东
   家纺-床笠:
     aliases:
     - 床笠
+    brands:
+    - 喜临门-京东
   家纺-被子:
     aliases:
     - 被子
+    brands:
+    - 喜临门-京东
   组合套餐-智能床垫套餐:
     aliases:
     - 智能床垫套餐
+    brands:
+    - 喜临门-京东
   床-儿童软包床:
     aliases:
     - 儿童软包床
+    brands:
+    - 喜临门-京东
   布艺床:
     aliases: []
+    brands:
+    - 支吾·天猫
+    - 支吾·京东
+    - 帕沙曼
   休闲皮沙发:
     aliases: []
+    brands:
+    - 支吾·天猫
+    - 支吾·京东
+    - 帕沙曼
   休闲布沙发:
     aliases: []
+    brands:
+    - 支吾·天猫
+    - 支吾·京东
+    - 帕沙曼
+    - 芝华仕
   柜类:
     aliases: []
+    brands:
+    - 支吾·天猫
+    - 京东
+    - 支吾·京东
+    - 顾家
   布艺功能沙发:
     aliases: []
+    brands:
+    - 帕沙曼
   休闲皮艺沙发:
     aliases: []
+    brands:
+    - 帕沙曼
   休闲布艺沙发:
     aliases: []
+    brands:
+    - 帕沙曼
   皮艺功能沙发:
     aliases: []
+    brands:
+    - 帕沙曼
   家纺:
     aliases: []
+    brands:
+    - 栖作
   宠物床垫:
     aliases: []
+    brands:
+    - 栖作
   沙发椅:
     aliases: []
+    brands: []
   化妆桌:
     aliases: []
+    brands: []
   玄关柜:
     aliases: []
+    brands: []
   堆叠凳:
     aliases: []
+    brands: []
   榻榻米:
     aliases: []
+    brands: []
   儿童书柜:
     aliases: []
+    brands: []
   儿童:
     aliases: []
+    brands: []
   架:
     aliases: []
+    brands: []
   衣架:
     aliases: []
+    brands: []
   鞋架:
     aliases: []
+    brands: []
   悬浮床头柜:
     aliases: []
+    brands: []
   铺板升级:
     aliases: []
+    brands: []
   功能床:
     aliases: []
+    brands:
+    - 芝华仕
   电动储物床:
     aliases: []
+    brands:
+    - 菠萝斑马
   床+床垫:
     aliases: []
+    brands:
+    - '#REF!'
   儿童沙发:
     aliases: []
+    brands: []
   桌:
     aliases: []
+    brands: []
   梳妆凳:
     aliases: []
+    brands: []
   茶桌:
     aliases: []
+    brands: []
   儿童储物收纳:
     aliases: []
+    brands: []
   角柜:
     aliases: []
+    brands: []
   床架套餐:
     aliases: []
+    brands:
+    - 雅兰
   净水-前置过滤器:
     aliases:
     - 净水
     - 前置过滤器
+    brands:
+    - 韦思卡尔
+    - 安吉尔
+    - 滨特尔
+    - 史密斯
+    - 云米
   净水-厨下:
     aliases:
     - 厨下
+    brands:
+    - 安吉尔
+    - 韦思卡尔
+    - 飞利浦
+    - 滨特尔
+    - 史密斯
+    - 云米
   净水-净热一体:
     aliases:
     - 净热一体
+    brands:
+    - 海尔
+    - 韦思卡尔
+    - 添可
+    - IAM
+    - 飞利浦
+    - 沁园
+    - 史密斯
+    - 云米
   净水-加热净水器:
     aliases:
     - 加热净水器
+    brands:
+    - 安吉尔
   空净类:
     aliases: []
+    brands:
+    - 霍尼韦尔
+    - 树新风
+    - 史密斯
+    - 舒乐氏
+    - 贝昂
   热水器-电热:
     aliases:
     - 热水器
     - 电热
+    brands:
+    - 海尔
+    - 卡萨帝
+    - 美的
+    - COLMO
+    - 史密斯
   净水-台式:
     aliases:
     - 台式
+    brands:
+    - 安吉尔
+    - 史密斯
+    - 飞利浦
+    - 韦思卡尔
   加湿净化器:
     aliases: []
+    brands:
+    - 树新风
   空净类-加湿器:
     aliases:
     - 加湿器
+    brands:
+    - 树新风
   热水器-燃热:
     aliases:
     - 燃热
+    brands:
+    - 海尔
+    - 美的
+    - COLMO
+    - 东芝
+    - 华帝
+    - 方太
+    - 万和
+    - 老板
+    - 史密斯
+    - 林内
+    - 美的燃气热水器M9R系列
   净水-管线机:
     aliases:
     - 管线机
+    brands:
+    - 海尔
+    - 史密斯
+    - 安吉尔
+    - 云米
   净水-茶吧机:
     aliases:
     - 茶吧机
+    brands:
+    - 安吉尔
   净水-龙头过滤器:
     aliases:
     - 龙头过滤器
+    brands:
+    - 安吉尔
   净水-软水机:
     aliases:
     - 软水机
+    brands:
+    - 海尔
+    - 爱惠浦
   电视-MiniLED:
     aliases:
     - 电视
     - MiniLED
+    brands:
+    - TCL
+    - 海信
+    - 创维
+    - VIDDA
+    - 海信大薄荷系列
+    - 雷鸟
+    - 海信璀璨系列
+    - 海尔
   电视-激光:
     aliases:
     - 激光
+    brands:
+    - 海信大薄荷系列
+    - 海信
   冰箱-法式多门:
     aliases:
     - 冰箱
     - 法式多门
+    brands:
+    - 海尔
+    - 统帅
+    - 卡萨帝
+    - 美的
+    - 东芝
+    - 华凌
+    - COLMO
+    - 美菱
+    - TCL
+    - 西门子
+    - 博世
+    - 松下
   冰箱-日式多门:
     aliases:
     - 日式多门
+    brands:
+    - 东芝
+    - 美菱
+    - 日立
+    - 松下
   冰箱-法式五门:
     aliases:
     - 法式五门
+    brands:
+    - 美菱
+    - 松下
   冰箱-十字门:
     aliases:
     - 十字门
+    brands:
+    - 卡萨帝
+    - 统帅
+    - 美的
+    - 华凌
+    - 东芝
+    - COLMO
+    - 美菱
+    - TCL
+    - 西门子
+    - 博世
   冰箱-对开门:
     aliases:
     - 对开门
+    brands:
+    - 美的
+    - 美菱
+    - 西门子
+    - 博世
   冰箱-冷柜:
     aliases:
     - 冷柜
+    brands:
+    - 美菱
   空调-挂机1.5匹:
     aliases:
     - 空调
     - 挂机1.5匹
+    brands:
+    - TCL
+    - 格力
+    - 日立
   空调-柜机3匹:
     aliases:
     - 柜机3匹
+    brands:
+    - TCL
+    - 格力
+    - 日立
   空调-挂机1匹:
     aliases:
     - 挂机1匹
+    brands:
+    - TCL
+    - 格力
+    - 日立
   数码3C-回音壁:
     aliases:
     - 数码3C
     - 回音壁
+    brands:
+    - TCL
   数码3C-投影仪:
     aliases:
     - 投影仪
+    brands:
+    - 知麻
   洗衣机-洗烘一体:
     aliases:
     - 洗衣机
     - 洗烘一体
+    brands:
+    - 海尔
+    - 卡萨帝
+    - 小天鹅
+    - 美的
+    - 东芝
+    - TCL
+    - 西门子
+    - 博世
+    - 天猫-松下
   洗衣机-洗烘套装:
     aliases:
     - 洗烘套装
+    brands:
+    - 海尔
+    - 卡萨帝
+    - 小天鹅
+    - 东芝
+    - 美的
+    - COLMO
+    - TCL
+    - 博世
+    - 西门子
+    - 松下
+    - 天猫-松下
   洗衣机-双子舱:
     aliases:
     - 双子舱
+    brands:
+    - TCL
   洗衣机-滚筒:
     aliases:
     - 滚筒
+    brands:
+    - TCL
   洗衣机-洗脱一体:
     aliases:
     - 洗脱一体
+    brands:
+    - 海尔
+    - 小天鹅
+    - TCL
   数码3C-显示器:
     aliases:
     - 显示器
+    brands:
+    - TCL
+    - 雷鸟
+    - 雷鸟-天猫
   电视-会议电视:
     aliases:
     - 会议电视
+    brands:
+    - TCL
   空调-挂机2匹:
     aliases:
     - 挂机2匹
+    brands:
+    - 格力
   空调-挂机3匹:
     aliases:
     - 挂机3匹
+    brands:
+    - 格力
   空调-柜机2匹:
     aliases:
     - 柜机2匹
+    brands:
+    - 格力
   清洁电器-扫地机:
     aliases:
     - 清洁电器
     - 扫地机
+    brands:
+    - 追觅
   清洁电器-洗地机:
     aliases:
     - 洗地机
+    brands:
+    - 追觅
   清洁电器-擦窗机:
     aliases:
     - 擦窗机
+    brands: []
   擦窗机器人:
     aliases: []
+    brands:
+    - 森友汇
   厨房电器-电饭煲:
     aliases:
     - 厨房电器
+    brands:
+    - 东芝
   个护电器-按摩椅:
     aliases:
     - 个护电器
+    brands:
+    - 西屋
   厨房电器-微蒸烤:
     aliases:
     - 微蒸烤
+    brands:
+    - 宜盾普
   净饮机:
     aliases: []
+    brands:
+    - 宜盾普
   厨房电器-微波炉:
     aliases: []
+    brands:
+    - 东芝
   厨房电器-烤箱:
     aliases:
     - 烤箱
+    brands:
+    - 东芝
   洗衣机—内衣机:
     aliases:
     - 内衣机
+    brands:
+    - 觉飞
   小家电-空气炸锅:
     aliases:
     - 小家电
     - 空气炸锅
+    brands:
+    - 追觅
+    - 海氏
+    - 东芝
   小家电-烤箱:
     aliases: []
+    brands:
+    - 海氏
   小家电-厨师机:
     aliases:
     - 厨师机
+    brands:
+    - 海氏
+    - 追觅
   小家电-面包机:
     aliases:
     - 面包机
+    brands:
+    - 海氏
   小家电-咖啡机:
     aliases: []
+    brands:
+    - 海氏
   生活电器-内衣机:
     aliases:
     - 生活电器
+    brands:
+    - 大宇
   煮蛋器:
     aliases: []
+    brands:
+    - 大宇
   个护电器-按摩仪:
     aliases:
     - 按摩仪
+    brands:
+    - 西屋
   个护电器-按摩垫:
     aliases:
     - 按摩垫
+    brands:
+    - 西屋
   清洁电器—吸尘器:
     aliases:
     - 吸尘器
+    brands:
+    - 西屋
   厨房电器—破壁机:
     aliases: []
+    brands:
+    - 西屋
   厨房电器—空气炸锅:
     aliases: []
+    brands:
+    - 西屋
   厨房电器—榨汁机:
     aliases:
     - 榨汁机
+    brands:
+    - 西屋
   生活电器—布艺清洗机:
     aliases:
     - 布艺清洗机
+    brands:
+    - 东菱
   生活电器—厨师机:
     aliases: []
+    brands:
+    - 东菱
   厨房电器—蒸汽拖把:
     aliases:
     - 蒸汽拖把
+    brands:
+    - 东菱
   厨房电器—面包机:
     aliases: []
+    brands:
+    - 东菱
   厨房电器—果蔬机:
     aliases:
     - 果蔬机
+    brands:
+    - 东菱
   厨房电器—电蒸锅:
     aliases: []
+    brands:
+    - 东菱
   厨房电器—绞肉机:
     aliases:
     - 绞肉机
+    brands:
+    - 东菱
   小家电-循环扇:
     aliases:
     - 循环扇
+    brands:
+    - 舒乐氏
+    - 美的
+    - 飞利浦
+    - 追觅
   烟灶-单烟机:
     aliases:
     - 烟灶
     - 单烟机
+    brands:
+    - 卡萨帝
+    - COLMO
+    - 方太
+    - 德意
+    - 名气
+    - 老板
+    - 华帝
+    - 小米
+    - 林内
   烟灶-套装:
     aliases:
     - 套装
+    brands:
+    - 华帝
+    - 方太
+    - 名气
+    - 德意
+    - 老板
+    - 小米
   洗碗机-10套:
     aliases:
     - 洗碗机
     - 10套
+    brands:
+    - 美的
+    - 方太
   烟灶-烟灶消套装:
     aliases:
     - 烟灶消套装
+    brands:
+    - 名气
   洗碗机-21套:
     aliases:
     - 21套
+    brands:
+    - 美的
+    - 老板
+    - 方太
   洗碗机-15套:
     aliases:
     - 15套
+    brands:
+    - 美的
+    - 老板
+    - 博世
   蒸烤-蒸烤:
     aliases:
     - 蒸烤
+    brands:
+    - 华帝
+    - 老板
+    - 方太
   消毒柜:
     aliases: []
+    brands:
+    - 海尔
+    - 美的
+    - 老板
+    - 方太
   洗碗机-16套:
     aliases:
     - 16套
+    brands:
+    - COLMO
+    - 东芝
+    - 方太
+    - 西门子
   蒸烤-微蒸烤:
     aliases: []
+    brands:
+    - 统帅
+    - 华帝
+    - 方太
+    - 老板
   烟灶-灶具:
     aliases:
     - 灶具
+    brands:
+    - 方太
+    - 德意
+    - 名气
+    - 老板
+    - 小米
+    - 华帝
   洗碗机-23套:
     aliases:
     - 23套
+    brands:
+    - 方太
   价格待定：以直播间为准:
     aliases: []
+    brands: []
   海信璀璨系列:
     aliases: []
+    brands: []
   海信大薄荷系列:
     aliases: []
+    brands: []
   海信:
     aliases: []
+    brands: []
   容声:
     aliases: []
+    brands: []
   科龙:
     aliases: []
+    brands: []
   古洛尼:
     aliases: []
+    brands: []
   ASKO:
     aliases: []
+    brands: []
   海信-天猫:
     aliases:
     - 天猫
+    brands: []
   容声-天猫:
     aliases: []
+    brands: []
   Vidda-天猫:
     aliases:
     - Vidda
+    brands: []
   Vidda-京东:
     aliases:
     - 京东
+    brands: []
   空调-挂1.5P:
     aliases:
     - 挂1.5P
+    brands:
+    - 海尔
+    - 卡萨帝
   空调-柜3P:
     aliases:
     - 柜3P
+    brands:
+    - 卡萨帝
+    - 海尔
   净水-台下净饮机:
     aliases:
     - 台下净饮机
+    brands:
+    - 海尔
   洗衣机-壁挂:
     aliases:
     - 壁挂
+    brands:
+    - 海尔
   洗衣机-波轮:
     aliases:
     - 波轮
+    brands:
+    - 海尔
+    - 松下
+    - 天猫-松下
   净水-前置:
     aliases:
     - 前置
+    brands:
+    - 海尔
   热水器-壁挂炉:
     aliases:
     - 壁挂炉
+    brands:
+    - 统帅
   空调-挂2P:
     aliases:
     - 挂2P
+    brands:
+    - 卡萨帝
+    - 海尔
   空调-风管机3p:
     aliases:
     - 风管机3p
+    brands:
+    - 海尔
+    - 统帅
   洗衣机-双子:
     aliases:
     - 双子
+    brands:
+    - 卡萨帝
   烟灶-烟灶套装:
     aliases:
     - 烟灶套装
+    brands:
+    - 海尔
+    - 卡萨帝
+    - 统帅
+    - 美的
+    - COLMO
   洗碗机-22套:
     aliases:
     - 22套
+    brands:
+    - 海尔
+    - 卡萨帝
+    - 美的
   热水器-空气能:
     aliases:
     - 空气能
+    brands:
+    - 海尔
   烟灶-单灶具:
     aliases:
     - 单灶具
+    brands:
+    - 卡萨帝
+    - 海尔
+    - 美的
+    - 林内
   蒸烤-蒸烤箱:
     aliases:
     - 蒸烤箱
+    brands:
+    - 卡萨帝
+    - 海尔
   蒸烤箱-微蒸烤:
     aliases: []
+    brands:
+    - 海尔
   洗碗机-20套:
     aliases:
     - 20套
+    brands:
+    - 统帅
+    - 美的
+    - 西门子
+    - 博世
   洗碗机-灶下16套:
     aliases:
     - 灶下16套
+    brands:
+    - 统帅
   洗碗机-17套:
     aliases:
     - 17套
+    brands:
+    - 海尔
+    - 西门子
   洗碗机-台上8套:
     aliases:
     - 台上8套
+    brands:
+    - 统帅
   净水-台净:
     aliases:
     - 台净
+    brands:
+    - 海尔
   空调-柜2P:
     aliases:
     - 柜2P
+    brands:
+    - 海尔
   空气净化器:
     aliases: []
+    brands:
+    - 东芝
+    - 美的
   洗衣机-壁挂洗衣机:
     aliases:
     - 壁挂洗衣机
+    brands:
+    - 小天鹅
   净水器-厨下净水器:
     aliases:
     - 净水器
     - 厨下净水器
+    brands:
+    - 美的
+    - 东芝
   嵌入式微蒸烤:
     aliases: []
+    brands:
+    - 美的
+    - COLMO
+    - 华凌
   空调-柜机:
     aliases:
     - 柜机
+    brands:
+    - 美的
+    - COLMO
   洗碗机-24套:
     aliases:
     - 24套
+    brands:
+    - 美的
+    - COLMO
   嵌入式蒸烤箱:
     aliases: []
+    brands:
+    - 美的
   洗碗机-18套:
     aliases:
     - 18套
+    brands:
+    - COLMO
+    - 美的
+    - 东芝
+    - 博世
   净水-台下净水器:
     aliases:
     - 台下净水器
+    brands:
+    - COLMO
   净水器-台上净饮机:
     aliases:
     - 台上净饮机
+    brands:
+    - COLMO
+    - 东芝
+    - 美的
   空调-挂机:
     aliases:
     - 挂机
+    brands:
+    - COLMO
+    - 美的
   空调-挂1.5匹:
     aliases:
     - 挂1.5匹
+    brands:
+    - 美的
   空调-1.5匹挂:
     aliases:
     - 1.5匹挂
+    brands:
+    - 华凌
   洗碗机-6套:
     aliases:
     - 6套
+    brands:
+    - 东芝
   净水-软净一体:
     aliases:
     - 软净一体
+    brands:
+    - 美的
   风扇:
     aliases: []
+    brands:
+    - 美的
   小家电-电磁双灶:
     aliases:
     - 电磁双灶
+    brands:
+    - 美的
   电热火锅:
     aliases: []
+    brands:
+    - 美的
   小家电-猛火灶:
     aliases:
     - 猛火灶
+    brands:
+    - 美的
   照烧炉:
     aliases: []
+    brands:
+    - 美的
   电烤箱:
     aliases: []
+    brands:
+    - 美的
   浴霸:
     aliases: []
+    brands:
+    - 恒洁
+    - 奥普
+    - 美的
+    - 松下
+    - 箭牌-POP
+    - 雷士
+    - lipro
+    - 欧普照明官方旗舰店
   制冰机:
     aliases: []
+    brands:
+    - 美的
   洗衣机-单洗:
     aliases:
     - 单洗
+    brands:
+    - 小天鹅
+    - 东芝
   洗衣机-台式洗衣机:
     aliases:
     - 台式洗衣机
+    brands:
+    - 小天鹅
   洗衣机-单烘干:
     aliases:
     - 单烘干
+    brands:
+    - 小天鹅
   空调-3匹柜:
     aliases:
     - 3匹柜
+    brands:
+    - 华凌
   空调-2匹挂:
     aliases:
     - 2匹挂
+    brands:
+    - 华凌
   净水器-嵌入式直饮机:
     aliases:
     - 嵌入式直饮机
+    brands:
+    - 东芝
   净水器-管线机:
     aliases: []
+    brands:
+    - 东芝
   洗碗机-17+3套:
     aliases:
     - 17+3套
+    brands:
+    - 西门子
   蒸烤箱-嵌入式:
     aliases:
     - 嵌入式
+    brands:
+    - 西门子
+    - 博世
   净水器-嵌入式净饮机:
     aliases:
     - 嵌入式净饮机
+    brands:
+    - 西门子
   洗衣机-滚筒洗衣机:
     aliases:
     - 滚筒洗衣机
+    brands:
+    - 西门子
   油烟机-单烟机:
     aliases:
     - 油烟机
+    brands:
+    - 西门子
+    - 博世
   油烟机-灶具:
     aliases: []
+    brands:
+    - 西门子
   洗碗机-15+2套:
     aliases:
     - 15+2套
+    brands:
+    - 西门子
   洗衣机-单洗滚筒:
     aliases:
     - 单洗滚筒
+    brands:
+    - 博世
   厨房电器-炒菜机器人:
     aliases:
     - 炒菜机器人
+    brands:
+    - 博世
   洗碗机-14套:
     aliases:
     - 14套
+    brands:
+    - 西门子
   清洁电器-吸尘器:
     aliases: []
+    brands:
+    - 追觅
   清洁电器-除螨仪:
     aliases:
     - 除螨仪
+    brands:
+    - 追觅
   清洁电器-车载吸尘器:
     aliases:
     - 车载吸尘器
+    brands:
+    - 追觅
   清洁电器-洗车机:
     aliases:
     - 洗车机
+    brands:
+    - 追觅
   清洁电器-擦窗机器人:
     aliases: []
+    brands:
+    - 追觅
   清洁电器-空气净化器:
     aliases: []
+    brands:
+    - 追觅
   正典:
     aliases: []
+    brands:
+    - 正典
   智能马桶:
     aliases: []
+    brands:
+    - 九牧
+    - 恒洁
+    - 小牧
+    - 箭牌
+    - 箭牌-POP
+    - 惠达
+    - 瑞尔特
+    - 欧琳
+    - 科勒
+    - 摩恩
+    - 浪鲸
   轻智能马桶:
     aliases: []
+    brands:
+    - 九牧
+    - 恒洁
+    - 小牧
+    - 箭牌-POP
+    - 惠达
+    - 瑞尔特
+    - 浪鲸
   恒温花洒:
     aliases: []
+    brands:
+    - 九牧
+    - 恒洁
+    - 小牧
+    - 箭牌-POP
+    - 惠达
+    - 欧琳
+    - 科勒
+    - 汉斯格雅
   普通花洒:
     aliases: []
+    brands:
+    - 九牧
+    - 恒洁
+    - 小牧
+    - 箭牌
+    - 箭牌-POP
+    - 惠达
+    - 瑞尔特
+    - 欧琳
   浴室柜:
     aliases: []
+    brands:
+    - 九牧
+    - 恒洁
+    - 小牧
+    - 箭牌
+    - 箭牌-POP
+    - 惠达
+    - 瑞尔特
+    - 浪鲸
+    - 浪鲸（ssww
   水槽:
     aliases: []
+    brands:
+    - 九牧
+    - 恒洁
+    - 小牧
+    - 欧琳
+    - 悍高（HIGOLD
+    - 汉斯格雅
+    - 悍高
   电热毛巾架:
     aliases: []
+    brands:
+    - 九牧
+    - 欧琳
+    - 艾芬达
   五金置物架:
     aliases: []
+    brands:
+    - 九牧
   面盆龙头:
     aliases: []
+    brands:
+    - 九牧
+    - 恒洁
+    - 欧琳
+    - 科勒
+    - 摩恩
   厨房龙头:
     aliases: []
+    brands:
+    - 九牧
+    - 恒洁
+    - 欧琳
+    - 科勒
+    - 汉斯格雅
+    - 摩恩
   淋浴房:
     aliases: []
+    brands:
+    - 九牧
+    - 浪鲸
   音乐花洒:
     aliases: []
+    brands:
+    - 小牧
   智能马桶盖:
     aliases: []
+    brands:
+    - 小牧
   普通马桶:
     aliases: []
+    brands:
+    - 恒洁
+    - 箭牌-POP
   花洒:
     aliases: []
+    brands:
+    - 恒洁
   分体普通花洒:
     aliases: []
+    brands:
+    - 恒洁
   厨卫挂件:
     aliases: []
+    brands:
+    - 恒洁
   角阀:
     aliases: []
+    brands:
+    - 恒洁
+    - 欧琳
   地漏:
     aliases: []
+    brands:
+    - 恒洁
   普通花洒套装:
     aliases: []
+    brands:
+    - 恒洁
   线性灯:
     aliases: []
+    brands:
+    - 奥普
   厨卫龙头:
     aliases: []
+    brands:
+    - 箭牌
   马桶:
     aliases: []
+    brands: []
   智能壁挂马桶:
     aliases: []
+    brands:
+    - 瑞尔特
   轻智能壁挂马桶:
     aliases: []
+    brands:
+    - 瑞尔特
   垃圾处理器:
     aliases: []
+    brands:
+    - 欧琳
   拉篮:
     aliases: []
+    brands:
+    - 欧琳
+    - 悍高（HIGOLD
+    - 悍高
   卫浴挂件:
     aliases: []
+    brands:
+    - 欧琳
   厨房挂件:
     aliases: []
+    brands:
+    - 欧琳
   厨卫拉篮:
     aliases: []
+    brands:
+    - 悍高（HIGOLD
   浴室柜下柜:
     aliases: []
+    brands:
+    - 科勒
   镜柜:
     aliases: []
+    brands:
+    - 科勒
   厨房水槽:
     aliases: []
+    brands:
+    - 摩恩
   淋浴花洒:
     aliases: []
+    brands:
+    - 摩恩
   浴缸:
     aliases: []
+    brands:
+    - 浪鲸
+    - 浪鲸（ssww
   京东专供-智能马桶:
     aliases:
     - 京东专供
+    brands:
+    - 浪鲸（ssww
   地漏角阀:
     aliases: []
+    brands:
+    - 潜水艇
+    - KOEY
   智能门锁:
     aliases: []
+    brands:
+    - 鹿客
+    - 德施曼
+    - 凯迪仕
+    - TCL
+    - 海尔
+    - 绿米
   电动晾衣机:
     aliases: []
+    brands:
+    - 邦先生
+    - 好太太
   落地晾衣架:
     aliases: []
+    brands:
+    - 邦先生
+    - 好太太
   步梯:
     aliases: []
+    brands:
+    - 好太太
   灯具-吸顶灯:
     aliases:
     - 灯具
     - 吸顶灯
+    brands:
+    - KOEY
+    - 雷士
+    - lipro
+    - 欧普照明官方旗舰店
   灯具-筒灯:
     aliases:
     - 筒灯
+    brands:
+    - KOEY
+    - 雷士
+    - lipro
   灯具-射灯:
     aliases:
     - 射灯
+    brands:
+    - KOEY
+    - 雷士
+    - lipro
   灯具-灯带:
     aliases:
     - 灯带
+    brands:
+    - KOEY
+    - lipro
   灯具-大路灯:
     aliases:
     - 大路灯
+    brands:
+    - 雷士
+    - lipro
   灯具-风扇灯:
     aliases:
     - 风扇灯
+    brands:
+    - 雷士
+    - lipro
   灯具-餐吊灯:
     aliases:
     - 餐吊灯
+    brands:
+    - 雷士
   灯具-筒射灯:
     aliases:
     - 筒射灯
+    brands:
+    - 雷士
   灯具-吊灯:
     aliases:
     - 吊灯
+    brands:
+    - 雷士
+    - 欧普照明官方旗舰店
   灯具-浴霸:
     aliases: []
+    brands:
+    - 雷士
   灯具-读写灯饰:
     aliases:
     - 读写灯饰
+    brands:
+    - 雷士
   灯具-餐厅吊灯:
     aliases:
     - 餐厅吊灯
+    brands:
+    - lipro
   灯具-地脚灯:
     aliases:
     - 地脚灯
+    brands:
+    - lipro
   灯具-护眼灯:
     aliases:
     - 护眼灯
+    brands:
+    - lipro
   灯具-面板灯:
     aliases:
     - 面板灯
+    brands:
+    - lipro
   光控器:
     aliases: []
+    brands:
+    - lipro
   灯具-落地灯:
     aliases:
     - 落地灯
+    brands:
+    - 欧普照明官方旗舰店
   过道吸顶灯:
     aliases: []
+    brands:
+    - 奥朵旗舰店
   床头吊灯:
     aliases: []
+    brands:
+    - 奥朵旗舰店
   卧室吊灯:
     aliases: []
+    brands:
+    - 奥朵旗舰店
   室内壁灯:
     aliases: []
+    brands:
+    - 奥朵旗舰店
   装饰落地灯:
     aliases: []
+    brands:
+    - 奥朵旗舰店
   灯具-立式护眼灯:
     aliases:
     - 立式护眼灯
+    brands:
+    - 童视界
   电动窗帘:
     aliases: []
+    brands:
+    - 科创者
   电动梦幻窗帘:
     aliases: []
+    brands:
+    - 科创者
   电动香格里拉窗帘:
     aliases: []
+    brands:
+    - 科创者
   科创者蜂巢帘:
     aliases: []
+    brands:
+    - 科创者
   智能开关:
     aliases: []
+    brands:
+    - 领普
   智能传感器:
     aliases: []
+    brands:
+    - 领普
   家装-开关:
     aliases:
     - 家装
     - 开关
+    brands:
+    - 西门子
+    - 德力西
   插座:
     aliases: []
+    brands:
+    - 西门子
+    - 德力西
   家装电动工具:
     aliases: []
+    brands:
+    - 威克士
   智能小件:
     aliases: []
+    brands:
+    - 绿米
   智能电动窗帘:
     aliases: []
+    brands:
+    - 绿米
   智能管状电机成品帘套装:
     aliases: []
+    brands:
+    - 绿米
   智能墙壁开关:
     aliases: []
+    brands:
+    - 绿米
   智能墙壁插座:
     aliases: []
+    brands:
+    - 绿米
   全屋智能套餐:
     aliases: []
+    brands:
+    - 绿米
   智能灯:
     aliases: []
+    brands:
+    - 绿米
   传感器:
     aliases: []
+    brands:
+    - 绿米
   智能卷帘伴侣:
     aliases: []
+    brands:
+    - 绿米
   智能无线开关:
     aliases: []
+    brands:
+    - 绿米
   电脑椅:
     aliases: []
+    brands:
+    - 西昊
+    - 永艺
   电脑桌:
     aliases: []
+    brands:
+    - 西昊
   人体工学椅:
     aliases: []
+    brands:
+    - 保友
+    - 有谱
+    - 黑白调
+    - 网易严选
+    - 座易
   工学桌椅-工学椅:
     aliases:
     - 工学桌椅
     - 工学椅
+    brands:
+    - 清闲
   电动升降桌:
     aliases: []
+    brands:
+    - 黑白调
   电竞椅:
     aliases: []
+    brands:
+    - 傲风
   电竞桌:
     aliases: []
+    brands:
+    - 傲风
   吐司小皮椅:
     aliases: []
+    brands:
+    - 网易严选
   可颂皮椅:
     aliases: []
+    brands:
+    - 网易严选
   学习桌椅:
     aliases: []
+    brands:
+    - 爱果乐
   升降桌:
     aliases: []
+    brands:
+    - 北弧
   显示器支架:
     aliases: []
+    brands:
+    - 北弧
   升降台:
     aliases: []
+    brands:
+    - 北弧
   桌面增高架:
     aliases: []
+    brands:
+    - 北弧
   洞洞板:
     aliases: []
+    brands:
+    - 北弧
   墙地面材料丨乳胶漆:
-    aliases: []
+    aliases:
+    - 墙地面材料
+    - 乳胶漆
+    brands:
+    - 三棵树
+    - 喵住
+    - 立邦
   墙地面材料丨艺术漆:
-    aliases: []
+    aliases:
+    - 艺术漆
+    brands:
+    - 三棵树
   墙地面材料丨其他:
     aliases: []
+    brands:
+    - 立邦
   墙地面材料丨腻子膏:
-    aliases: []
+    aliases:
+    - 腻子膏
+    brands:
+    - 立邦
   墙地面材料丨墙面加固剂:
-    aliases: []
+    aliases:
+    - 墙面加固剂
+    brands:
+    - 立邦
   墙地面材料丨防水:
-    aliases: []
+    aliases:
+    - 防水
+    brands:
+    - 立邦
   墙地面材料丨美缝剂:
-    aliases: []
+    aliases:
+    - 美缝剂
+    brands:
+    - 立邦
   墙地面材料丨玻璃胶:
-    aliases: []
+    aliases:
+    - 玻璃胶
+    brands:
+    - 立邦
   26年618-Mr迷瞪&铂耐金属衣柜专属团购清单:
     aliases:
     - 26年618
     - Mr迷瞪&铂耐金属衣柜专属团购清单
+    brands:
+    - 品牌
   全屋定制丨权益金:
     aliases: []
+    brands:
+    - 铂耐
   全屋定制丨衣柜:
     aliases: []
+    brands:
+    - 铂耐
   全屋定制丨定制尾款:
-    aliases: []
+    aliases:
+    - 定制尾款
+    brands:
+    - 铂耐
   室内门丨木门:
-    aliases: []
+    aliases:
+    - 室内门
+    - 木门
+    brands:
+    - 美心
+    - 梦天木作
   室内门丨套餐:
-    aliases: []
+    aliases:
+    - 套餐
+    brands:
+    - 美心
+    - 梦天木作
   室内门丨铝玻门:
-    aliases: []
+    aliases:
+    - 铝玻门
+    brands:
+    - 美心
+    - 梦天木作
   室内门丨其他:
     aliases: []
+    brands:
+    - 梦天木作
   测量金:
     aliases: []
+    brands:
+    - 大自然地板
   补差:
     aliases: []
+    brands:
+    - 大自然地板
+    - 尚拉维
   地板:
     aliases: []
+    brands:
+    - 大自然地板
+    - 木佳伊地板
   全屋定制:
     aliases: []
+    brands:
+    - 海尔全屋
+    - 全屋定制工厂店
   权益金:
     aliases: []
+    brands:
+    - 海尔全屋
   橱柜:
     aliases: []
+    brands:
+    - 海尔全屋
   入户门丨防盗门:
-    aliases: []
+    aliases:
+    - 入户门
+    - 防盗门
+    brands:
+    - 欧帝乐
   26年618-Mr迷瞪&汉纱纱窗专属团购清单:
     aliases:
     - Mr迷瞪&汉纱纱窗专属团购清单
+    brands:
+    - 正典
   纱窗:
     aliases: []
+    brands:
+    - 汉纱
   H2纱窗纱门套餐:
     aliases: []
+    brands:
+    - 汉纱
   H18m:
     aliases: []
+    brands:
+    - 汉纱
   PC防护纱窗套餐:
     aliases: []
+    brands:
+    - 汉纱
   纱门:
     aliases: []
+    brands:
+    - 汉纱
   纱窗纱门套餐:
     aliases: []
+    brands: []
   品类:
     aliases: []
+    brands:
+    - 品牌
   窗帘布:
     aliases: []
+    brands:
+    - 科创者
   纱帘:
     aliases: []
+    brands:
+    - 科创者
   装饰画:
     aliases: []
+    brands:
+    - 仟象映画
+    - 三小姐的店
+    - 五人艺术
+    - 佳丽斯家纺货盘⬇️
   四件套:
     aliases: []
+    brands:
+    - 佳丽斯家纺
   夏被:
     aliases: []
+    brands:
+    - 佳丽斯家纺
   子母被:
     aliases: []
+    brands:
+    - 佳丽斯家纺
   被芯:
     aliases: []
+    brands:
+    - 佳丽斯家纺
   枕芯:
     aliases: []
+    brands:
+    - 佳丽斯家纺
   蚕丝被:
     aliases: []
+    brands:
+    - 佳丽斯家纺
   凉席:
     aliases: []
+    brands:
+    - 佳丽斯家纺
   乳胶凉垫:
     aliases: []
+    brands:
+    - 佳丽斯家纺
   凉感席:
     aliases: []
+    brands:
+    - 佳丽斯家纺
   牛皮席:
     aliases: []
+    brands:
+    - 佳丽斯家纺
   御藤席三件套:
     aliases: []
+    brands:
+    - 佳丽斯家纺
   大豆被:
     aliases: []
+    brands:
+    - 佳丽斯家纺
   客厅毯:
     aliases: []
+    brands:
+    - CCF地毯
   圆毯:
     aliases: []
+    brands:
+    - CCF地毯
   客厅地毯:
     aliases: []
+    brands:
+    - CCF地毯
   地毯:
     aliases: []
+    brands:
+    - CCF地毯
+    - 赛波斯
   入户门垫:
     aliases: []
+    brands:
+    - CCF地毯
   浴室垫:
     aliases: []
+    brands:
+    - CCF地毯
+    - 赛波斯地毯货盘⬇️
+    - 赛波斯
   地毯-床边毯:
     aliases:
     - 床边毯
+    brands:
+    - 赛波斯
   地毯-圆毯:
     aliases: []
+    brands:
+    - 赛波斯
   地毯-双层地毯:
     aliases:
     - 双层地毯
+    brands:
+    - 赛波斯
   地毯-羊毛地毯:
     aliases:
     - 羊毛地毯
+    brands:
+    - 赛波斯
   地毯-无胶地毯:
     aliases:
     - 无胶地毯
+    brands:
+    - 赛波斯
   地毯-厨房垫:
     aliases:
     - 厨房垫
+    brands:
+    - 赛波斯
   尚拉维窗帘春装活动:
     aliases: []
+    brands:
+    - 尚拉维活动
   尚拉维窗帘:
     aliases: []
+    brands:
+    - 尚拉维
   尚拉维:
     aliases: []
+    brands:
+    - 尚拉维
   窗帘-布帘:
     aliases:
     - 窗帘
     - 布帘
+    brands:
+    - 金蝉
+    - 尚拉维
+    - 莫兰迪
+    - 罗莱
   窗帘-纱帘:
     aliases: []
+    brands:
+    - 金蝉
+    - 尚拉维
+    - 罗莱
   莫兰迪窗帘:
     aliases: []
+    brands:
+    - 莫兰迪活动
   窗帘-其他:
     aliases:
     - 其他
+    brands:
+    - 金蝉
+    - 莫兰迪
+    - 罗莱
   窗帘-杆轨配件:
     aliases:
     - 杆轨配件
+    brands:
+    - 金蝉
+    - 莫兰迪
+    - 罗莱
   窗帘-权益金:
     aliases: []
+    brands:
+    - 金蝉
   窗帘-电机:
     aliases:
     - 电机
+    brands:
+    - 金蝉
   金蝉-功能帘:
     aliases:
     - 金蝉
     - 功能帘
+    brands:
+    - 金蝉
+  水槽套餐:
+    aliases: []
+    brands:
+    - 恒洁
+  毛巾架:
+    aliases: []
+    brands:
+    - 恒洁
+  空调-中央空调:
+    aliases:
+    - 中央空调
+    brands:
+    - 美的
+  风扇灯:
+    aliases: []
+    brands:
+    - 雷士
+    - 奥朵旗舰店
+  吸顶灯:
+    aliases: []
+    brands:
+    - 奥朵旗舰店
+  吊灯:
+    aliases: []
+    brands:
+    - 奥朵旗舰店
+  冷柜:
+    aliases: []
+    brands:
+    - 海尔
+  小家电:
+    aliases: []
+    brands:
+    - 海尔
+    - 统帅
+  空气炸锅:
+    aliases: []
+    brands:
+    - 美的
+    - 大宇
+  洗烘一体:
+    aliases: []
+    brands:
+    - 小天鹅
+    - 东芝
+  洗碗机:
+    aliases: []
+    brands:
+    - 华帝
+    - 栗上
+  个护电器:
+    aliases: []
+    brands:
+    - 追觅
+  实木床:
+    aliases: []
+    brands:
+    - '#REF!'
+    - 全友
+    - 续写
+    - 小半
+    - MUU
+  锅:
+    aliases: []
+    brands:
+    - OOU
+  净水-套装:
+    aliases: []
+    brands:
+    - 韦思卡尔
+  小家电-破壁机:
+    aliases: []
+    brands:
+    - 追觅
+  床垫-床垫套餐:
+    aliases: []
+    brands:
+    - 喜临门-天猫
+  电动沙发:
+    aliases: []
+    brands:
+    - 全友
+  布艺沙发:
+    aliases: []
+    brands:
+    - 全友
+  功能沙发:
+    aliases: []
+    brands:
+    - 全友
+  餐椅:
+    aliases: []
+    brands:
+    - 全友
+    - 小半
+    - MUU
+    - 小写
+  衣柜:
+    aliases: []
+    brands:
+    - 全友
+    - 小半
+    - MUU
+  电视柜:
+    aliases: []
+    brands:
+    - 全友
+    - 小半
+    - MUU
+    - 续写
+  边柜:
+    aliases: []
+    brands:
+    - 全友
+    - MUU
+    - 小写

@@ -21,10 +21,14 @@ ROOT = Path(__file__).resolve().parent
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 STREAMLIT_LOG = ROOT / "streamlit.log"
 STREAMLIT_ERR = ROOT / "streamlit.err.log"
+TALK_STREAMLIT_LOG = ROOT / "talk-streamlit.log"
+TALK_STREAMLIT_ERR = ROOT / "talk-streamlit.err.log"
 WECHAT_START = ROOT / "wechatExtension" / "start.ps1"
 WECHAT_STOP = ROOT / "wechatExtension" / "stop.ps1"
 APP_URL = "http://127.0.0.1:8501"
 APP_PORT = 8501
+TALK_APP_URL = "http://127.0.0.1:8502"
+TALK_APP_PORT = 8502
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -33,6 +37,7 @@ status_text = "启动中"
 wechat_running = False
 wechat_busy = False
 streamlit_process: subprocess.Popen | None = None
+talk_streamlit_process: subprocess.Popen | None = None
 llama_server_process: subprocess.Popen | None = None
 rag_ready = False
 
@@ -55,6 +60,7 @@ def build_menu() -> pystray.Menu:
         pystray.MenuItem(lambda _: f"状态：{get_status()}", noop, enabled=False),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("打开 RAG 页面", open_app),
+        pystray.MenuItem("打开话术 RAG 页面", open_talk_app),
         pystray.MenuItem(
             lambda _: wechat_menu_label(),
             toggle_wechat_plugin,
@@ -76,7 +82,8 @@ def start_all(icon: pystray.Icon) -> None:
         return
     start_llama_server(icon)
     start_streamlit()
-    if not wait_for_streamlit():
+    start_talk_streamlit()
+    if not wait_for_streamlit() or not wait_for_talk_streamlit():
         set_status(icon, "RAG 服务启动失败", "paused")
         notify(icon, "RAG 服务启动失败", "请查看 streamlit.err.log 或 streamlit.log。")
         return
@@ -111,12 +118,37 @@ def start_streamlit() -> None:
         )
 
 
+def start_talk_streamlit() -> None:
+    global talk_streamlit_process
+    if is_talk_streamlit_healthy():
+        return
+    if is_port_listening(TALK_APP_PORT):
+        stop_talk_streamlit()
+    with TALK_STREAMLIT_LOG.open("ab") as stdout, TALK_STREAMLIT_ERR.open("ab") as stderr:
+        env = dict(os.environ)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["VIRTUAL_ENV"] = str(ROOT / ".venv")
+        env["PATH"] = str(ROOT / ".venv" / "Scripts") + os.pathsep + env.get("PATH", "")
+        talk_streamlit_process = subprocess.Popen(
+            [
+                str(PYTHON),
+                "run_talk_streamlit.py",
+            ],
+            cwd=ROOT,
+            stdout=stdout,
+            stderr=stderr,
+            env=env,
+            creationflags=CREATE_NO_WINDOW,
+        )
+
+
 def restart_streamlit(icon: pystray.Icon, _: object = None) -> None:
     def worker() -> None:
         set_status(icon, "正在重启 RAG 服务", "starting")
         set_rag_ready(False)
         notify(icon, "正在重启 RAG 服务", "请稍候，重启完成前不会打开 RAG 页面。")
         stop_streamlit()
+        stop_talk_streamlit()
         stop_llama_server()
         time.sleep(1)
         if not preflight_check():
@@ -125,7 +157,8 @@ def restart_streamlit(icon: pystray.Icon, _: object = None) -> None:
             return
         start_llama_server(icon)
         start_streamlit()
-        if wait_for_streamlit():
+        start_talk_streamlit()
+        if wait_for_streamlit() and wait_for_talk_streamlit():
             set_status(icon, current_ready_status(), current_icon_kind())
             notify(icon, "RAG 服务已启动", "现在可以打开 RAG 页面。")
         else:
@@ -147,6 +180,20 @@ def stop_streamlit() -> None:
     streamlit_process = None
 
     for owner in port_owner_pids(APP_PORT):
+        run_powershell(f"Stop-Process -Id {owner} -Force")
+
+
+def stop_talk_streamlit() -> None:
+    global talk_streamlit_process
+    if talk_streamlit_process and talk_streamlit_process.poll() is None:
+        talk_streamlit_process.terminate()
+        try:
+            talk_streamlit_process.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            talk_streamlit_process.kill()
+    talk_streamlit_process = None
+
+    for owner in port_owner_pids(TALK_APP_PORT):
         run_powershell(f"Stop-Process -Id {owner} -Force")
 
 
@@ -220,6 +267,15 @@ def wait_for_streamlit(timeout_seconds: int = 60) -> bool:
     return False
 
 
+def wait_for_talk_streamlit(timeout_seconds: int = 60) -> bool:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if is_talk_streamlit_healthy():
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def open_app(icon: pystray.Icon | None = None, *_: object) -> None:
     if not get_rag_ready() and not is_streamlit_healthy():
         if icon:
@@ -228,6 +284,15 @@ def open_app(icon: pystray.Icon | None = None, *_: object) -> None:
         return
     set_rag_ready(True)
     webbrowser.open(APP_URL)
+
+
+def open_talk_app(icon: pystray.Icon | None = None, *_: object) -> None:
+    if not is_talk_streamlit_healthy():
+        if icon:
+            set_status(icon, "正在启动话术 RAG 服务", "starting")
+            notify(icon, "正在启动话术 RAG 服务", "服务未启动完成，暂不打开话术 RAG 页面。")
+        return
+    webbrowser.open(TALK_APP_URL)
 
 
 def start_wechat_plugin(icon: pystray.Icon | None = None, _: object = None) -> None:
@@ -275,6 +340,7 @@ def quit_launcher(icon: pystray.Icon, _: object = None) -> None:
         stop_wechat_plugin()
         stop_llama_server()
         stop_streamlit()
+        stop_talk_streamlit()
         icon.visible = False
         icon.stop()
 
@@ -335,7 +401,9 @@ def preflight_check() -> bool:
     script = (
         "from customer_rag.tencent_docs import fetch_subscription_last_modified; "
         "from customer_rag.pipeline import RagPipeline; "
-        "assert hasattr(RagPipeline, 'replace_files_with_tags')"
+        "from customer_rag.talk_rag import TalkRagEngine; "
+        "assert hasattr(RagPipeline, 'replace_files_with_tags'); "
+        "assert TalkRagEngine().ask('今日清单是什么').answer"
     )
     result = subprocess.run(
         [str(PYTHON), "-c", script],
@@ -356,6 +424,24 @@ def is_streamlit_healthy() -> bool:
         return False
     try:
         with urllib.request.urlopen(APP_URL, timeout=3) as response:
+            body = response.read(200_000).decode("utf-8", errors="ignore")
+    except (urllib.error.URLError, TimeoutError):
+        return False
+    error_markers = [
+        "Traceback:",
+        "ImportError:",
+        "ModuleNotFoundError:",
+        "AttributeError:",
+        "Uncaught app exception",
+    ]
+    return not any(marker in body for marker in error_markers)
+
+
+def is_talk_streamlit_healthy() -> bool:
+    if not is_port_listening(TALK_APP_PORT):
+        return False
+    try:
+        with urllib.request.urlopen(TALK_APP_URL, timeout=3) as response:
             body = response.read(200_000).decode("utf-8", errors="ignore")
     except (urllib.error.URLError, TimeoutError):
         return False

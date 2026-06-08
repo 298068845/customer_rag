@@ -9,6 +9,8 @@ data/index/**
 data/raw/**
 data/browser_profile/**
 data/jobs/**
+data/talk_rag/**
+data/tmp/**
 data/*.json
 !data/index/.gitkeep
 !data/raw/.gitkeep
@@ -21,7 +23,19 @@ __pycache__/
 # Local runtime logs and temporary WeChat bridge files.
 streamlit.log
 streamlit.err.log
+talk-streamlit.log
+talk-streamlit.err.log
+llama-server.log
+llama-server.err.log
 wechatExtension/send-text.txt
 wechatExtension/last-selected.txt
 wechatExtension/rag-bridge.log
+wechatExtension/rag-bridge-test.log
 wechatExtension/preview-test-result.ini
+wechatExtension/*-test-result.ini
+
+# Local llama.cpp runtime binaries.
+tools/llama.cpp/**
+!tools/llama.cpp/
+!tools/llama.cpp/*/
+!tools/llama.cpp/*/.gitkeep

@@ -1,0 +1,207 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1500" viewBox="0 0 1800 1500">
+  <defs>
+    <style>
+      .bg { fill: #f5f7fb; }
+      .paper { fill: #ffffff; stroke: #dde3ea; stroke-width: 1; }
+      .panel { fill: #ffffff; stroke: #dfe5ec; stroke-width: 1.2; }
+      .muted-panel { fill: #f0f3f7; stroke: #e4e9ef; stroke-width: 1; }
+      .input { fill: #eef2f6; stroke: #e6ebf1; stroke-width: 1; }
+      .button { fill: #ee5a55; }
+      .button-blue { fill: #4b7fd9; }
+      .button-gray { fill: #ffffff; stroke: #d2d9e2; stroke-width: 1; }
+      .active { fill: #ee5a55; }
+      .chip { fill: #eef2f6; stroke: #d9e1ea; stroke-width: 1; }
+      .chip-active { fill: #ee5a55; }
+      .line { stroke: #dfe5ec; stroke-width: 2; }
+      .divider { stroke: #d6dde6; stroke-width: 2; }
+      .text { fill: #303544; font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif; }
+      .muted { fill: #8a93a3; font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif; }
+      .white { fill: #ffffff; font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif; }
+      .small { font-size: 17px; }
+      .body { font-size: 20px; }
+      .title { font-size: 34px; font-weight: 700; }
+      .h2 { font-size: 28px; font-weight: 700; }
+      .h3 { font-size: 22px; font-weight: 700; }
+      .label { font-size: 18px; font-weight: 600; }
+      .tab { font-size: 20px; }
+      .caption { font-size: 15px; }
+    </style>
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#1f2937" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+
+  <rect class="bg" width="1800" height="1500"/>
+  <text x="56" y="68" class="text title">话术 RAG 管理台 - 设计确认稿</text>
+  <text x="56" y="104" class="muted body">独立于商品 RAG；用于固定话术、动态知识、图片素材链路管理和命中测试。</text>
+
+  <g transform="translate(56,132)">
+    <text x="0" y="30" class="text tab">命中测试</text>
+    <text x="110" y="30" class="active tab">链路管理</text>
+    <text x="220" y="30" class="text tab">知识库</text>
+    <text x="310" y="30" class="text tab">素材库</text>
+    <line x1="0" y1="50" x2="1688" y2="50" class="line"/>
+    <line x1="110" y1="50" x2="190" y2="50" stroke="#ee5a55" stroke-width="3"/>
+  </g>
+
+  <!-- Tab 1 preview strip -->
+  <g transform="translate(56,205)">
+    <rect x="0" y="0" width="1688" height="230" rx="14" class="paper" filter="url(#softShadow)"/>
+    <text x="28" y="48" class="text h2">Tab 1 · 命中测试</text>
+    <text x="28" y="84" class="muted small">提问结果和命中链路在同一页，不单独悬浮。</text>
+
+    <text x="28" y="124" class="text label">问题</text>
+    <rect x="28" y="140" width="730" height="54" rx="10" class="input"/>
+    <text x="48" y="174" class="muted small">今日清单是什么</text>
+
+    <text x="800" y="124" class="text label">输出结果</text>
+    <rect x="800" y="140" width="360" height="54" rx="10" class="muted-panel"/>
+    <text x="820" y="174" class="text small">@小助理 6.5清单</text>
+
+    <text x="1200" y="124" class="text label">命中链路</text>
+    <rect x="1200" y="140" width="420" height="54" rx="10" class="muted-panel"/>
+    <text x="1220" y="174" class="text small">固定话术 → 今日清单话术 → date_m_d</text>
+  </g>
+
+  <!-- Link management -->
+  <g transform="translate(56,470)">
+    <text x="0" y="44" class="text h2">Tab 2 · 链路管理</text>
+    <text x="0" y="78" class="muted small">左侧筛选和链路列表；右侧创建/编辑链路。点击或双击左侧 item 后，右侧载入对应数据。</text>
+
+    <!-- left panel -->
+    <rect x="0" y="105" width="520" height="635" rx="14" class="panel"/>
+    <text x="28" y="152" class="text h2">列表 / 筛选</text>
+    <text x="28" y="194" class="text label">搜索</text>
+    <rect x="28" y="208" width="464" height="52" rx="10" class="input"/>
+    <text x="48" y="242" class="muted small">搜索链路：清单 / 开团 / 对比图</text>
+
+    <text x="28" y="302" class="text label">一级筛选（单选滚轮）</text>
+    <rect x="28" y="318" width="464" height="52" rx="10" class="input"/>
+    <text x="48" y="352" class="text small">固定话术</text>
+    <text x="462" y="352" class="muted small">⌄</text>
+    <text x="48" y="382" class="muted caption">可选：全部 / 固定话术 / 动态知识 / 图片素材</text>
+
+    <text x="28" y="430" class="text label">二级筛选（Tag 单选滚轮）</text>
+    <rect x="28" y="446" width="464" height="52" rx="10" class="input"/>
+    <text x="48" y="480" class="text small">全部</text>
+    <text x="462" y="480" class="muted small">⌄</text>
+    <text x="48" y="510" class="muted caption">Tag 示例：全部 / 家具 / 家电 / 家装 / 开团</text>
+
+    <text x="28" y="566" class="text h3">链路列表</text>
+    <text x="28" y="598" class="muted caption">双击打开编辑；右侧已有内容时提示是否覆盖展示。</text>
+
+    <g transform="translate(28,618)">
+      <rect x="0" y="0" width="464" height="58" rx="10" class="paper"/>
+      <text x="18" y="25" class="text body">今日清单话术</text>
+      <text x="18" y="48" class="muted caption">固定话术 · Tag：每日清单</text>
+      <text x="438" y="36" class="muted body">×</text>
+    </g>
+    <g transform="translate(28,688)">
+      <rect x="0" y="0" width="464" height="58" rx="10" class="muted-panel"/>
+      <text x="18" y="25" class="text body">开团日期查询</text>
+      <text x="18" y="48" class="muted caption">动态知识 · Tag：开团</text>
+      <text x="438" y="36" class="muted body">×</text>
+    </g>
+
+    <!-- divider -->
+    <line x1="560" y1="105" x2="560" y2="740" class="divider"/>
+
+    <!-- right editor -->
+    <rect x="600" y="105" width="1088" height="635" rx="14" class="panel"/>
+    <text x="628" y="152" class="text h2">创建链路 / 编辑链路</text>
+    <text x="628" y="186" class="muted small">当前示例：点击左侧“今日清单话术”后，右侧自动载入。</text>
+
+    <text x="628" y="230" class="text label">标题</text>
+    <rect x="628" y="246" width="540" height="52" rx="10" class="input"/>
+    <text x="648" y="280" class="text small">今日清单话术</text>
+
+    <text x="1210" y="230" class="text label">链路类型（三选一）</text>
+    <g transform="translate(1210,246)">
+      <rect x="0" y="0" width="126" height="42" rx="21" class="active"/>
+      <text x="24" y="28" class="white small">固定话术</text>
+      <rect x="142" y="0" width="126" height="42" rx="21" class="chip"/>
+      <text x="166" y="28" class="text small">动态知识</text>
+      <rect x="284" y="0" width="126" height="42" rx="21" class="chip"/>
+      <text x="308" y="28" class="text small">图片素材</text>
+    </g>
+
+    <text x="628" y="342" class="text label">触发词 / 同义问法</text>
+    <rect x="628" y="358" width="540" height="100" rx="10" class="input"/>
+    <text x="648" y="392" class="text small">今日清单是什么</text>
+    <text x="648" y="422" class="muted small">今天清单 / 6月5日清单 / 今日有什么</text>
+
+    <text x="1210" y="342" class="text label">Tag（手工输入）</text>
+    <rect x="1210" y="358" width="410" height="52" rx="10" class="input"/>
+    <text x="1230" y="392" class="text small">每日清单, 固定话术</text>
+    <text x="1210" y="434" class="muted caption">分类就是 Tag，不再用“固定/动态/图片”当分类。</text>
+
+    <text x="628" y="506" class="text h3">回复内容设计</text>
+    <rect x="628" y="526" width="992" height="112" rx="12" class="muted-panel"/>
+    <text x="650" y="560" class="text body">固定话术文案</text>
+    <text x="650" y="596" class="text small">@小助理 {date_m_d}清单</text>
+    <text x="650" y="626" class="muted caption">动态知识时显示 Prompt + 知识引用；图片素材时显示素材选择器。</text>
+
+    <rect x="628" y="666" width="180" height="52" rx="10" class="button"/>
+    <text x="690" y="700" class="white body">保存链路</text>
+    <rect x="828" y="666" width="180" height="52" rx="10" class="button-gray"/>
+    <text x="890" y="700" class="text body">新建空白</text>
+  </g>
+
+  <!-- Knowledge tab -->
+  <g transform="translate(56,1240)">
+    <text x="0" y="-270" class="text h2">Tab 3 · 知识库</text>
+    <rect x="0" y="-235" width="520" height="250" rx="14" class="panel"/>
+    <text x="28" y="-192" class="text h3">知识列表</text>
+    <rect x="28" y="-168" width="464" height="46" rx="10" class="input"/>
+    <text x="48" y="-138" class="muted small">搜索知识：开团日期 / 售后规则</text>
+    <g transform="translate(28,-104)">
+      <rect x="0" y="0" width="464" height="54" rx="10" class="paper"/>
+      <text x="18" y="33" class="text small">每日清单规则</text>
+      <text x="438" y="34" class="muted body">×</text>
+    </g>
+    <g transform="translate(28,-42)">
+      <rect x="0" y="0" width="464" height="54" rx="10" class="muted-panel"/>
+      <text x="18" y="33" class="text small">开团日期知识</text>
+      <text x="438" y="34" class="muted body">×</text>
+    </g>
+
+    <line x1="560" y1="-235" x2="560" y2="15" class="divider"/>
+
+    <rect x="600" y="-235" width="1088" height="250" rx="14" class="panel"/>
+    <text x="628" y="-192" class="text h3">知识编辑</text>
+    <rect x="628" y="-168" width="520" height="46" rx="10" class="input"/>
+    <text x="648" y="-138" class="text small">每日清单规则</text>
+    <rect x="1170" y="-168" width="450" height="46" rx="10" class="input"/>
+    <text x="1190" y="-138" class="text small">Tag：每日清单, 日期</text>
+    <rect x="628" y="-100" width="992" height="78" rx="10" class="muted-panel"/>
+    <text x="650" y="-68" class="text small">知识文案：每日清单按当前日期生成，例如 6月5日输出 6.5清单。</text>
+    <text x="650" y="-38" class="muted caption">点击左侧 item 后，右侧载入；多个 item 仍是“整行 + 删除 x”的结构。</text>
+  </g>
+
+  <!-- Asset tab -->
+  <g transform="translate(56,1455)">
+    <text x="0" y="-270" class="text h2">Tab 4 · 素材库</text>
+    <rect x="0" y="-235" width="520" height="210" rx="14" class="panel"/>
+    <text x="28" y="-192" class="text h3">素材列表</text>
+    <rect x="28" y="-168" width="464" height="46" rx="10" class="input"/>
+    <text x="48" y="-138" class="muted small">搜索素材：对比图 / 尺寸图 / 话术图</text>
+    <g transform="translate(28,-104)">
+      <rect x="0" y="0" width="464" height="54" rx="10" class="paper"/>
+      <text x="18" y="33" class="text small">床垫对比图</text>
+      <text x="438" y="34" class="muted body">×</text>
+    </g>
+
+    <line x1="560" y1="-235" x2="560" y2="-25" class="divider"/>
+
+    <rect x="600" y="-235" width="1088" height="210" rx="14" class="panel"/>
+    <text x="628" y="-192" class="text h3">素材编辑</text>
+    <rect x="628" y="-168" width="520" height="46" rx="10" class="input"/>
+    <text x="648" y="-138" class="text small">床垫对比图</text>
+    <rect x="1170" y="-168" width="450" height="46" rx="10" class="input"/>
+    <text x="1190" y="-138" class="text small">Tag：床垫, 对比图, 家具</text>
+    <rect x="628" y="-100" width="300" height="54" rx="10" class="button-blue"/>
+    <text x="728" y="-66" class="white body">多选上传图片</text>
+    <rect x="950" y="-100" width="670" height="54" rx="10" class="muted-panel"/>
+    <text x="970" y="-66" class="muted small">上传后可被“图片素材”链路选择，也可用于商品/品牌对比图命中。</text>
+  </g>
+</svg>

@@ -1,0 +1,224 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1500" viewBox="0 0 1800 1500">
+  <defs>
+    <style>
+      .bg { fill: #ffffff; }
+      .page-line { stroke: #e5e7eb; stroke-width: 2; }
+      .panel { fill: #ffffff; stroke: #e2e6ec; stroke-width: 1.2; }
+      .subtle { fill: #f7f8fa; stroke: #e7ebf0; stroke-width: 1; }
+      .field { fill: #fbfcfd; stroke: #dfe4ea; stroke-width: 1.2; }
+      .table-head { fill: #f4f6f8; stroke: #e2e6ec; stroke-width: 1; }
+      .accent { fill: #ee5a55; }
+      .accent-soft { fill: #fff1f0; stroke: #ffd1ce; stroke-width: 1; }
+      .green-soft { fill: #eefbf4; stroke: #c8efd9; stroke-width: 1; }
+      .blue-soft { fill: #eef5ff; stroke: #cfe1ff; stroke-width: 1; }
+      .danger-soft { fill: #fff7f7; stroke: #ffd6d6; stroke-width: 1; }
+      .text { fill: #303544; font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif; }
+      .muted { fill: #8a93a3; font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif; }
+      .white { fill: #ffffff; font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif; }
+      .title { font-size: 42px; font-weight: 700; }
+      .sub { font-size: 19px; }
+      .tab { font-size: 18px; font-weight: 600; }
+      .h2 { font-size: 27px; font-weight: 700; }
+      .h3 { font-size: 21px; font-weight: 700; }
+      .body { font-size: 18px; }
+      .small { font-size: 15px; }
+      .tiny { font-size: 13px; }
+      .label { font-size: 16px; font-weight: 700; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1800" height="1500"/>
+
+  <g transform="translate(42,48)">
+    <text x="0" y="0" dominant-baseline="hanging" class="text title">话术 RAG 管理台</text>
+    <text x="0" y="92" class="muted sub">实时话术规则、品牌/品类识别和开团日期知识维护</text>
+
+    <g transform="translate(0,142)">
+      <text x="0" y="0" class="text tab">对话测试</text>
+      <text x="98" y="0" class="accent tab">实时话术</text>
+      <line x1="0" y1="28" x2="1710" y2="28" class="page-line"/>
+      <line x1="98" y1="28" x2="176" y2="28" stroke="#ee5a55" stroke-width="3"/>
+    </g>
+  </g>
+
+  <g transform="translate(42,250)">
+    <text x="0" y="0" class="text h2">实时话术</text>
+    <text x="0" y="36" class="muted body">配置固定三类实时回复。左侧维护触发词/同义问法，右侧维护命中的回复内容和知识来源。</text>
+
+    <rect x="1508" y="-14" width="94" height="42" rx="7" class="field"/>
+    <text x="1531" y="13" class="text small">预览</text>
+    <rect x="1618" y="-14" width="94" height="42" rx="7" class="accent"/>
+    <text x="1645" y="13" class="white small">保存</text>
+  </g>
+
+  <!-- Section 1 -->
+  <g transform="translate(42,335)">
+    <rect x="0" y="0" width="1710" height="260" rx="8" class="panel"/>
+    <rect x="0" y="0" width="1710" height="54" rx="8" class="table-head"/>
+    <text x="24" y="35" class="text h3">一、今日清单</text>
+    <text x="150" y="35" class="muted small">固定日期变量回复</text>
+
+    <line x1="560" y1="54" x2="560" y2="260" class="page-line"/>
+    <text x="24" y="88" class="label text">触发词 / 同义问法</text>
+    <rect x="24" y="105" width="510" height="126" rx="6" class="field"/>
+    <text x="42" y="138" class="text small">今日清单是什么</text>
+    <text x="42" y="168" class="text small">今天清单是什么</text>
+    <text x="42" y="198" class="text small">今天播什么</text>
+
+    <text x="586" y="88" class="label text">回复内容</text>
+    <rect x="586" y="105" width="1078" height="76" rx="6" class="field"/>
+    <text x="606" y="151" class="text body">@小助理 {date_m_d}清单</text>
+
+    <rect x="586" y="198" width="274" height="34" rx="17" class="accent-soft"/>
+    <text x="604" y="220" class="text small">变量：{date_m_d} = 当前月.日</text>
+  </g>
+
+  <!-- Section 2 -->
+  <g transform="translate(42,625)">
+    <rect x="0" y="0" width="1710" height="420" rx="8" class="panel"/>
+    <rect x="0" y="0" width="1710" height="54" rx="8" class="table-head"/>
+    <text x="24" y="35" class="text h3">二、品牌清单</text>
+    <text x="150" y="35" class="muted small">从品牌/品类关键词映射到一个或多个清单回复</text>
+
+    <line x1="560" y1="54" x2="560" y2="420" class="page-line"/>
+    <text x="24" y="88" class="label text">触发词 / 同义问法</text>
+    <rect x="24" y="105" width="510" height="260" rx="6" class="field"/>
+    <text x="42" y="138" class="text small">有{keyword}吗</text>
+    <text x="42" y="168" class="text small">{keyword}还有卖吗</text>
+    <text x="42" y="198" class="text small">有没有{keyword}</text>
+    <text x="42" y="228" class="text small">{keyword}清单</text>
+    <text x="42" y="258" class="text small">{keyword}什么时候播</text>
+
+    <text x="24" y="392" class="muted tiny">keyword 可命中品牌，也可命中商品类目。</text>
+
+    <text x="586" y="88" class="label text">关键词对应回复术语</text>
+    <rect x="1046" y="65" width="60" height="30" rx="6" class="accent"/>
+    <text x="1063" y="85" class="white tiny">新增</text>
+    <rect x="586" y="105" width="520" height="252" rx="6" class="panel"/>
+    <rect x="586" y="105" width="520" height="42" rx="6" class="table-head"/>
+    <text x="608" y="132" class="muted small">命中类型</text>
+    <text x="750" y="132" class="muted small">关键词（下拉）</text>
+    <text x="900" y="132" class="muted small">回复内容</text>
+    <text x="1060" y="132" class="muted small">操作</text>
+
+    <line x1="586" y1="147" x2="1106" y2="147" class="page-line"/>
+    <text x="608" y="182" class="text small">品牌</text>
+    <rect x="740" y="160" width="130" height="32" rx="6" class="field"/>
+    <text x="754" y="181" class="text small">美的</text>
+    <text x="846" y="181" class="muted small">▼</text>
+    <rect x="900" y="160" width="140" height="32" rx="16" class="green-soft"/>
+    <text x="918" y="181" class="text small">美的清单</text>
+    <text x="1063" y="182" class="muted small">删除</text>
+
+    <line x1="586" y1="207" x2="1106" y2="207" class="page-line"/>
+    <text x="608" y="242" class="text small">品类</text>
+    <rect x="740" y="220" width="130" height="32" rx="6" class="field"/>
+    <text x="754" y="241" class="text small">空气炸锅</text>
+    <text x="846" y="241" class="muted small">▼</text>
+    <rect x="900" y="220" width="140" height="32" rx="16" class="green-soft"/>
+    <text x="918" y="241" class="text small">西屋清单</text>
+    <text x="1063" y="242" class="muted small">删除</text>
+
+    <line x1="586" y1="267" x2="1106" y2="267" class="page-line"/>
+    <text x="608" y="302" class="text small">品牌别名</text>
+    <rect x="740" y="280" width="130" height="32" rx="6" class="field"/>
+    <text x="754" y="301" class="text small">小天鹅</text>
+    <text x="846" y="301" class="muted small">▼</text>
+    <rect x="900" y="280" width="154" height="32" rx="16" class="green-soft"/>
+    <text x="918" y="301" class="text small">小天鹅清单</text>
+    <text x="1063" y="302" class="muted small">删除</text>
+
+    <text x="1130" y="88" class="label text">品牌归一 List</text>
+    <rect x="1604" y="65" width="60" height="30" rx="6" class="accent"/>
+    <text x="1621" y="85" class="white tiny">新增</text>
+    <rect x="1130" y="105" width="534" height="252" rx="6" class="panel"/>
+    <rect x="1130" y="105" width="534" height="42" rx="6" class="table-head"/>
+    <text x="1152" y="132" class="muted small">品牌名（下拉）</text>
+    <text x="1338" y="132" class="muted small">品牌别名（下拉）</text>
+    <text x="1606" y="132" class="muted small">操作</text>
+    <line x1="1130" y1="147" x2="1664" y2="147" class="page-line"/>
+    <rect x="1148" y="160" width="150" height="32" rx="6" class="field"/>
+    <text x="1162" y="181" class="text small">美的</text>
+    <text x="1274" y="181" class="muted small">▼</text>
+    <rect x="1328" y="160" width="248" height="32" rx="6" class="field"/>
+    <text x="1342" y="181" class="text small">美的系、Midea</text>
+    <text x="1552" y="181" class="muted small">▼</text>
+    <text x="1610" y="182" class="muted small">删除</text>
+    <line x1="1130" y1="207" x2="1664" y2="207" class="page-line"/>
+    <rect x="1148" y="220" width="150" height="32" rx="6" class="field"/>
+    <text x="1162" y="241" class="text small">西屋</text>
+    <text x="1274" y="241" class="muted small">▼</text>
+    <rect x="1328" y="220" width="248" height="32" rx="6" class="field"/>
+    <text x="1342" y="241" class="text small">Westinghouse</text>
+    <text x="1552" y="241" class="muted small">▼</text>
+    <text x="1610" y="242" class="muted small">删除</text>
+    <line x1="1130" y1="267" x2="1664" y2="267" class="page-line"/>
+    <rect x="1148" y="280" width="150" height="32" rx="6" class="field"/>
+    <text x="1162" y="301" class="text small">小天鹅</text>
+    <text x="1274" y="301" class="muted small">▼</text>
+    <rect x="1328" y="280" width="248" height="32" rx="6" class="field"/>
+    <text x="1342" y="301" class="text small">美的小天鹅</text>
+    <text x="1552" y="301" class="muted small">▼</text>
+    <text x="1610" y="302" class="muted small">删除</text>
+
+    <rect x="586" y="374" width="840" height="28" rx="14" class="blue-soft"/>
+    <text x="602" y="393" class="text tiny">数据源：品牌/品牌别名来自商品类目页新增“在售品牌”列；品类关键词来自商品类目/标准类目列。</text>
+  </g>
+
+  <!-- Section 3 -->
+  <g transform="translate(42,1075)">
+    <rect x="0" y="0" width="1710" height="370" rx="8" class="panel"/>
+    <rect x="0" y="0" width="1710" height="54" rx="8" class="table-head"/>
+    <text x="24" y="35" class="text h3">三、开团日期</text>
+    <text x="150" y="35" class="muted small">从开团日期知识中识别品牌，按今天/未来生成话术</text>
+
+    <line x1="560" y1="54" x2="560" y2="370" class="page-line"/>
+    <text x="24" y="88" class="label text">触发词 / 同义问法</text>
+    <rect x="24" y="105" width="510" height="210" rx="6" class="field"/>
+    <text x="42" y="138" class="text small">{brand}什么时候开团</text>
+    <text x="42" y="168" class="text small">{brand}什么时候播</text>
+    <text x="42" y="198" class="text small">{brand}还有卖吗</text>
+    <text x="42" y="228" class="text small">{brand}下次是什么时候</text>
+
+    <text x="586" y="88" class="label text">状态分流规则</text>
+    <rect x="586" y="105" width="520" height="118" rx="6" class="field"/>
+    <text x="606" y="133" class="text small">售卖中：回复“现在可以买”，再调用第二项该品牌清单话术</text>
+    <text x="606" y="163" class="text small">暂时截团：读取开团知识，回复未来开团日期</text>
+    <text x="606" y="193" class="text small">永久截团：回复“已经截团了不再卖了，看看别的。”</text>
+    <rect x="606" y="206" width="360" height="1" class="page-line"/>
+    <text x="606" y="219" class="muted tiny">示例：美的售卖中 → 现在可以买。美的清单</text>
+
+    <text x="1128" y="88" class="label text">品牌售卖状态 List</text>
+    <rect x="1604" y="65" width="60" height="30" rx="6" class="accent"/>
+    <text x="1621" y="85" class="white tiny">新增</text>
+    <rect x="1128" y="105" width="536" height="118" rx="6" class="panel"/>
+    <rect x="1128" y="105" width="536" height="36" rx="6" class="table-head"/>
+    <text x="1150" y="128" class="muted tiny">品牌名 / 品牌别名</text>
+    <text x="1418" y="128" class="muted tiny">售卖状态</text>
+    <text x="1606" y="128" class="muted tiny">操作</text>
+    <line x1="1128" y1="141" x2="1664" y2="141" class="page-line"/>
+    <text x="1150" y="168" class="text tiny">美的 / 美的系</text>
+    <rect x="1418" y="150" width="126" height="26" rx="6" class="field"/>
+    <text x="1432" y="168" class="text tiny">售卖中</text>
+    <text x="1526" y="168" class="muted tiny">▼</text>
+    <text x="1610" y="168" class="muted tiny">删除</text>
+    <line x1="1128" y1="185" x2="1664" y2="185" class="page-line"/>
+    <text x="1150" y="210" class="text tiny">源氏木语 / 源氏</text>
+    <rect x="1418" y="192" width="126" height="26" rx="6" class="field"/>
+    <text x="1432" y="210" class="text tiny">暂时截团</text>
+    <text x="1526" y="210" class="muted tiny">▼</text>
+    <text x="1610" y="210" class="muted tiny">删除</text>
+    <line x1="1128" y1="223" x2="1664" y2="223" class="page-line"/>
+    <text x="1150" y="248" class="text tiny">某品牌 / 别名</text>
+    <rect x="1418" y="230" width="126" height="26" rx="6" class="field"/>
+    <text x="1432" y="248" class="text tiny">永久截团</text>
+    <text x="1526" y="248" class="muted tiny">▼</text>
+    <text x="1610" y="248" class="muted tiny">删除</text>
+
+    <text x="586" y="278" class="label text">开团日期知识内容</text>
+    <rect x="586" y="295" width="1078" height="56" rx="6" class="field"/>
+    <text x="606" y="320" class="text small">6.6  海尔系&amp;美的系专场 / 蓝盒子、雅兰、顾家沙发</text>
+    <text x="606" y="344" class="text small">6.7  方太、老板、华帝、名气、小米、安吉尔、史密斯...</text>
+    <text x="1518" y="344" class="muted small">展开</text>
+  </g>
+</svg>

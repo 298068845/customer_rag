@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import hashlib
 
 from customer_rag.category_config import category_terms as configured_category_terms
 from customer_rag.vector_store import RetrievedChunk
@@ -50,7 +51,7 @@ def is_product_query(question: str) -> bool:
     )
 
 
-DEFAULT_OUTPUT_FIELDS = ("图片", "下单链接", "其他说明", "其他链接")
+DEFAULT_OUTPUT_FIELDS = ("图片", "下单链接", "其他说明", "领券链接")
 
 
 def build_structured_product_answer(
@@ -81,9 +82,8 @@ def build_structured_product_answer(
     output_fields = _output_fields_from_prompt(system_prompt)
     hide_missing_fields = _hide_missing_fields_from_prompt(system_prompt)
     product_blocks: list[str] = []
-    for index, (source, fields, product_name) in enumerate(products, start=1):
-        title = f"{index}. {product_name}"
-        lines = [title]
+    for source, fields, product_name in products:
+        lines = [product_name]
         rendered_fields: set[str] = set()
         for field_name in output_fields:
             value = _field_value(
@@ -95,13 +95,13 @@ def build_structured_product_answer(
             )
             if value is None:
                 continue
-            lines.append(f"   - {field_name}：{value}")
+            lines.append(f"   - {_display_field_name(field_name)}：{value}")
             rendered_fields.add(field_name)
         if len(lines) <= 2:
             for field_name, value in _fallback_fields(fields):
                 if field_name in rendered_fields:
                     continue
-                lines.append(f"   - {field_name}：{value}")
+                lines.append(f"   - {_display_field_name(field_name)}：{value}")
                 rendered_fields.add(field_name)
         product_blocks.append("\n".join(lines))
     return "\n---\n".join(product_blocks).strip()
@@ -130,9 +130,11 @@ def _output_fields_from_prompt(system_prompt: str | None) -> tuple[str, ...]:
         match = re.match(r"\s*-\s*([^：:]{1,30})[：:]\s*$", line)
         if match:
             field = match.group(1).strip()
+            if field == "其他链接":
+                field = "领券链接"
             if field and field not in fields:
                 fields.append(field)
-    new_fields = {"图片", "下单链接", "其他说明", "其他链接"}
+    new_fields = {"图片", "下单链接", "其他说明", "其他链接", "领券链接"}
     if not fields or not any(field in new_fields for field in fields):
         return DEFAULT_OUTPUT_FIELDS
     return tuple(fields)
@@ -160,8 +162,15 @@ def _hide_missing_fields_from_prompt(system_prompt: str | None) -> bool:
 
 def _product_identity(product_name: str, fields: dict[str, str]) -> str:
     link = fields.get("商品链接", "")
+    order_flow = fields.get("下单流程&权益", "")
+    normalized_flow = re.sub(r"\s+", "", order_flow).lower()
+    if link and normalized_flow:
+        digest = hashlib.sha1(normalized_flow.encode("utf-8")).hexdigest()
+        return f"order:{link.strip().lower()}:{digest}"
     brand = fields.get("品牌", "")
     normalized_name = re.sub(r"\s+", "", product_name).lower()
+    if normalized_name:
+        return f"product:{brand.strip().lower()}:{normalized_name}"
     if link:
         return f"link:{link.strip().lower()}"
     return f"{brand.strip().lower()}:{normalized_name}"
@@ -199,7 +208,7 @@ def _field_value(
         return fields.get("商品链接") or missing()
     if field_name in {"限制说明", "其他说明"}:
         return fields.get("限制说明") or missing()
-    if field_name == "其他链接":
+    if field_name in {"其他链接", "领券链接"}:
         return fields.get("其他链接") or missing()
     if field_name == "确认收货后":
         return _compact(_extract_after_receipt(fields.get("下单流程&权益")), hide_missing=hide_missing)
@@ -240,7 +249,7 @@ def _normalize_key(key: str) -> str | None:
         return "商品链接"
     if "下单链接" in key:
         return "下单链接"
-    if "其他链接" in key:
+    if "其他链接" in key or "领券链接" in key:
         return "其他链接"
     if key == "图片" or "图片" in key:
         return "图片"
@@ -257,9 +266,18 @@ def _fallback_fields(fields: dict[str, str]) -> list[tuple[str, str]]:
     for field_name in preferred:
         value = fields.get(field_name)
         if value:
-            label = "下单流程" if field_name == "下单流程&权益" else field_name
+            if field_name == "下单流程&权益":
+                label = "下单流程"
+            elif field_name == "其他链接":
+                label = "领券链接"
+            else:
+                label = field_name
             result.append((label, _compact(value, max_chars=260) or value))
     return result
+
+
+def _display_field_name(field_name: str) -> str:
+    return "领券链接" if field_name == "其他链接" else field_name
 
 
 def _answer_image_path(image_paths: list[str]) -> str | None:

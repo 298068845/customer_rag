@@ -17,8 +17,6 @@ SUPPORTED_SUFFIXES = {".txt", ".md", ".csv", ".xlsx", ".xls", ".docx", ".pdf"}
 SHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 OFFICE_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
-MAIN_DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 
 
 @dataclass(frozen=True)
@@ -185,7 +183,6 @@ def _load_xlsx_package(path: Path) -> list[LoadedDocument]:
         if not sheet_paths:
             return []
 
-        image_map = _extract_xlsx_images(archive, path)
         for sheet_name, sheet_path in sheet_paths:
             rows = _read_sheet_rows(archive, sheet_path, shared_strings)
             if not rows:
@@ -211,7 +208,6 @@ def _load_xlsx_package(path: Path) -> list[LoadedDocument]:
                         if _should_fill_down(header):
                             carry_values[col_index] = value
 
-                images = image_map.get((sheet_path, row_number), [])
                 fields = _prepare_row_fields(fields)
 
                 if _has_core_product_fields(fields):
@@ -224,7 +220,7 @@ def _load_xlsx_package(path: Path) -> list[LoadedDocument]:
                             source=str(path),
                             title=title,
                             location=f"{path.name} / {sheet_name} 行 {row_number}",
-                            image_paths=order_flow_images + images,
+                            image_paths=order_flow_images,
                             attributes=extract_attributes(text),
                         )
                     )
@@ -345,6 +341,7 @@ def _read_sheet_rows(
     shared_strings: list[str],
 ) -> dict[int, dict[int, str]]:
     root = ET.fromstring(archive.read(sheet_path))
+    hyperlinks = _read_sheet_hyperlinks(archive, sheet_path, root)
     rows: dict[int, dict[int, str]] = {}
     for row in root.findall(f".//{{{SHEET_NS}}}row"):
         row_number = int(row.attrib.get("r", "0"))
@@ -354,7 +351,10 @@ def _read_sheet_rows(
             col_index = _column_index(ref)
             if col_index < 1:
                 continue
-            values[col_index] = _read_cell_value(cell, shared_strings)
+            values[col_index] = _with_cell_hyperlinks(
+                _read_cell_value(cell, shared_strings),
+                hyperlinks.get((row_number, col_index), []),
+            )
         rows[row_number] = values
     return rows
 
@@ -377,6 +377,67 @@ def _read_cell_value(cell: ET.Element, shared_strings: list[str]) -> str:
     return value.strip()
 
 
+def _read_sheet_hyperlinks(
+    archive: zipfile.ZipFile,
+    sheet_path: str,
+    root: ET.Element,
+) -> dict[tuple[int, int], list[str]]:
+    rels = _read_relationships(archive, _rels_path(sheet_path))
+    hyperlinks: dict[tuple[int, int], list[str]] = {}
+    for node in root.findall(f".//{{{SHEET_NS}}}hyperlink"):
+        ref = node.attrib.get("ref", "")
+        target = ""
+        rel_id = node.attrib.get(f"{{{OFFICE_REL_NS}}}id")
+        if rel_id:
+            target = rels.get(rel_id, "")
+        if not target:
+            target = node.attrib.get("location", "") or node.attrib.get("display", "")
+        if not target or not _looks_like_url(target):
+            continue
+        for row_number, col_index in _cell_range_refs(ref):
+            key = (row_number, col_index)
+            values = hyperlinks.setdefault(key, [])
+            if target not in values:
+                values.append(target)
+    return hyperlinks
+
+
+def _with_cell_hyperlinks(text: str, links: list[str]) -> str:
+    value = str(text or "").strip()
+    for link in links:
+        if link and link not in value:
+            value = f"{value}\n{link}" if value else link
+    return value
+
+
+def _cell_range_refs(ref: str) -> list[tuple[int, int]]:
+    if not ref:
+        return []
+    start, _, end = ref.partition(":")
+    start_row, start_col = _cell_ref_to_row_col(start)
+    if not end:
+        return [(start_row, start_col)] if start_row and start_col else []
+    end_row, end_col = _cell_ref_to_row_col(end)
+    if not all((start_row, start_col, end_row, end_col)):
+        return []
+    refs: list[tuple[int, int]] = []
+    for row_number in range(min(start_row, end_row), max(start_row, end_row) + 1):
+        for col_index in range(min(start_col, end_col), max(start_col, end_col) + 1):
+            refs.append((row_number, col_index))
+    return refs
+
+
+def _cell_ref_to_row_col(ref: str) -> tuple[int, int]:
+    match = re.match(r"^([A-Za-z]+)(\d+)$", str(ref or ""))
+    if not match:
+        return 0, 0
+    return int(match.group(2)), _column_index(match.group(1))
+
+
+def _looks_like_url(value: str) -> bool:
+    return bool(re.match(r"^https?://", str(value or "").strip(), flags=re.IGNORECASE))
+
+
 def _pick_headers(rows: dict[int, dict[int, str]]) -> dict[int, str]:
     first_row = rows.get(1, {})
     headers = {col: value.replace("\n", " ").strip() for col, value in first_row.items() if value.strip()}
@@ -384,49 +445,6 @@ def _pick_headers(rows: dict[int, dict[int, str]]) -> dict[int, str]:
         return headers
     max_cols = max((max(row.keys(), default=0) for row in rows.values()), default=0)
     return {col: f"列{col}" for col in range(1, max_cols + 1)}
-
-
-def _extract_xlsx_images(archive: zipfile.ZipFile, workbook_path: Path) -> dict[tuple[str, int], list[str]]:
-    image_map: dict[tuple[str, int], list[str]] = {}
-    sheet_paths = {path for _, path in _read_workbook_sheets(archive)}
-    assets_dir = workbook_path.parent / "_assets" / workbook_path.stem
-    names = set(archive.namelist())
-
-    for sheet_path in sheet_paths:
-        sheet_rels_path = _rels_path(sheet_path)
-        sheet_rels = _read_relationships(archive, sheet_rels_path)
-        if not sheet_rels:
-            continue
-
-        for target in sheet_rels.values():
-            drawing_path = _resolve_package_path(sheet_path, target)
-            if drawing_path not in names or not drawing_path.startswith("xl/drawings/"):
-                continue
-            drawing_rels = _read_relationships(archive, _rels_path(drawing_path))
-            drawing_root = ET.fromstring(archive.read(drawing_path))
-            for anchor in list(drawing_root):
-                from_node = anchor.find(f"{{{DRAWING_NS}}}from")
-                blip = anchor.find(f".//{{{MAIN_DRAWING_NS}}}blip")
-                if from_node is None or blip is None:
-                    continue
-                row_node = from_node.find(f"{{{DRAWING_NS}}}row")
-                rel_id = blip.attrib.get(f"{{{OFFICE_REL_NS}}}embed") or blip.attrib.get(f"{{{OFFICE_REL_NS}}}link")
-                if row_node is None or not rel_id:
-                    continue
-                media_target = drawing_rels.get(rel_id)
-                if not media_target:
-                    continue
-                media_path = _resolve_package_path(drawing_path, media_target)
-                if media_path not in names:
-                    continue
-
-                assets_dir.mkdir(parents=True, exist_ok=True)
-                output_path = assets_dir / Path(media_path).name
-                if not output_path.exists():
-                    output_path.write_bytes(archive.read(media_path))
-                row_number = int(row_node.text or "0") + 1
-                image_map.setdefault((sheet_path, row_number), []).append(str(output_path))
-    return image_map
 
 
 def _read_relationships(archive: zipfile.ZipFile, rels_path: str) -> dict[str, str]:
@@ -470,15 +488,56 @@ def _should_fill_down(header: str) -> bool:
 
 
 def _order_flow_image_paths(path: Path, row_number: int, fields: dict[str, str]) -> list[str]:
+    product_info, order_flow, other_note = _fields_for_order_flow_image(fields)
     image_path = create_order_flow_image(
-        fields.get("产品信息", ""),
-        fields.get("下单流程", ""),
-        fields.get("其他说明", ""),
+        product_info,
+        order_flow,
+        other_note,
         source_path=path,
         row_number=row_number,
         output_root=path.parent / "_generated" / "order_flow",
     )
     return [image_path] if image_path else []
+
+
+def _fields_for_order_flow_image(fields: dict[str, str]) -> tuple[str, str, str]:
+    product_info = fields.get("产品信息", "")
+    order_flow = fields.get("下单流程", "")
+    other_note = fields.get("其他说明", "")
+    other_links = _extract_links(fields.get("其他链接", ""))[1]
+    if not other_links:
+        return product_info, order_flow, other_note
+
+    cells = [product_info, order_flow, other_note]
+    matched = False
+    enriched_cells: list[str] = []
+    for value in cells:
+        enriched, used = _append_missing_cell_links(value, other_links)
+        matched = matched or used
+        enriched_cells.append(enriched)
+    if not matched and order_flow:
+        enriched_cells[1] = _append_unique_lines(order_flow, other_links)
+    return enriched_cells[0], enriched_cells[1], enriched_cells[2]
+
+
+def _append_missing_cell_links(value: str, links: list[str]) -> tuple[str, bool]:
+    text = str(value or "").strip()
+    if not text or _extract_links(text)[1] or not _cell_mentions_link(text):
+        return text, False
+    return _append_unique_lines(text, links), True
+
+
+def _cell_mentions_link(text: str) -> bool:
+    return any(token in text for token in ("链接", "优惠券", "领券", "券", "http"))
+
+
+def _append_unique_lines(text: str, values: list[str]) -> str:
+    result = str(text or "").strip()
+    for value in values:
+        value = str(value or "").strip()
+        if value and value not in result:
+            result = f"{result}\n{value}" if result else value
+    return result
 
 
 def _allowed_field_name(header: str) -> str | None:
@@ -519,8 +578,7 @@ def _prepare_row_fields(fields: dict[str, str]) -> dict[str, str]:
         value = prepared.get(field_name, "")
         if not value:
             continue
-        cleaned, links = _extract_links(value)
-        prepared[field_name] = cleaned
+        _, links = _extract_links(value)
         extracted_links.extend(links)
     if extracted_links:
         prepared["其他链接"] = _join_unique_links([prepared.get("其他链接", ""), *extracted_links])

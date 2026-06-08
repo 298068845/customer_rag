@@ -32,16 +32,22 @@ global PREVIEW_LIST := 0
 global PREVIEW_STATUS := 0
 global PREVIEW_TABS := 0
 global PREVIEW_SHOW_TABS := false
+global PREVIEW_FALLBACK_MODE := false
 global PREVIEW_MODE_ALL := 0
 global PREVIEW_MODE_SPLIT := 0
 global PREVIEW_CLOSE_BUTTON := 0
 global LAST_SEND_TICK := 0
 global MIN_SEND_INTERVAL_MS := 300
+global SEND_IN_PROGRESS := false
 global STATUS_GUI := 0
 global STATUS_TITLE := 0
 global STATUS_BODY := 0
 global RAG_QUERY_PID := 0
+global RAG_TALK_ONLY_PENDING := false
 global STATUS_TEST_FORCE_MONITOR := 0
+global QUERY_GUI := 0
+global QUERY_VISIBLE := false
+global QUERY_EDIT := 0
 
 EnsureBootstrapFiles()
 
@@ -71,6 +77,11 @@ vkC0::PreviewOrSendNext()
 F8::CalibrateSendBoxPoint()
 #HotIf
 
+#HotIf IsQueryVisible()
+Tab::StartRagFromQueryDialog()
+Esc::CloseQueryDialog()
+#HotIf
+
 #HotIf IsPreviewVisible()
 Tab::SendNextPreviewPart()
 vkC0::PreviewOrSendNext()
@@ -95,8 +106,17 @@ IsPreviewVisible() {
     return PREVIEW_VISIBLE
 }
 
+IsQueryVisible() {
+    global QUERY_VISIBLE
+    return QUERY_VISIBLE
+}
+
 HandleTabHotkey() {
-    global PREVIEW_VISIBLE
+    global PREVIEW_VISIBLE, SEND_IN_PROGRESS
+
+    if SEND_IN_PROGRESS {
+        return
+    }
 
     if PREVIEW_VISIBLE {
         SendNextPreviewPart()
@@ -127,12 +147,84 @@ CaptureSelectedText() {
 
     FileDeleteSafe(LAST_SELECTED_PATH)
     FileAppend selectedText, LAST_SELECTED_PATH, "UTF-8"
-    ShowTip("已获取：" SubStr(CleanOneLine(selectedText), 1, 36))
+    ShowQueryDialog(selectedText)
+}
+
+ShowQueryDialog(selectedText) {
+    global QUERY_GUI, QUERY_VISIBLE, QUERY_EDIT
+
+    CloseQueryDialog()
+
+    QUERY_GUI := Gui("+AlwaysOnTop -Caption -Border +ToolWindow", "RAG 查询")
+    QUERY_GUI.BackColor := "FBF3E8"
+    QUERY_GUI.MarginX := 8
+    QUERY_GUI.MarginY := 8
+    QUERY_GUI.SetFont("s10 c2F2620", "Microsoft YaHei")
+
+    QUERY_EDIT := QUERY_GUI.AddEdit("xm ym w520 h28", selectedText)
+    closeButton := QUERY_GUI.AddText("x+8 yp w28 h28 Center 0x200 +0x100 c7A3F20 BackgroundEAD2B8", "X")
+    closeButton.OnEvent("Click", CloseQueryDialog)
+    QUERY_GUI.OnEvent("Close", CloseQueryDialog)
+    QUERY_GUI.OnEvent("Escape", CloseQueryDialog)
+
+    QUERY_VISIBLE := true
+    PositionQueryDialog()
+    try DllCall("SetFocus", "ptr", QUERY_EDIT.Hwnd)
+}
+
+StartRagFromQueryDialog(*) {
+    global QUERY_EDIT, RAG_QUERY_PID, SEND_IN_PROGRESS
+
+    if SEND_IN_PROGRESS {
+        return
+    }
+
+    if (RAG_QUERY_PID && ProcessExist(RAG_QUERY_PID)) {
+        ShowStatus("loading", "RAG 查询中", "当前查询还在进行，请稍等...")
+        return
+    }
+    if !IsObject(QUERY_EDIT) {
+        return
+    }
+
+    question := Trim(QUERY_EDIT.Value)
+    if (question = "") {
+        ShowTip("查询内容为空")
+        return
+    }
+
+    FileDeleteSafe(LAST_SELECTED_PATH)
+    FileAppend question, LAST_SELECTED_PATH, "UTF-8"
+    CloseQueryDialog()
     AskRagForSelection()
 }
 
-AskRagForSelection() {
-    global RAG_QUERY_PID
+PositionQueryDialog() {
+    global QUERY_GUI
+
+    if !IsObject(QUERY_GUI) {
+        return
+    }
+    MouseGetPos &mouseX, &mouseY
+    GetWorkAreaForPoint(mouseX, mouseY, &left, &top, &right, &bottom)
+    x := Clamp(mouseX + 14, left + 10, right - 600)
+    y := Clamp(mouseY + 14, top + 10, bottom - 80)
+    QUERY_GUI.Show("x" x " y" y " AutoSize")
+}
+
+CloseQueryDialog(*) {
+    global QUERY_GUI, QUERY_VISIBLE, QUERY_EDIT
+
+    if IsObject(QUERY_GUI) {
+        QUERY_GUI.Destroy()
+    }
+    QUERY_GUI := 0
+    QUERY_VISIBLE := false
+    QUERY_EDIT := 0
+}
+
+AskRagForSelection(tags := "", talkOnly := false) {
+    global RAG_QUERY_PID, RAG_TALK_ONLY_PENDING
 
     if !ReadBoolConfig("rag", "enabled", false) {
         return
@@ -159,19 +251,27 @@ AskRagForSelection() {
     }
 
     ShowStatus("loading", "RAG 查询中", "正在根据选中文字生成回复，请稍等...")
+    RAG_TALK_ONLY_PENDING := talkOnly
     FileDeleteSafe(SEND_TEXT_PATH)
     command := QuoteArg(python) " " QuoteArg(bridge) " --question-file " QuoteArg(LAST_SELECTED_PATH) " --output-file " QuoteArg(SEND_TEXT_PATH) " --project-root " QuoteArg(projectRoot) " --log-file " QuoteArg(logPath)
+    if (Trim(tags) != "") {
+        command .= " --tags " QuoteArg(tags)
+    }
+    if (talkOnly) {
+        command .= " --talk-only"
+    }
     try {
         Run command, projectRoot, "Hide", &RAG_QUERY_PID
         SetTimer CheckRagQueryDone, 250
     } catch as exc {
         RAG_QUERY_PID := 0
+        RAG_TALK_ONLY_PENDING := false
         ShowStatus("error", "查询启动失败", exc.Message, 4200)
     }
 }
 
 CheckRagQueryDone() {
-    global RAG_QUERY_PID
+    global RAG_QUERY_PID, RAG_TALK_ONLY_PENDING
 
     if !RAG_QUERY_PID {
         SetTimer CheckRagQueryDone, 0
@@ -186,8 +286,16 @@ CheckRagQueryDone() {
     SetTimer CheckRagQueryDone, 0
 
     if FileExist(SEND_TEXT_PATH) && Trim(ReadSendText()) != "" {
-        ShowRagResultPreview()
+        if (RAG_TALK_ONLY_PENDING) {
+            text := ReadSendText()
+            RAG_TALK_ONLY_PENDING := false
+            CloseStatus()
+            PasteTextToWeChat(text)
+        } else {
+            ShowRagResultPreview()
+        }
     } else {
+        RAG_TALK_ONLY_PENDING := false
         ShowStatus("error", "查询失败", "请查看 rag-bridge.log 后重试。", 4200)
     }
 }
@@ -211,17 +319,43 @@ PreviewOrSendNext() {
         return
     }
 
-    ShowSendPreview("", "", "", "custom")
+    CaptureSelectedTextForTalk()
+}
+
+CaptureSelectedTextForTalk() {
+    oldClipboard := ClipboardAll()
+    A_Clipboard := ""
+    Send "^c"
+
+    if !ClipWait(ReadFloatConfig("capture", "timeout_seconds", 0.6)) {
+        A_Clipboard := oldClipboard
+        ShowTip("没有复制到选中文字")
+        return
+    }
+
+    selectedText := A_Clipboard
+    A_Clipboard := oldClipboard
+
+    if (Trim(selectedText) = "") {
+        ShowTip("选中文字为空")
+        return
+    }
+
+    FileDeleteSafe(LAST_SELECTED_PATH)
+    FileAppend selectedText, LAST_SELECTED_PATH, "UTF-8"
+    AskRagForSelection("", true)
 }
 
 ShowSendPreview(text, mouseX := "", mouseY := "", mode := "query") {
     global PREVIEW_GUI, PREVIEW_VISIBLE, PREVIEW_TARGET_HWND, PREVIEW_SOURCE_TEXT
     global PREVIEW_EDIT, PREVIEW_LIST, PREVIEW_STATUS, PREVIEW_MODE_ALL, PREVIEW_MODE_SPLIT
     global PREVIEW_CLOSE_BUTTON, PREVIEW_TABS, PREVIEW_TAB_TEXTS, PREVIEW_ACTIVE_TAB, PREVIEW_SHOW_TABS
+    global PREVIEW_FALLBACK_MODE
 
     ClosePreview()
     DebugPreviewTest("show_after_close")
 
+    text := PreparePreviewSourceText(text)
     PREVIEW_TARGET_HWND := WinGetID("A")
     PREVIEW_SOURCE_TEXT := text
     PREVIEW_SHOW_TABS := mode = "custom"
@@ -356,20 +490,41 @@ RefreshModePills() {
 
 UpdatePreviewText() {
     global PREVIEW_LIST, PREVIEW_PARTS, PREVIEW_INDEX, PREVIEW_TAB_DEFAULT_CHECKED
+    global PREVIEW_FALLBACK_MODE
 
     if !IsObject(PREVIEW_LIST) {
         return
     }
 
     PREVIEW_LIST.Delete()
+    checkedCount := 0
+    fallbackText := FallbackManualReply()
+    if PREVIEW_FALLBACK_MODE {
+        PREVIEW_LIST.Add("Check", MakeListPreview(fallbackText), fallbackText)
+        checkedCount += 1
+    }
     for index, part in PREVIEW_PARTS {
+        if CleanOneLine(part) = fallbackText {
+            continue
+        }
         options := (PREVIEW_TAB_DEFAULT_CHECKED && ShouldDefaultCheckPart(part)) ? "Check" : ""
+        if options = "Check" {
+            checkedCount += 1
+        }
         PREVIEW_LIST.Add(options, MakeListPreview(part), part)
+    }
+    if (PREVIEW_TAB_DEFAULT_CHECKED && checkedCount = 0) {
+        PREVIEW_LIST.Insert(1, "Check", MakeListPreview(fallbackText), fallbackText)
     }
 }
 
 ShouldDefaultCheckPart(text) {
+    global PREVIEW_FALLBACK_MODE
+
     cleaned := CleanOneLine(text)
+    if PREVIEW_FALLBACK_MODE {
+        return cleaned = FallbackManualReply()
+    }
     if InStr(cleaned, "截团") {
         return false
     }
@@ -381,7 +536,11 @@ SendPreviewNow(*) {
 }
 
 SendNextPreviewPart() {
-    global PREVIEW_LIST
+    global PREVIEW_LIST, SEND_IN_PROGRESS
+
+    if SEND_IN_PROGRESS {
+        return
+    }
 
     if !IsObject(PREVIEW_LIST) {
         ClosePreview()
@@ -395,13 +554,25 @@ SendNextPreviewPart() {
     }
 
     text := PREVIEW_LIST.GetText(row, 2)
-    PasteTextToWeChat(text)
-    PREVIEW_LIST.Delete(row)
+    SEND_IN_PROGRESS := true
+    try {
+        PasteTextToWeChat(text)
+        if !IsObject(PREVIEW_LIST) {
+            SEND_IN_PROGRESS := false
+            return
+        }
+        PREVIEW_LIST.Delete(row)
 
-    if CountCheckedRows() = 0 {
-        ClosePreview()
-        return
+        if CountCheckedRows() = 0 {
+            SEND_IN_PROGRESS := false
+            ClosePreview()
+            return
+        }
+    } catch as exc {
+        SEND_IN_PROGRESS := false
+        throw exc
     }
+    SEND_IN_PROGRESS := false
 }
 
 CancelPreview(*) {
@@ -412,6 +583,11 @@ ClosePreview(*) {
     global PREVIEW_GUI, PREVIEW_VISIBLE, PREVIEW_TARGET_HWND, PREVIEW_SOURCE_TEXT
     global PREVIEW_PARTS, PREVIEW_INDEX, PREVIEW_EDIT, PREVIEW_STATUS, PREVIEW_MODE_ALL, PREVIEW_MODE_SPLIT
     global PREVIEW_LIST, PREVIEW_CLOSE_BUTTON, PREVIEW_TABS, PREVIEW_TAB_TEXTS, PREVIEW_ACTIVE_TAB, PREVIEW_SHOW_TABS
+    global PREVIEW_FALLBACK_MODE, SEND_IN_PROGRESS
+
+    if SEND_IN_PROGRESS {
+        return
+    }
 
     if IsObject(PREVIEW_GUI) {
         PREVIEW_GUI.Destroy()
@@ -430,6 +606,7 @@ ClosePreview(*) {
     PREVIEW_STATUS := 0
     PREVIEW_TABS := 0
     PREVIEW_SHOW_TABS := false
+    PREVIEW_FALLBACK_MODE := false
     PREVIEW_MODE_ALL := 0
     PREVIEW_MODE_SPLIT := 0
     PREVIEW_CLOSE_BUTTON := 0
@@ -449,30 +626,67 @@ PasteTextToWeChat(text) {
     oldClipboard := ClipboardAll()
 
     FocusSendBox()
+    if (Trim(textToSend) != "") {
+        A_Clipboard := textToSend
+        Sleep ReadIntConfig("send", "clipboard_settle_ms", 80)
+        Send "^v"
+        Sleep ReadIntConfig("send", "after_text_paste_ms", 180)
+    }
+
     if (imagePath != "" && FileExist(imagePath)) {
         if SetClipboardImage(imagePath) {
-            Sleep ReadIntConfig("send", "clipboard_settle_ms", 80)
+            Sleep ImageClipboardSettleMs(imagePath)
             Send "^v"
-            Sleep ReadIntConfig("send", "after_image_paste_ms", 900)
+            Sleep ImagePasteWaitMs(imagePath)
+            if ReadBoolConfig("send", "send_image_before_text", false) {
+                Send "{Enter}"
+                Sleep ReadIntConfig("send", "after_image_enter_ms", 500)
+            }
         } else {
             ShowTip("图片复制失败")
         }
     }
 
-    if (Trim(textToSend) != "") {
-        A_Clipboard := textToSend
-        Sleep ReadIntConfig("send", "clipboard_settle_ms", 80)
-        Send "^v"
+    if ReadBoolConfig("send", "press_enter", true) && (Trim(textToSend) != "" || imagePath != "") {
         Sleep ReadIntConfig("send", "before_enter_ms", 120)
-    }
-
-    if ReadBoolConfig("send", "press_enter", true) {
         Send "{Enter}"
     }
 
-    A_Clipboard := oldClipboard
+    if ReadBoolConfig("send", "restore_clipboard_after_paste", false) {
+        A_Clipboard := oldClipboard
+    }
     LAST_SEND_TICK := A_TickCount
-    ShowTip("Sent")
+    ShowTip("已粘贴到发送框")
+}
+
+ImageClipboardSettleMs(imagePath) {
+    baseMs := ReadIntConfig("send", "clipboard_settle_ms", 80)
+    per100KbMs := ReadIntConfig("send", "image_clipboard_settle_ms_per_100kb", 70)
+    maxMs := ReadIntConfig("send", "image_clipboard_settle_max_ms", 1500)
+    sizeKb := ImageFileSizeKb(imagePath)
+    if sizeKb <= 0 {
+        return baseMs
+    }
+    return Clamp(baseMs + Ceil(sizeKb / 100) * per100KbMs, baseMs, maxMs)
+}
+
+ImagePasteWaitMs(imagePath) {
+    baseMs := ReadIntConfig("send", "after_image_paste_ms", 900)
+    per100KbMs := ReadIntConfig("send", "after_image_paste_ms_per_100kb", 300)
+    maxMs := ReadIntConfig("send", "after_image_paste_max_ms", 6500)
+    sizeKb := ImageFileSizeKb(imagePath)
+    if sizeKb <= 0 {
+        return baseMs
+    }
+    return Clamp(baseMs + Ceil(sizeKb / 100) * per100KbMs, baseMs, maxMs)
+}
+
+ImageFileSizeKb(imagePath) {
+    try {
+        return Ceil(FileGetSize(ResolveProjectPath(imagePath)) / 1024)
+    } catch {
+        return 0
+    }
 }
 
 ExtractImagePath(text) {
@@ -555,28 +769,102 @@ SetClipboardImage(path) {
     if !FileExist(imagePath) {
         return false
     }
-    scriptPath := A_Temp "\wechat-set-image-clipboard.ps1"
-    escapedPath := StrReplace(imagePath, "'", "''")
-    script := "$ErrorActionPreference = 'Stop'`r`n"
-        . "Add-Type -AssemblyName System.Windows.Forms`r`n"
-        . "Add-Type -AssemblyName System.Drawing`r`n"
-        . "$imagePath = '" escapedPath "'`r`n"
-        . "$img = [System.Drawing.Image]::FromFile($imagePath)`r`n"
-        . "try {`r`n"
-        . "    [System.Windows.Forms.Clipboard]::Clear()`r`n"
-        . "    [System.Windows.Forms.Clipboard]::SetImage($img)`r`n"
-        . "} finally {`r`n"
-        . "    $img.Dispose()`r`n"
-        . "}`r`n"
-    FileDeleteSafe(scriptPath)
-    FileAppend script, scriptPath, "UTF-8"
-    command := "powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File " QuoteArg(scriptPath)
+
     try {
-        exitCode := RunWait(command, , "Hide")
-        return exitCode = 0
+        hBitmap := LoadPicture(imagePath)
     } catch {
         return false
     }
+    if !hBitmap {
+        return false
+    }
+    hDib := BitmapToDib(hBitmap)
+    DllCall("DeleteObject", "UPtr", hBitmap)
+    if !hDib {
+        return false
+    }
+    if !OpenClipboardWithRetry(0) {
+        DllCall("GlobalFree", "UPtr", hDib)
+        return false
+    }
+    DllCall("EmptyClipboard")
+    if !DllCall("SetClipboardData", "UInt", 8, "UPtr", hDib, "UPtr") {
+        DllCall("CloseClipboard")
+        DllCall("GlobalFree", "UPtr", hDib)
+        return false
+    }
+    DllCall("CloseClipboard")
+    return true
+}
+
+BitmapToDib(hBitmap) {
+    bitmap := Buffer(32, 0)
+    if !DllCall("GetObject", "UPtr", hBitmap, "Int", bitmap.Size, "Ptr", bitmap.Ptr) {
+        return 0
+    }
+    width := NumGet(bitmap, 4, "Int")
+    height := NumGet(bitmap, 8, "Int")
+    if (width <= 0 || height <= 0) {
+        return 0
+    }
+
+    bitCount := 32
+    headerSize := 40
+    stride := ((width * bitCount + 31) // 32) * 4
+    imageSize := stride * height
+    dibSize := headerSize + imageSize
+    hDib := DllCall("GlobalAlloc", "UInt", 0x42, "UPtr", dibSize, "UPtr")
+    if !hDib {
+        return 0
+    }
+    dibPtr := DllCall("GlobalLock", "UPtr", hDib, "UPtr")
+    if !dibPtr {
+        DllCall("GlobalFree", "UPtr", hDib)
+        return 0
+    }
+
+    NumPut("UInt", headerSize, dibPtr, 0)
+    NumPut("Int", width, dibPtr, 4)
+    NumPut("Int", height, dibPtr, 8)
+    NumPut("UShort", 1, dibPtr, 12)
+    NumPut("UShort", bitCount, dibPtr, 14)
+    NumPut("UInt", 0, dibPtr, 16)
+    NumPut("UInt", imageSize, dibPtr, 20)
+    NumPut("Int", 0, dibPtr, 24)
+    NumPut("Int", 0, dibPtr, 28)
+    NumPut("UInt", 0, dibPtr, 32)
+    NumPut("UInt", 0, dibPtr, 36)
+
+    hdc := DllCall("CreateCompatibleDC", "UPtr", 0, "UPtr")
+    ok := hdc && DllCall(
+        "GetDIBits",
+        "UPtr", hdc,
+        "UPtr", hBitmap,
+        "UInt", 0,
+        "UInt", height,
+        "UPtr", dibPtr + headerSize,
+        "UPtr", dibPtr,
+        "UInt", 0
+    )
+    if hdc {
+        DllCall("DeleteDC", "UPtr", hdc)
+    }
+    DllCall("GlobalUnlock", "UPtr", hDib)
+    if !ok {
+        DllCall("GlobalFree", "UPtr", hDib)
+        return 0
+    }
+    return hDib
+}
+
+OpenClipboardWithRetry(hwnd := 0, attempts := 8, delayMs := 35) {
+    Loop attempts {
+        if DllCall("OpenClipboard", "UPtr", hwnd) {
+            return true
+        }
+        Sleep delayMs
+    }
+    return false
 }
 
 WaitForSendInterval() {
@@ -766,6 +1054,39 @@ BuildCustomTabTexts() {
     return texts
 }
 
+PreparePreviewSourceText(text) {
+    global PREVIEW_FALLBACK_MODE
+
+    PREVIEW_FALLBACK_MODE := false
+    text := StripBom(text)
+    normalized := StrReplace(text, "`r`n", "`n")
+    normalized := StrReplace(normalized, "`r", "`n")
+    output := ""
+    markerFound := false
+    for line in StrSplit(normalized, "`n") {
+        trimmed := Trim(line)
+        if (!markerFound && trimmed = "__RAG_FUZZY_FALLBACK__") {
+            PREVIEW_FALLBACK_MODE := true
+            markerFound := true
+            continue
+        }
+        output .= (output = "" ? "" : "`n") line
+    }
+
+    output := Trim(output, "`r`n `t")
+    if PREVIEW_FALLBACK_MODE {
+        fallbackText := FallbackManualReply()
+        if !InStr(output, fallbackText) {
+            output .= (output = "" ? "" : "`n---`n") fallbackText
+        }
+    }
+    return output
+}
+
+FallbackManualReply() {
+    return "没做这款的，看看其他的呢"
+}
+
 SplitSendText(text) {
     parts := []
     current := ""
@@ -806,8 +1127,12 @@ IsSeparatorLine(line) {
 AddPart(parts, text) {
     trimmed := Trim(text, "`r`n `t")
     if (trimmed != "") {
-        parts.Push(trimmed)
+        parts.Push(RemoveLeadingItemNumber(trimmed))
     }
+}
+
+RemoveLeadingItemNumber(text) {
+    return RegExReplace(text, "^\s*\d+\s*[\.、)]\s*", "")
 }
 
 CountCheckedRows() {
@@ -820,6 +1145,9 @@ CountCheckedRows() {
     count := 0
     row := 0
     loop {
+        if !IsObject(PREVIEW_LIST) {
+            return 0
+        }
         row := PREVIEW_LIST.GetNext(row, "Checked")
         if row = 0 {
             break
@@ -925,9 +1253,17 @@ input_x=520
 input_y=690
 after_click_ms=100
 clipboard_settle_ms=80
+image_clipboard_settle_ms_per_100kb=70
+image_clipboard_settle_max_ms=1500
+after_text_paste_ms=180
 after_image_paste_ms=900
+after_image_paste_ms_per_100kb=300
+after_image_paste_max_ms=6500
+send_image_before_text=0
+after_image_enter_ms=500
 before_enter_ms=120
 press_enter=1
+restore_clipboard_after_paste=0
 
 [rag]
 enabled=1

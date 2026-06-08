@@ -12,18 +12,7 @@ if (-not (Test-Path $launcher)) {
     throw "Missing launcher: $launcher"
 }
 
-$existing = Get-CimInstance Win32_Process |
-    Where-Object {
-        ($_.Name -like "python*.exe") -and
-        ($_.CommandLine -like "*launcher.py*") -and
-        ($_.CommandLine -like "*customer_rag*")
-    } |
-    Select-Object -First 1
-
-if ($existing) {
-    Write-Host "Customer RAG launcher is already running."
-    exit 0
-}
-
-Start-Process -FilePath $pythonw -ArgumentList "`"$launcher`"" -WorkingDirectory $root -WindowStyle Hidden
+$shell = New-Object -ComObject WScript.Shell
+$shell.CurrentDirectory = $root
+$null = $shell.Run("`"$pythonw`" `"$launcher`"", 0, $false)
 Write-Host "Customer RAG launcher started. Use the tray icon in the bottom-right taskbar area."

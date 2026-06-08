@@ -26,7 +26,7 @@ from customer_rag.browser_cookies import (
     open_tencent_docs_login_window,
     read_tencent_docs_cookie_from_login_window,
 )
-from customer_rag.category_config import category_aliases, save_category_aliases
+from customer_rag.category_config import category_aliases, category_brands, save_category_catalog
 from customer_rag.local_task_api import ensure_local_task_api
 from customer_rag.loaders import SUPPORTED_SUFFIXES
 from customer_rag.prompt_defaults import DEFAULT_SYSTEM_PROMPT
@@ -282,7 +282,7 @@ def remember_recent_raw_files(paths: list[Path]) -> None:
 
 def recent_raw_files_from_state() -> list[str]:
     job_state = read_job_state(cfg)
-    if not (job_state.pending_modified_by_url or {}):
+    if not (job_state.updated_files or []):
         return []
     files: list[str] = []
     for path in job_state.updated_files or []:
@@ -479,6 +479,75 @@ def render_raw_files_table(raw_files: list[Path], recent_files: list[str]) -> No
     )
 
 
+def render_raw_files_loading() -> None:
+    components.html(
+        """
+        <style>
+          .raw-list-loading {
+            height: 118px;
+            border: 1px solid #e6e9ef;
+            border-radius: 8px;
+            background: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            color: #5f6673;
+            padding: 16px;
+            box-sizing: border-box;
+          }
+          .raw-list-loading-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 14px;
+            font-size: 15px;
+            font-weight: 600;
+          }
+          .raw-list-spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid #d9e4f8;
+            border-top-color: #2f7de1;
+            border-radius: 50%;
+            animation: raw-list-spin .8s linear infinite;
+          }
+          .raw-list-skeleton {
+            display: grid;
+            gap: 8px;
+          }
+          .raw-list-skeleton div {
+            height: 12px;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #eef2f8 0%, #f7f9fc 45%, #eef2f8 90%);
+            background-size: 220% 100%;
+            animation: raw-list-shimmer 1.2s ease-in-out infinite;
+          }
+          .raw-list-skeleton div:nth-child(1) { width: 76%; }
+          .raw-list-skeleton div:nth-child(2) { width: 58%; }
+          .raw-list-skeleton div:nth-child(3) { width: 68%; }
+          @keyframes raw-list-spin {
+            to { transform: rotate(360deg); }
+          }
+          @keyframes raw-list-shimmer {
+            0% { background-position: 120% 0; }
+            100% { background-position: -120% 0; }
+          }
+        </style>
+        <div class="raw-list-loading">
+          <div class="raw-list-loading-title">
+            <span class="raw-list-spinner"></span>
+            <span>正在加载原始文件列表...</span>
+          </div>
+          <div class="raw-list-skeleton">
+            <div></div>
+            <div></div>
+            <div></div>
+          </div>
+        </div>
+        """,
+        height=126,
+        scrolling=False,
+    )
+
+
 def render_raw_action_panel(api_url: str) -> None:
     component_id = f"raw-actions-{int(time.time() * 1000)}"
     components.html(
@@ -489,7 +558,7 @@ def render_raw_action_panel(api_url: str) -> None:
             grid-template-columns: minmax(180px, 0.24fr) minmax(180px, 0.22fr) 1fr;
             gap: 24px;
             align-items: center;
-            margin: 0 0 22px 0;
+            margin: 0;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
           }}
           .raw-actions button {{
@@ -624,7 +693,7 @@ def render_raw_action_panel(api_url: str) -> None:
           }})();
         </script>
         """,
-        height=310,
+        height=92,
         scrolling=False,
     )
 
@@ -721,6 +790,8 @@ def render_subscription_task_panel(api_url: str) -> None:
             const detailLine = root.querySelector('[data-role="detail"]');
             const bar = root.querySelector('[data-role="bar"]');
             const logsBox = root.querySelector('[data-role="logs"]');
+            let lastLogsText = "";
+            let userPinnedToBottom = true;
             const runningStatuses = new Set(["running", "rebuilding", "stopping"]);
             const labels = {{
               running: "运行中",
@@ -750,11 +821,24 @@ def render_subscription_task_panel(api_url: str) -> None:
               statusLine.textContent = `状态：${{labels[state.status] || state.status}} · ${{message}}`;
               detailLine.textContent = `进度：${{current}} / ${{total}} · 下载 ${{state.downloaded || 0}} 个，跳过 ${{state.skipped || 0}} 个，失败 ${{state.failed || 0}} 个`;
               const logs = Array.isArray(state.logs) ? state.logs : [];
-              logsBox.textContent = logs.length ? logs.join("\\n") : "暂无详细日志";
-              logsBox.scrollTop = logsBox.scrollHeight;
+              const nextLogsText = logs.length ? logs.join("\\n") : "暂无详细日志";
+              const nearBottom = logsBox.scrollHeight - logsBox.scrollTop - logsBox.clientHeight < 24;
+              if (nextLogsText !== lastLogsText) {{
+                const previousScrollTop = logsBox.scrollTop;
+                logsBox.textContent = nextLogsText;
+                if (userPinnedToBottom && nearBottom) {{
+                  logsBox.scrollTop = logsBox.scrollHeight;
+                }} else {{
+                  logsBox.scrollTop = previousScrollTop;
+                }}
+                lastLogsText = nextLogsText;
+              }}
               stopButton.style.display = runningStatuses.has(state.status) ? "inline-flex" : "none";
               stopButton.disabled = state.status === "stopping";
             }}
+            logsBox.addEventListener("scroll", () => {{
+              userPinnedToBottom = logsBox.scrollHeight - logsBox.scrollTop - logsBox.clientHeight < 24;
+            }});
             async function fetchStatus() {{
               const response = await fetch(`${{api}}/subscription/status`, {{ cache: "no-store" }});
               render(await response.json());
@@ -898,14 +982,24 @@ def tag_badges(tags: list[str]) -> str:
 
 
 def category_alias_rows() -> list[dict[str, str]]:
+    brands = category_brands()
     return [
-        {"标准类目": category, "同义词": "、".join(aliases)}
+        {
+            "标准类目": category,
+            "同义词": "、".join(aliases),
+            "在售品牌数": str(len(brands.get(category, []))),
+            "品牌示例": preview_terms(brands.get(category, [])),
+        }
         for category, aliases in category_aliases().items()
     ]
 
 
-def category_alias_rows_to_config(rows: list[dict]) -> tuple[dict[str, list[str]], list[str]]:
+def category_alias_rows_to_config(
+    rows: list[dict],
+    current_brands: dict[str, list[str]],
+) -> tuple[dict[str, list[str]], dict[str, list[str]], list[str]]:
     aliases: dict[str, list[str]] = {}
+    brands: dict[str, list[str]] = {}
     errors: list[str] = []
     for index, row in enumerate(rows, start=1):
         category = str(row.get("标准类目", "") or "").strip()
@@ -917,9 +1011,20 @@ def category_alias_rows_to_config(rows: list[dict]) -> tuple[dict[str, list[str]
         alias_text = str(row.get("同义词", "") or "")
         alias_values = [alias for alias in parse_tags(alias_text) if alias != category]
         aliases[category] = alias_values
+        brands[category] = list(current_brands.get(category, []))
     if not aliases:
         errors.append("至少需要保留一个商品类目。")
-    return aliases, errors
+    return aliases, brands, errors
+
+
+def preview_terms(values: list[str], limit: int = 4) -> str:
+    terms = [str(value).strip() for value in values if str(value).strip()]
+    if not terms:
+        return ""
+    preview = "、".join(terms[:limit])
+    if len(terms) > limit:
+        preview += f" 等 {len(terms)} 个"
+    return preview
 
 
 def format_bytes(size: int | None) -> str:
@@ -949,11 +1054,13 @@ def toggle_corpus_page_selection(item_ids: list[str]) -> None:
 def is_user_source_file(path: Path) -> bool:
     if path.name == ".gitkeep":
         return False
+    if path.suffix.lower() not in {".csv", ".docx", ".md", ".pdf", ".txt", ".xls", ".xlsx"}:
+        return False
     try:
         relative = path.relative_to(cfg.raw_data_dir)
     except ValueError:
         return False
-    return "_assets" not in relative.parts
+    return "_assets" not in relative.parts and "_generated" not in relative.parts
 
 
 def prompt_settings_path() -> Path:
@@ -1622,13 +1729,18 @@ with tab_import:
     st.markdown("### 原始文件与索引")
     render_raw_action_panel(LOCAL_TASK_API_URL)
 
+    raw_files_placeholder = st.empty()
+    with raw_files_placeholder.container():
+        render_raw_files_loading()
     raw_files = (
         sorted([path for path in cfg.raw_data_dir.glob("**/*") if path.is_file() and is_user_source_file(path)])
         if cfg.raw_data_dir.exists()
         else []
     )
     recent_raw_files = recent_raw_files_from_state()
-    render_raw_files_table(raw_files, recent_raw_files)
+    raw_files_placeholder.empty()
+    with raw_files_placeholder.container():
+        render_raw_files_table(raw_files, recent_raw_files)
 
 with tab_prompt:
     st.subheader("Prompt 设置")
@@ -1667,7 +1779,8 @@ with tab_prompt:
 
 with tab_categories:
     st.subheader("商品类目")
-    st.caption("维护商品类目和同义词。用户问到标准类目或任一同义词时，检索和结构化回答都会按同一组词扩展匹配。")
+    st.caption("维护商品类目、同义词和在售品牌。解析数据时会按品类自动汇总品牌，用于实时话术识别品牌/品类。")
+    current_brand_map = category_brands()
 
     category_rows = st.data_editor(
         pd.DataFrame(category_alias_rows()),
@@ -1685,20 +1798,50 @@ with tab_categories:
                 "同义词",
                 help="用逗号、顿号、分号或空格分隔。例如：菜刀、刀、切片工具",
             ),
+            "在售品牌数": st.column_config.TextColumn(
+                "在售品牌数",
+                disabled=True,
+                width="small",
+            ),
+            "品牌示例": st.column_config.TextColumn(
+                "品牌示例",
+                disabled=True,
+                help="只显示少量品牌，避免长文本拖慢页面。完整品牌请在下方选择类目编辑。",
+            ),
         },
         key="category_alias_editor",
     )
 
+    edited_rows = category_rows.fillna("").to_dict("records") if isinstance(category_rows, pd.DataFrame) else []
+    editable_categories = [str(row.get("标准类目", "") or "").strip() for row in edited_rows if str(row.get("标准类目", "") or "").strip()]
+    brand_edit_category = st.selectbox(
+        "编辑某个类目的完整在售品牌",
+        editable_categories,
+        index=0 if editable_categories else None,
+        placeholder="选择类目",
+        key="category_brand_edit_category",
+    )
+    brand_edit_text = ""
+    if brand_edit_category:
+        brand_edit_text = st.text_area(
+            "该类目在售品牌",
+            value="、".join(current_brand_map.get(brand_edit_category, [])),
+            height=96,
+            help="用顿号、逗号、分号或换行分隔。主表不会直接渲染这段长文本。",
+            key=f"category_brand_detail_{brand_edit_category}",
+        )
+
     action_col, hint_col = st.columns([0.18, 0.82], gap="medium")
     if action_col.button("保存类目", type="primary", use_container_width=True):
-        rows = category_rows.fillna("").to_dict("records") if isinstance(category_rows, pd.DataFrame) else []
-        aliases, category_errors = category_alias_rows_to_config(rows)
+        aliases, brands, category_errors = category_alias_rows_to_config(edited_rows, current_brand_map)
+        if brand_edit_category:
+            brands[brand_edit_category] = parse_tags(brand_edit_text)
         if category_errors:
             for error in category_errors:
                 st.warning(error)
         else:
-            save_category_aliases(aliases)
+            save_category_catalog(aliases, brands)
             get_pipeline.clear()
             st.success("商品类目已保存，下一次提问会使用新的类目和同义词。")
             st.rerun()
-    hint_col.caption("新增类目：直接在表格底部新增一行；删除类目：清空该行标准类目或用表格自带删除行操作。")
+    hint_col.caption("新增类目：直接在表格底部新增一行；删除类目：清空该行标准类目或用表格自带删除行操作。在售品牌只在下方按单个类目编辑。")
