@@ -29,8 +29,5 @@ wechatExtension/rag-bridge-test.log
 wechatExtension/preview-test-result.ini
 wechatExtension/*-test-result.ini
 
-# Local llama.cpp runtime binaries.
-tools/llama.cpp/**
-!tools/llama.cpp/
-!tools/llama.cpp/*/
-!tools/llama.cpp/*/.gitkeep
+# Local tool runtime binaries and generated files.
+tools/**
