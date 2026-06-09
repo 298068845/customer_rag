@@ -21,12 +21,7 @@ __pycache__/
 .venv/
 
 # Local runtime logs and temporary WeChat bridge files.
-streamlit.log
-streamlit.err.log
-talk-streamlit.log
-talk-streamlit.err.log
-llama-server.log
-llama-server.err.log
+*.log
 wechatExtension/send-text.txt
 wechatExtension/last-selected.txt
 wechatExtension/rag-bridge.log
