@@ -4,7 +4,6 @@ import json
 import html
 import importlib
 import re
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -13,12 +12,14 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 import customer_rag.browser_cookies as browser_cookies
+import customer_rag.corpus as corpus_module
 import customer_rag.pipeline as pipeline_module
 import customer_rag.subscription_jobs as subscription_jobs_module
-from customer_rag.config import load_config
+from customer_rag.config import load_config, save_machine_config
 from customer_rag.llama_server import build_llama_server_plan, is_llama_server_healthy
 
 browser_cookies = importlib.reload(browser_cookies)
+corpus_module = importlib.reload(corpus_module)
 pipeline_module = importlib.reload(pipeline_module)
 subscription_jobs_module = importlib.reload(subscription_jobs_module)
 from customer_rag.browser_cookies import (
@@ -251,9 +252,40 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+def queue_ui_notice(level: str, message: str) -> None:
+    renderer = getattr(st, level, st.info)
+    renderer(message)
+
+
+def render_ui_notice() -> None:
+    notice = st.session_state.pop("ui_notice", None)
+    if not isinstance(notice, dict):
+        return
+    level = str(notice.get("level", "info"))
+    message = str(notice.get("message", ""))
+    if not message:
+        return
+    renderer = getattr(st, level, st.info)
+    renderer(message)
+
+
 @st.cache_resource
 def get_pipeline(cache_version: str = "llama-server-v1") -> RagPipeline:
     return RagPipeline(load_config())
+
+
+@st.cache_data(show_spinner=False)
+def cached_corpus_items(signature: tuple[int, int]) -> list:
+    return get_pipeline().list_corpus()
+
+
+def corpus_signature() -> tuple[int, int]:
+    path = cfg.index_dir / "corpus.jsonl"
+    if not path.exists():
+        return (0, 0)
+    stat = path.stat()
+    return (stat.st_mtime_ns, stat.st_size)
 
 
 def subscription_pipeline() -> RagPipeline:
@@ -366,7 +398,7 @@ def render_raw_files_table(raw_files: list[Path], recent_files: list[str]) -> No
         )
         for row in rows
     )
-    component_id = f"raw-file-table-{int(time.time() * 1000)}"
+    component_id = "raw-file-table"
     components.html(
         f"""
         <style>
@@ -479,84 +511,15 @@ def render_raw_files_table(raw_files: list[Path], recent_files: list[str]) -> No
     )
 
 
-def render_raw_files_loading() -> None:
-    components.html(
-        """
-        <style>
-          .raw-list-loading {
-            height: 118px;
-            border: 1px solid #e6e9ef;
-            border-radius: 8px;
-            background: #fff;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            color: #5f6673;
-            padding: 16px;
-            box-sizing: border-box;
-          }
-          .raw-list-loading-title {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 14px;
-            font-size: 15px;
-            font-weight: 600;
-          }
-          .raw-list-spinner {
-            width: 16px;
-            height: 16px;
-            border: 2px solid #d9e4f8;
-            border-top-color: #2f7de1;
-            border-radius: 50%;
-            animation: raw-list-spin .8s linear infinite;
-          }
-          .raw-list-skeleton {
-            display: grid;
-            gap: 8px;
-          }
-          .raw-list-skeleton div {
-            height: 12px;
-            border-radius: 999px;
-            background: linear-gradient(90deg, #eef2f8 0%, #f7f9fc 45%, #eef2f8 90%);
-            background-size: 220% 100%;
-            animation: raw-list-shimmer 1.2s ease-in-out infinite;
-          }
-          .raw-list-skeleton div:nth-child(1) { width: 76%; }
-          .raw-list-skeleton div:nth-child(2) { width: 58%; }
-          .raw-list-skeleton div:nth-child(3) { width: 68%; }
-          @keyframes raw-list-spin {
-            to { transform: rotate(360deg); }
-          }
-          @keyframes raw-list-shimmer {
-            0% { background-position: 120% 0; }
-            100% { background-position: -120% 0; }
-          }
-        </style>
-        <div class="raw-list-loading">
-          <div class="raw-list-loading-title">
-            <span class="raw-list-spinner"></span>
-            <span>正在加载原始文件列表...</span>
-          </div>
-          <div class="raw-list-skeleton">
-            <div></div>
-            <div></div>
-            <div></div>
-          </div>
-        </div>
-        """,
-        height=126,
-        scrolling=False,
-    )
-
-
 def render_raw_action_panel(api_url: str, pending_count: int = 0) -> None:
-    component_id = f"raw-actions-{int(time.time() * 1000)}"
+    component_id = "raw-actions"
     components.html(
         f"""
         <style>
           .raw-actions {{
             display: grid;
-            grid-template-columns: minmax(180px, 0.24fr) minmax(180px, 0.22fr) minmax(190px, 0.22fr) 1fr;
-            gap: 24px;
+            grid-template-columns: minmax(170px, 0.2fr) minmax(170px, 0.2fr) minmax(170px, 0.18fr) minmax(140px, 0.16fr) 1fr;
+            gap: 18px;
             align-items: center;
             margin: 0;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -632,6 +595,10 @@ def render_raw_action_panel(api_url: str, pending_count: int = 0) -> None:
               <input type="checkbox" data-role="pending-scope" {"disabled" if pending_count <= 0 else ""}>
               <span>仅解析待入库更新文件</span>
             </label>
+            <label class="raw-scope">
+              <input type="checkbox" data-role="full-scope">
+              <span>强制全量解析</span>
+            </label>
             <div class="raw-status">
               <div class="raw-status-line" data-role="line">空闲</div>
               <div class="raw-progress"><div data-role="bar"></div></div>
@@ -644,6 +611,7 @@ def render_raw_action_panel(api_url: str, pending_count: int = 0) -> None:
             const root = document.getElementById("{component_id}");
             const buttons = Array.from(root.querySelectorAll("button[data-task]"));
             const pendingScope = root.querySelector('[data-role="pending-scope"]');
+            const fullScope = root.querySelector('[data-role="full-scope"]');
             const line = root.querySelector('[data-role="line"]');
             const bar = root.querySelector('[data-role="bar"]');
             let polling = null;
@@ -690,11 +658,19 @@ def render_raw_action_panel(api_url: str, pending_count: int = 0) -> None:
               if (polling) window.clearInterval(polling);
               polling = null;
             }}
+            if (pendingScope && fullScope) {{
+              pendingScope.addEventListener("change", () => {{
+                if (pendingScope.checked) fullScope.checked = false;
+              }});
+              fullScope.addEventListener("change", () => {{
+                if (fullScope.checked) pendingScope.checked = false;
+              }});
+            }}
             async function startTask(task) {{
               setBusy(true);
               line.textContent = "正在启动...";
               const scope = task === "rebuild_raw"
-                ? (pendingScope && pendingScope.checked ? "pending" : "all")
+                ? (pendingScope && pendingScope.checked ? "pending" : (fullScope && fullScope.checked ? "full" : "all"))
                 : "all";
               const response = await fetch(`${{api}}/raw/start?task=${{encodeURIComponent(task)}}&scope=${{encodeURIComponent(scope)}}`, {{ cache: "no-store" }});
               const state = await response.json();
@@ -720,7 +696,7 @@ def render_raw_action_panel(api_url: str, pending_count: int = 0) -> None:
 
 
 def render_subscription_task_panel(api_url: str) -> None:
-    component_id = f"subscription-task-{int(time.time() * 1000)}"
+    component_id = "subscription-task"
     components.html(
         f"""
         <style>
@@ -879,6 +855,169 @@ def render_subscription_task_panel(api_url: str) -> None:
     )
 
 
+def render_qa_query_panel(api_url: str, tags: list[str], total_items: int, top_k: int) -> None:
+    components.html(
+        f"""
+        <style>
+          .qa-panel {{display:grid;grid-template-columns:minmax(220px,.28fr) minmax(420px,.72fr);gap:28px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#2f3440}}
+          .qa-card {{border:1px solid #e6e9ef;border-radius:8px;background:#fff;padding:14px}}
+          .qa-title {{font-size:18px;font-weight:750;margin-bottom:12px}}
+          .qa-muted {{color:#697181;font-size:13px;margin:8px 0}}
+          .qa-tags {{display:grid;gap:7px;max-height:280px;overflow:auto}}
+          .qa-tags label {{display:flex;align-items:center;gap:8px;font-size:14px}}
+          .qa-tags input {{width:15px;height:15px;accent-color:#2f7de1}}
+          .qa-input-row {{display:grid;grid-template-columns:1fr 112px;gap:10px}}
+          .qa-input {{height:42px;border:1px solid #d6dbe5;border-radius:7px;padding:0 12px;font-size:15px;outline:none}}
+          .qa-input:focus {{border-color:#2f7de1;box-shadow:0 0 0 3px rgba(47,125,225,.12)}}
+          .qa-button {{height:42px;border:1px solid #1d64bb;border-radius:7px;background:#2f7de1;color:#fff;font-weight:700;cursor:pointer}}
+          .qa-button:disabled {{cursor:not-allowed;opacity:.62}}
+          .qa-result {{margin-top:16px}}
+          .qa-section-title {{font-weight:750;margin:16px 0 8px}}
+          .qa-answer,.qa-source-text {{white-space:pre-wrap;line-height:1.65}}
+          .qa-warning {{display:none;margin-top:12px;color:#8a5a00;background:#fff7e0;border:1px solid #f2d58a;border-radius:7px;padding:9px 10px}}
+          .qa-source {{border:1px solid #edf0f4;border-radius:7px;padding:10px 12px;margin-top:8px;background:#fbfcfe}}
+          .qa-source summary {{cursor:pointer;font-weight:650}}
+          @media (max-width:900px) {{.qa-panel{{grid-template-columns:1fr}}.qa-input-row{{grid-template-columns:1fr}}}}
+        </style>
+        <div id="qa-query-panel" class="qa-panel">
+          <div class="qa-card">
+            <div class="qa-title">检索范围</div>
+            <div class="qa-muted">当前最多引用 {top_k} 条资料。</div>
+            <div class="qa-muted">语料总数 {total_items}，Tag 数量 {len(tags)}</div>
+            <div class="qa-tags" data-role="tags"></div>
+          </div>
+          <div class="qa-card">
+            <div class="qa-title">知识库问答</div>
+            <div class="qa-input-row">
+              <input class="qa-input" data-role="question" placeholder="例如：有什么电饭煲？">
+              <button class="qa-button" data-role="ask">查询</button>
+            </div>
+            <div class="qa-warning" data-role="warning"></div>
+            <div class="qa-result" data-role="result"></div>
+          </div>
+        </div>
+        <script>
+          (() => {{
+            const api = "{api_url}";
+            const tags = {json.dumps(tags, ensure_ascii=False)};
+            const root = document.getElementById("qa-query-panel");
+            const tagsBox = root.querySelector('[data-role="tags"]');
+            const question = root.querySelector('[data-role="question"]');
+            const button = root.querySelector('[data-role="ask"]');
+            const warning = root.querySelector('[data-role="warning"]');
+            const result = root.querySelector('[data-role="result"]');
+            const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
+            tagsBox.innerHTML = tags.length ? tags.map((tag, index) => `<label><input type="checkbox" value="${{esc(tag)}}" id="qa-tag-${{index}}"><span>${{esc(tag)}}</span></label>`).join("") : '<div class="qa-muted">暂无可筛选 Tag</div>';
+            const selectedTags = () => Array.from(tagsBox.querySelectorAll('input:checked')).map((item) => item.value);
+            const sourceHtml = (source, index) => `<details class="qa-source"><summary>${{index + 1}}. ${{esc(source.title || "未命名")}} · 相似度 ${{Number(source.score || 0).toFixed(3)}}</summary><div class="qa-muted">${{esc(source.location || "")}}${{Array.isArray(source.tags)&&source.tags.length ? " · Tag：" + esc(source.tags.join("、")) : ""}}</div><div class="qa-source-text">${{esc(source.text || "")}}</div></details>`;
+            async function ask() {{
+              const text = question.value.trim();
+              if (!text) {{ result.innerHTML = '<div class="qa-muted">请输入问题。</div>'; return; }}
+              button.disabled = true; button.textContent = "查询中"; warning.style.display = "none";
+              result.innerHTML = '<div class="qa-muted">正在检索并生成答案，请稍候。</div>';
+              const params = new URLSearchParams({{question: text}});
+              selectedTags().forEach((tag) => params.append("tag", tag));
+              try {{
+                const response = await fetch(`${{api}}/qa/ask?${{params.toString()}}`, {{cache:"no-store"}});
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.error || response.statusText);
+                if (payload.warning) {{ warning.textContent = payload.warning; warning.style.display = "block"; }}
+                const sources = Array.isArray(payload.sources) ? payload.sources : [];
+                result.innerHTML = `<div class="qa-section-title">答案</div><div class="qa-answer">${{esc(payload.answer || "")}}</div><div class="qa-section-title">引用资料</div>${{sources.length ? sources.map(sourceHtml).join("") : '<div class="qa-muted">暂无引用资料</div>'}}`;
+              }} catch (error) {{
+                result.innerHTML = `<div class="qa-warning" style="display:block">查询失败：${{esc(error.message || error)}}</div>`;
+              }} finally {{
+                button.disabled = false; button.textContent = "查询";
+              }}
+            }}
+            button.addEventListener("click", ask);
+            question.addEventListener("keydown", (event) => {{ if (event.key === "Enter") ask(); }});
+          }})();
+        </script>
+        """,
+        height=720,
+        scrolling=True,
+    )
+
+
+def render_corpus_query_panel(api_url: str, sources: list[str], tags: list[str]) -> None:
+    components.html(
+        f"""
+        <style>
+          .corpus-query {{border:1px solid #e6e9ef;border-radius:8px;background:#fff;padding:14px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#2f3440}}
+          .cq-title {{font-size:18px;font-weight:750;margin-bottom:12px}}
+          .cq-controls {{display:grid;grid-template-columns:minmax(220px,1.4fr) minmax(160px,.9fr) minmax(160px,.9fr) 110px 150px 92px;gap:10px;align-items:end}}
+          .cq-field label {{display:block;color:#697181;font-size:12px;margin-bottom:5px}}
+          .cq-field input,.cq-field select {{width:100%;height:38px;box-sizing:border-box;border:1px solid #d6dbe5;border-radius:7px;padding:0 10px;background:#fff;color:#2f3440}}
+          .cq-field select[multiple] {{height:86px;padding:6px 8px}}
+          .cq-button {{height:38px;border:1px solid #1d64bb;border-radius:7px;background:#2f7de1;color:#fff;font-weight:700;cursor:pointer}}
+          .cq-summary {{margin:12px 0 8px;color:#697181;font-size:13px}}
+          .cq-table-wrap {{max-height:470px;overflow:auto;border:1px solid #edf0f4;border-radius:8px}}
+          .cq-table {{width:100%;min-width:920px;border-collapse:collapse;font-size:14px}}
+          .cq-table th {{position:sticky;top:0;background:#f7f8fb;color:#7c8493;text-align:left;padding:9px 10px;border-bottom:1px solid #e6e9ef}}
+          .cq-table td {{padding:9px 10px;border-bottom:1px solid #edf0f4;vertical-align:top}}
+          .cq-summary-cell {{max-width:420px;color:#4e5665;line-height:1.45}}
+          @media (max-width:1100px) {{.cq-controls{{grid-template-columns:1fr 1fr}}}}
+        </style>
+        <div id="corpus-query-panel" class="corpus-query">
+          <div class="cq-title">语料库快速查询</div>
+          <div class="cq-controls">
+            <div class="cq-field"><label>搜索</label><input data-role="keyword" placeholder="搜索标题、来源、正文"></div>
+            <div class="cq-field"><label>来源</label><select data-role="sources" multiple></select></div>
+            <div class="cq-field"><label>Tag</label><select data-role="tags" multiple></select></div>
+            <div class="cq-field"><label>图片</label><select data-role="image"><option>全部</option><option>有图片</option><option>无图片</option></select></div>
+            <div class="cq-field"><label>排序</label><select data-role="sort"><option>更新时间倒序</option><option>创建时间倒序</option><option>标题 A-Z</option></select></div>
+            <button class="cq-button" data-role="search">查询</button>
+          </div>
+          <div class="cq-summary" data-role="summary">点击查询查看语料。</div>
+          <div class="cq-table-wrap" data-role="table"></div>
+        </div>
+        <script>
+          (() => {{
+            const api = "{api_url}";
+            const sourceOptions = {json.dumps(sources, ensure_ascii=False)};
+            const tagOptions = {json.dumps(tags, ensure_ascii=False)};
+            const root = document.getElementById("corpus-query-panel");
+            const keyword = root.querySelector('[data-role="keyword"]');
+            const sourceSelect = root.querySelector('[data-role="sources"]');
+            const tagSelect = root.querySelector('[data-role="tags"]');
+            const image = root.querySelector('[data-role="image"]');
+            const sort = root.querySelector('[data-role="sort"]');
+            const button = root.querySelector('[data-role="search"]');
+            const summary = root.querySelector('[data-role="summary"]');
+            const table = root.querySelector('[data-role="table"]');
+            const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
+            const fill = (select, values) => select.innerHTML = values.map((value) => `<option value="${{esc(value)}}">${{esc(value)}}</option>`).join("");
+            const selected = (select) => Array.from(select.selectedOptions).map((option) => option.value);
+            fill(sourceSelect, sourceOptions); fill(tagSelect, tagOptions);
+            async function search() {{
+              button.disabled = true; button.textContent = "查询中"; summary.textContent = "正在查询语料。";
+              const params = new URLSearchParams({{keyword: keyword.value.trim(), image: image.value, sort: sort.value, limit: "50"}});
+              selected(sourceSelect).forEach((value) => params.append("source", value));
+              selected(tagSelect).forEach((value) => params.append("tag", value));
+              try {{
+                const response = await fetch(`${{api}}/corpus/search?${{params.toString()}}`, {{cache:"no-store"}});
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.error || response.statusText);
+                const rows = Array.isArray(payload.rows) ? payload.rows : [];
+                summary.textContent = `共 ${{payload.total || 0}} 条语料，匹配 ${{payload.matched || 0}} 条，当前显示 ${{rows.length}} 条。`;
+                table.innerHTML = `<table class="cq-table"><thead><tr><th>标题</th><th>来源</th><th>Tag</th><th>摘要</th><th>图片</th><th>更新时间</th></tr></thead><tbody>${{rows.map((row) => `<tr><td>${{esc(row.title)}}</td><td>${{esc(row.source)}}</td><td>${{esc(Array.isArray(row.tags) ? row.tags.join("、") : "")}}</td><td class="cq-summary-cell">${{esc(row.summary)}}</td><td>${{Number(row.image_count || 0)}}</td><td>${{esc(row.updated_at)}}</td></tr>`).join("")}}</tbody></table>`;
+              }} catch (error) {{
+                summary.textContent = `查询失败：${{String(error.message || error)}}`;
+              }} finally {{
+                button.disabled = false; button.textContent = "查询";
+              }}
+            }}
+            button.addEventListener("click", search);
+            keyword.addEventListener("keydown", (event) => {{ if (event.key === "Enter") search(); }});
+          }})();
+        </script>
+        """,
+        height=650,
+        scrolling=True,
+    )
+
+
 def existing_images(paths: list[str]) -> list[str]:
     return [path for path in paths if Path(path).exists()]
 
@@ -945,36 +1084,6 @@ def source_label(source: str) -> str:
     if source == "manual":
         return "手动录入"
     return Path(source).name
-
-
-def format_elapsed(seconds: float) -> str:
-    total = max(0, int(seconds))
-    minutes, secs = divmod(total, 60)
-    if minutes:
-        return f"{minutes}分{secs:02d}秒"
-    return f"{secs}秒"
-
-
-def make_task_progress_updater(progress_bar, status_slot, task_name: str):
-    started_at = time.monotonic()
-    last_percent = 0
-
-    def update(percent: int, message: str) -> None:
-        nonlocal last_percent
-        percent = max(0, min(percent, 100))
-        last_percent = percent
-        elapsed = format_elapsed(time.monotonic() - started_at)
-        updated_at = datetime.now().strftime("%H:%M:%S")
-        progress_bar.progress(
-            percent,
-            text=f"{task_name} {percent}%：{message}",
-        )
-        status_slot.caption(
-            f"状态：运行中｜耗时 {elapsed}｜刷新时间 {updated_at}｜"
-            "如果长时间停在同一阶段，优先看这行时间是否仍在刷新。"
-        )
-
-    return update
 
 
 def parse_tags(text: str) -> list[str]:
@@ -1240,19 +1349,117 @@ def batch_add_subscription_dialog() -> None:
         new_rows = [row for row in rows if row["腾讯文档地址"] not in existing_urls]
         skipped = len(rows) - len(new_rows)
         st.session_state["import_subscription_rows"] = new_rows + existing_rows
-        st.success(f"已增加 {len(new_rows)} 个订阅" + (f"，跳过重复 {skipped} 个" if skipped else ""))
-        st.rerun()
+        st.session_state["import_subscription_editor_version"] = (
+            int(st.session_state.get("import_subscription_editor_version", 0)) + 1
+        )
+        queue_ui_notice("success", f"已增加 {len(new_rows)} 个订阅" + (f"，跳过重复 {skipped} 个" if skipped else ""))
+
+
+@st.dialog("本机性能设置", width="large")
+def machine_settings_dialog() -> None:
+    current = load_config()
+    batch_options = [16, 32, 64, 128, 256]
+    thread_options = [1, 2, 4, 6, 8, 12, 16, 24, 32]
+    gpu_layer_options = [0, 8, 16, 24, 32, 48, 64, 99]
+    ctx_options = [2048, 4096, 8192, 16384]
+    llm_batch_options = [64, 128, 256, 512, 1024]
+
+    with st.form("machine_settings_form"):
+        st.subheader("常用性能")
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            embedding_batch_size = st.selectbox(
+                "Embedding batch size",
+                batch_options,
+                index=batch_options.index(current.embedding_batch_size)
+                if current.embedding_batch_size in batch_options
+                else batch_options.index(32),
+            )
+        with col_b:
+            n_threads = st.selectbox(
+                "LLM CPU 线程数",
+                thread_options,
+                index=thread_options.index(current.llm.n_threads)
+                if current.llm.n_threads in thread_options
+                else thread_options.index(4),
+            )
+        with col_c:
+            n_gpu_layers = st.selectbox(
+                "LLM GPU 层数",
+                gpu_layer_options,
+                index=gpu_layer_options.index(current.llm.n_gpu_layers)
+                if current.llm.n_gpu_layers in gpu_layer_options
+                else 0,
+            )
+
+        st.subheader("高级性能")
+        col_d, col_e = st.columns(2)
+        with col_d:
+            n_ctx = st.selectbox(
+                "LLM 上下文长度",
+                ctx_options,
+                index=ctx_options.index(current.llm.n_ctx)
+                if current.llm.n_ctx in ctx_options
+                else ctx_options.index(4096),
+            )
+        with col_e:
+            num_batch = st.selectbox(
+                "LLM num_batch",
+                llm_batch_options,
+                index=llm_batch_options.index(current.llm.num_batch)
+                if current.llm.num_batch in llm_batch_options
+                else llm_batch_options.index(128),
+            )
+
+        with st.expander("模型路径"):
+            embedding_model_path = st.text_input("Embedding 模型路径", value=str(current.embedding_model_path))
+            llm_model_path = st.text_input("LLM 模型路径", value=str(current.llm_model_path))
+
+        submitted = st.form_submit_button("保存设置", type="primary")
+        if submitted:
+            save_machine_config(
+                {
+                    "embedding_model_path": embedding_model_path.strip() or str(current.embedding_model_path),
+                    "llm_model_path": llm_model_path.strip() or str(current.llm_model_path),
+                    "embedding_batch_size": int(embedding_batch_size),
+                },
+                {
+                    "n_threads": int(n_threads),
+                    "n_gpu_layers": int(n_gpu_layers),
+                    "n_ctx": int(n_ctx),
+                    "num_batch": int(num_batch),
+                },
+            )
+            queue_ui_notice("success", "本机性能设置已保存。Embedding 配置将在下次重建索引时生效，LLM 配置需重启服务后生效。")
+            st.rerun()
 
 
 cfg = load_config()
 pipeline = get_pipeline()
 system_prompt = load_system_prompt()
 
-items = pipeline.list_corpus()
+items = cached_corpus_items(corpus_signature())
 tag_options = sorted({tag for item in items for tag in item.tags})
 
-st.title("本地腾讯文档 RAG")
-st.caption("离线语料管理、向量检索和本地大模型问答")
+
+def submit_qa_query() -> None:
+    question = str(st.session_state.get("qa_query_question", "")).strip()
+    if not question:
+        return
+    st.session_state["qa_query_result"] = pipeline.ask(
+        question,
+        system_prompt=current_system_prompt(),
+        tags=list(st.session_state.get("qa_query_tags", [])),
+    )
+
+title_col, settings_col = st.columns([1, 0.16], vertical_alignment="center")
+with title_col:
+    st.title("本地腾讯文档 RAG")
+    st.caption("离线语料管理、向量检索和本地大模型问答")
+with settings_col:
+    if st.button("设置", key="machine_settings_open", use_container_width=True):
+        machine_settings_dialog()
+render_ui_notice()
 
 tab_qa, tab_corpus, tab_import, tab_prompt, tab_categories = st.tabs(
     ["问答", "语料管理", "导入文件", "Prompt 设置", "商品类目"]
@@ -1263,7 +1470,12 @@ with tab_qa:
 
     with left:
         st.subheader("检索范围")
-        qa_tags = st.multiselect("按 Tag 限定", tag_options, placeholder="默认检索全部语料")
+        qa_tags_input = st.multiselect(
+            "按 Tag 限定",
+            tag_options,
+            key="qa_query_tags",
+            placeholder="默认检索全部语料",
+        )
         st.caption(f"当前最多引用 {cfg.top_k} 条资料。")
         st.divider()
         st.metric("语料总数", len(items))
@@ -1273,12 +1485,15 @@ with tab_qa:
         st.subheader("知识库问答")
         if not items:
             st.info("当前语料库为空，请先在“导入文件”或“语料管理”中添加语料。")
+        st.text_input(
+            "问题",
+            key="qa_query_question",
+            placeholder="例如：有什么电饭煲？",
+            on_change=submit_qa_query,
+        )
 
-        question = st.text_input("问题", placeholder="例如：有什么电饭煲？")
-        if question:
-            with st.spinner("正在检索并生成答案..."):
-                result = pipeline.ask(question, system_prompt=current_system_prompt(), tags=qa_tags)
-
+        result = st.session_state.get("qa_query_result")
+        if result:
             if result.warning:
                 st.warning(result.warning)
 
@@ -1298,7 +1513,7 @@ with tab_qa:
 with tab_corpus:
     st.subheader("语料管理")
 
-    items = pipeline.list_corpus()
+    items = cached_corpus_items(corpus_signature())
     tag_options = sorted({tag for item in items for tag in item.tags})
     source_options = sorted({source_label(item.source) for item in items})
 
@@ -1387,8 +1602,7 @@ with tab_corpus:
                     st.warning("请先输入要追加的 Tag。")
                 else:
                     changed = pipeline.add_tags_to_corpus_many(pending_selected_ids, tags_to_add)
-                    st.success(f"已更新 {changed} 条语料的 Tag。请重建向量索引后用于按分类检索。")
-                    st.rerun()
+                    queue_ui_notice("success", f"已更新 {changed} 条语料的 Tag。请重建向量索引后用于按分类检索。")
             if toolbar[5].button("删除已选", type="secondary", use_container_width=True):
                 if not pending_selected_ids:
                     st.info("请先勾选语料。")
@@ -1405,9 +1619,8 @@ with tab_corpus:
                 if submitted:
                     try:
                         pipeline.add_corpus(title, text, tags=parse_tags(tags_input))
-                        st.success("已新增语料。请重建向量索引后用于问答。")
+                        queue_ui_notice("success", "已新增语料。请重建向量索引后用于问答。")
                         st.session_state["show_add_corpus_form"] = False
-                        st.rerun()
                     except ValueError as exc:
                         st.error(str(exc))
 
@@ -1475,14 +1688,12 @@ with tab_corpus:
                 warn_cols[0].warning("确认删除已选语料？")
                 if warn_cols[1].button("确认删除", type="secondary", use_container_width=True):
                     removed = pipeline.delete_corpus_many(selected_ids)
-                    st.success(f"已删除 {removed} 条语料。请重建向量索引后用于问答。")
+                    queue_ui_notice("success", f"已删除 {removed} 条语料。请重建向量索引后用于问答。")
                     for item_id in selected_ids:
                         st.session_state.pop(f"corpus_selected_{item_id}", None)
                     st.session_state["confirm_delete_selected"] = False
-                    st.rerun()
                 if warn_cols[2].button("取消", use_container_width=True):
                     st.session_state["confirm_delete_selected"] = False
-                    st.rerun()
 
     item_by_id = {item.id: item for item in items}
     editing_id = st.session_state.get("editing_corpus_id")
@@ -1501,14 +1712,12 @@ with tab_corpus:
             if save_clicked:
                 try:
                     pipeline.update_corpus(item.id, new_title, new_text, new_location, tags=parse_tags(new_tags))
-                    st.success("已保存修改。请重建向量索引后用于问答。")
+                    queue_ui_notice("success", "已保存修改。请重建向量索引后用于问答。")
                     st.session_state.pop("editing_corpus_id", None)
-                    st.rerun()
                 except ValueError as exc:
                     st.error(str(exc))
             if cancel_clicked:
                 st.session_state.pop("editing_corpus_id", None)
-                st.rerun()
 
 with tab_import:
     st.subheader("导入文件")
@@ -1577,29 +1786,27 @@ with tab_import:
             column_order=["", "名称", "最后修改", "状态", "腾讯文档地址", "Tag"],
         )
 
-    @st.fragment(run_every="2s")
-    def render_live_subscription_table() -> None:
-        rows = subscription_rows_from_items(load_subscriptions(subscriptions_path()))
-        st.session_state["import_subscription_rows"] = rows
-        render_subscription_dataframe(rows)
-
     left, right = st.columns([0.55, 0.45], gap="large")
     with left:
         title_col, login_col, cookie_col = st.columns([0.48, 0.31, 0.21], gap="small")
         title_col.markdown('<div class="import-title">订阅获取</div>', unsafe_allow_html=True)
-        login_window_open = is_tencent_docs_login_window_open()
-        login_button_label = "点击获取 Cookie" if login_window_open else "登录腾讯文档"
+        login_button_label = "点击获取 Cookie" if st.session_state.get("tencent_docs_login_window_open", False) else "登录腾讯文档"
         if login_col.button(login_button_label, use_container_width=True, disabled=job_running, key="login_tencent_docs"):
+            login_window_open = bool(st.session_state.get("tencent_docs_login_window_open", False))
+            if not login_window_open:
+                login_window_open = is_tencent_docs_login_window_open()
             if login_window_open:
                 try:
                     cookie_result = read_tencent_docs_cookie_from_login_window()
                     st.session_state["qq_cookie"] = cookie_result.cookie
+                    st.session_state["tencent_docs_login_window_open"] = True
                     st.success(f"Cookie 已获取：{cookie_result.count} 个")
                 except RuntimeError as exc:
                     st.warning(f"读取 Cookie 失败：{exc}")
             else:
                 try:
                     open_tencent_docs_login_window()
+                    st.session_state["tencent_docs_login_window_open"] = True
                     st.info("登录窗口已打开，完成登录后点击“点击获取 Cookie”。")
                 except RuntimeError as exc:
                     st.warning(f"打开登录窗口失败：{exc}")
@@ -1624,17 +1831,19 @@ with tab_import:
         base_subscription_rows = subscription_rows_from_items(subscriptions)
         if "import_subscription_rows" not in st.session_state:
             st.session_state["import_subscription_rows"] = base_subscription_rows
+        if "import_subscription_editor_version" not in st.session_state:
+            st.session_state["import_subscription_editor_version"] = 0
         subscription_rows = list(st.session_state["import_subscription_rows"])
         if add_clicked:
             batch_add_subscription_dialog()
 
         if job_running:
-            render_live_subscription_table()
-            edited_subscription_records = list(st.session_state.get("import_subscription_rows", base_subscription_rows))
+            render_subscription_dataframe(base_subscription_rows)
+            edited_subscription_records = base_subscription_rows
         else:
             edited_subscriptions = st.data_editor(
                 pd.DataFrame(subscription_rows),
-                key="tencent_doc_subscriptions_v2",
+                key=f"tencent_doc_subscriptions_v2_{st.session_state['import_subscription_editor_version']}",
                 hide_index=True,
                 use_container_width=True,
                 height=subscription_table_height(len(subscription_rows)),
@@ -1725,43 +1934,37 @@ with tab_import:
 
         if upload_clicked and uploaded_files:
             saved_paths = save_uploaded_files(uploaded_files)
-            with st.spinner("正在解析文件、写入语料库并重建索引..."):
-                try:
-                    default_tags = parse_tags(shared_tags)
-                    path_tags = []
-                    for index, (saved_path, uploaded_file) in enumerate(zip(saved_paths, uploaded_files)):
-                        file_tag_text = st.session_state.get(
-                            uploaded_file_tag_key(index, uploaded_file.name, uploaded_file.size),
-                            "",
-                        )
-                        file_tags = parse_tags(file_tag_text) if str(file_tag_text).strip() else default_tags
-                        path_tags.append((saved_path, file_tags))
-                    stats = pipeline.ingest_files_with_tags(path_tags)
-                    remember_recent_raw_files(saved_paths)
-                    st.success(f"完成：解析 {stats['documents']} 个文档单元，新增 {stats['items']} 条语料")
-                    if stats.get("index_error"):
-                        st.warning(f"语料已导入，但索引暂未重建：{stats['index_error']}")
-                    else:
-                        st.success(f"索引已重建：{stats['chunks']} 个片段")
-                except RuntimeError as exc:
-                    st.error(str(exc))
+            try:
+                default_tags = parse_tags(shared_tags)
+                path_tags = []
+                for index, (saved_path, uploaded_file) in enumerate(zip(saved_paths, uploaded_files)):
+                    file_tag_text = st.session_state.get(
+                        uploaded_file_tag_key(index, uploaded_file.name, uploaded_file.size),
+                        "",
+                    )
+                    file_tags = parse_tags(file_tag_text) if str(file_tag_text).strip() else default_tags
+                    path_tags.append((saved_path, file_tags))
+                stats = pipeline.ingest_files_with_tags(path_tags)
+                remember_recent_raw_files(saved_paths)
+                st.success(f"完成：解析 {stats['documents']} 个文档单元，新增 {stats['items']} 条语料")
+                if stats.get("index_error"):
+                    st.warning(f"语料已导入，但索引暂未重建：{stats['index_error']}")
+                else:
+                    st.success(f"索引已重建：{stats['chunks']} 个片段")
+            except RuntimeError as exc:
+                st.error(str(exc))
 
     st.divider()
     st.markdown("### 原始文件与索引")
     recent_raw_files = recent_raw_files_from_state()
     render_raw_action_panel(LOCAL_TASK_API_URL, pending_count=len(recent_raw_files))
 
-    raw_files_placeholder = st.empty()
-    with raw_files_placeholder.container():
-        render_raw_files_loading()
     raw_files = (
         sorted([path for path in cfg.raw_data_dir.glob("**/*") if path.is_file() and is_user_source_file(path)])
         if cfg.raw_data_dir.exists()
         else []
     )
-    raw_files_placeholder.empty()
-    with raw_files_placeholder.container():
-        render_raw_files_table(raw_files, recent_raw_files)
+    render_raw_files_table(raw_files, recent_raw_files)
 
 with tab_prompt:
     st.subheader("Prompt 设置")
@@ -1775,8 +1978,7 @@ with tab_prompt:
             save_prompt = st.form_submit_button("保存 Prompt", type="primary")
         if save_prompt:
             save_system_prompt(edited_prompt)
-            st.success("Prompt 已保存，并已立即生效。")
-            st.rerun()
+            queue_ui_notice("success", "Prompt 已保存，并已立即生效。")
 
     with right:
         st.markdown("#### 本地模型")
@@ -1795,8 +1997,7 @@ with tab_prompt:
         st.divider()
         if st.button("恢复默认 Prompt", use_container_width=True):
             save_system_prompt(DEFAULT_SYSTEM_PROMPT)
-            st.success("已恢复默认 Prompt。")
-            st.rerun()
+            queue_ui_notice("success", "已恢复默认 Prompt。")
 
 with tab_categories:
     st.subheader("商品类目")
@@ -1863,6 +2064,5 @@ with tab_categories:
         else:
             save_category_catalog(aliases, brands)
             get_pipeline.clear()
-            st.success("商品类目已保存，下一次提问会使用新的类目和同义词。")
-            st.rerun()
+            queue_ui_notice("success", "商品类目已保存，下一次提问会使用新的类目和同义词。")
     hint_col.caption("新增类目：直接在表格底部新增一行；删除类目：清空该行标准类目或用表格自带删除行操作。在售品牌只在下方按单个类目编辑。")

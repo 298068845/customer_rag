@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -31,6 +33,7 @@ class VectorStore:
         self.batch_size = max(1, batch_size)
         self.index_path = index_dir / "faiss.index"
         self.meta_path = index_dir / "chunks.jsonl"
+        self.embedding_cache_path = index_dir / "embedding_cache.npz"
         self.model: Any | None = None
         self.index: Any | None = None
         self.chunks: list[Chunk] = []
@@ -47,8 +50,8 @@ class VectorStore:
             return
 
         emit(1, f"准备编码 {len(chunks)} 个文本片段")
-        embeddings = self._embed(
-            [chunk.text for chunk in chunks],
+        embeddings = self._embed_chunks(
+            chunks,
             progress_callback=lambda percent, message: emit(1 + int(percent * 0.88), message),
         )
         emit(92, "正在创建 FAISS 内存索引")
@@ -137,6 +140,41 @@ class VectorStore:
             emit(2 + int(done / total * 98), f"正在生成向量 {done}/{total}")
         return np.vstack(batches)
 
+    def _embed_chunks(self, chunks: list[Chunk], progress_callback: BuildProgressCallback | None = None) -> Any:
+        def emit(percent: int, message: str) -> None:
+            if progress_callback:
+                progress_callback(max(0, min(percent, 100)), message)
+
+        np = _get_numpy()
+        total = len(chunks)
+        emit(0, "正在读取 embedding 缓存")
+        cache = self._load_embedding_cache()
+        keys = [_embedding_cache_key(self.embedding_model_path, chunk.text) for chunk in chunks]
+        missing_keys: list[str] = []
+        missing_texts: list[str] = []
+        for key, chunk in zip(keys, chunks):
+            if key not in cache:
+                missing_keys.append(key)
+                missing_texts.append(chunk.text)
+
+        if missing_texts:
+            emit(2, f"缓存命中 {total - len(missing_texts)}/{total}，开始编码 {len(missing_texts)} 个片段")
+            encoded = self._embed(
+                missing_texts,
+                progress_callback=lambda percent, message: emit(2 + int(percent * 0.88), message),
+            )
+            for key, embedding in zip(missing_keys, encoded):
+                cache[key] = np.asarray(embedding, dtype="float32")
+        else:
+            emit(90, f"embedding 缓存全部命中：{total} 个片段")
+
+        emit(92, "正在整理向量矩阵")
+        ordered = [cache[key] for key in keys]
+        embeddings = np.vstack(ordered).astype("float32", copy=False)
+        self._write_embedding_cache({key: cache[key] for key in set(keys)})
+        emit(100, "embedding 向量准备完成")
+        return embeddings
+
     def _embed_query(self, query: str) -> Any:
         cached = self._query_embedding_cache.get(query)
         if cached is not None:
@@ -150,12 +188,38 @@ class VectorStore:
 
     def clear(self) -> None:
         self.index_dir.mkdir(parents=True, exist_ok=True)
-        for path in (self.index_path, self.meta_path):
+        for path in (self.index_path, self.meta_path, self.embedding_cache_path):
             if path.exists():
                 path.unlink()
         self.index = None
         self.chunks = []
         self._query_embedding_cache.clear()
+
+    def _load_embedding_cache(self) -> dict[str, Any]:
+        if not self.embedding_cache_path.exists():
+            return {}
+        np = _get_numpy()
+        try:
+            payload = np.load(self.embedding_cache_path)
+            keys = [str(key) for key in payload["keys"]]
+            embeddings = payload["embeddings"].astype("float32", copy=False)
+        except Exception:
+            return {}
+        if len(keys) != len(embeddings):
+            return {}
+        return {key: embeddings[index] for index, key in enumerate(keys)}
+
+    def _write_embedding_cache(self, cache: dict[str, Any]) -> None:
+        if not cache:
+            return
+        np = _get_numpy()
+        self.index_dir.mkdir(parents=True, exist_ok=True)
+        keys = sorted(cache)
+        embeddings = np.vstack([cache[key] for key in keys]).astype("float32", copy=False)
+        tmp_path = self.embedding_cache_path.with_name(f"{self.embedding_cache_path.name}.tmp")
+        with tmp_path.open("wb") as fp:
+            np.savez_compressed(fp, keys=np.asarray(keys), embeddings=embeddings)
+        os.replace(tmp_path, self.embedding_cache_path)
 
     def _get_model(self) -> Any:
         if self.model is None:
@@ -186,3 +250,8 @@ def _get_numpy() -> Any:
     except ModuleNotFoundError as exc:
         raise RuntimeError("缺少 numpy 依赖，请先运行：pip install numpy") from exc
     return np
+
+
+def _embedding_cache_key(model_path: Path, text: str) -> str:
+    payload = f"v1\n{Path(model_path).resolve()}\n{text}".encode("utf-8", errors="ignore")
+    return hashlib.sha256(payload).hexdigest()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 import queue
@@ -12,18 +13,20 @@ from customer_rag.answering import build_structured_product_answer, is_product_q
 from customer_rag.attributes import NumericCondition, attributes_match, attributes_score, parse_numeric_conditions
 from customer_rag.category_config import add_category_terms
 from customer_rag.category_config import category_aliases
+from customer_rag.category_config import category_brands
 from customer_rag.category_config import category_terms as configured_category_terms
 from customer_rag.corpus import CorpusItem, CorpusStore
 from customer_rag.config import RagConfig
 from customer_rag.llm import LocalLlm, strip_thinking
 from customer_rag.loaders import LoadedDocument, brand_tags_from_text, category_tags_from_text
-from customer_rag.loaders import load_document_file, load_documents
+from customer_rag.loaders import list_supported_files, load_document_file, load_documents
 from customer_rag.splitter import split_documents
 from customer_rag.tencent_docs import load_subscriptions, subscription_output_path
 from customer_rag.vector_store import RetrievedChunk, VectorStore
 
 
 FUZZY_FALLBACK_SECONDS = 3.0
+RAW_PARSE_CACHE_VERSION = "v1"
 
 
 @dataclass(frozen=True)
@@ -66,6 +69,7 @@ class RagPipeline:
         self,
         *,
         rebuild_index: bool = True,
+        force: bool = False,
         progress_callback: Callable[[int, str], None] | None = None,
     ) -> dict[str, int | str | None]:
         def emit(percent: int, message: str) -> None:
@@ -79,11 +83,26 @@ class RagPipeline:
                 emit(5 + int(done / total * 55), f"正在解析文件 {done}/{total}：{path.name}")
 
         source_tags = self._source_tags_from_subscriptions()
-        documents = load_documents(
-            self.config.raw_data_dir,
-            progress_callback=load_progress,
-            source_tags=source_tags,
-        )
+        if force:
+            raw_paths = list_supported_files(self.config.raw_data_dir)
+            documents = load_documents(
+                self.config.raw_data_dir,
+                progress_callback=load_progress,
+                source_tags=source_tags,
+            )
+            reused_files = 0
+            parsed_files = len(raw_paths)
+            self._write_raw_parse_manifest(
+                {
+                    _raw_path_key(path): _raw_file_signature(path, _tags_for_raw_path(path, source_tags))
+                    for path in raw_paths
+                }
+            )
+        else:
+            documents, parsed_files, reused_files = self._load_raw_documents_incremental(
+                source_tags=source_tags,
+                progress_callback=load_progress,
+            )
         emit(62, "正在同步商品类目配置")
         added_categories = add_category_terms(
             _category_terms_from_documents(documents, source_tags),
@@ -111,7 +130,66 @@ class RagPipeline:
             "chunks": chunks,
             "index_error": index_error,
             "added_categories": added_categories,
+            "parsed_files": parsed_files,
+            "reused_files": reused_files,
         }
+
+    def _load_raw_documents_incremental(
+        self,
+        *,
+        source_tags: dict[str, list[str]],
+        progress_callback: Callable[[int, int, Path], None] | None = None,
+    ) -> tuple[list[LoadedDocument], int, int]:
+        paths = list_supported_files(self.config.raw_data_dir)
+        manifest = self._read_raw_parse_manifest()
+        previous_items = _items_by_source(self.corpus.list_items())
+        documents: list[LoadedDocument] = []
+        next_manifest: dict[str, dict] = {}
+        parsed_files = 0
+        reused_files = 0
+        total = len(paths)
+
+        for index, path in enumerate(paths, start=1):
+            signature = _raw_file_signature(path, _tags_for_raw_path(path, source_tags))
+            key = signature["key"]
+            previous_signature = manifest.get(key)
+            reusable_items = previous_items.get(key, [])
+            if previous_signature == signature and reusable_items:
+                documents.extend(_documents_from_items(reusable_items))
+                reused_files += 1
+            else:
+                documents.extend(load_document_file(path, tags=signature["tags"]))
+                parsed_files += 1
+            next_manifest[key] = signature
+            if progress_callback:
+                progress_callback(index, total, path)
+
+        self._write_raw_parse_manifest(next_manifest)
+        return [doc for doc in documents if doc.text.strip()], parsed_files, reused_files
+
+    def _raw_parse_manifest_path(self) -> Path:
+        return self.config.index_dir / "raw_parse_manifest.json"
+
+    def _read_raw_parse_manifest(self) -> dict[str, dict]:
+        path = self._raw_parse_manifest_path()
+        if not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if payload.get("version") != RAW_PARSE_CACHE_VERSION:
+            return {}
+        files = payload.get("files", {})
+        return files if isinstance(files, dict) else {}
+
+    def _write_raw_parse_manifest(self, files: dict[str, dict]) -> None:
+        path = self._raw_parse_manifest_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"version": RAW_PARSE_CACHE_VERSION, "files": files}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     def ingest_files(self, paths: list[Path], tags: list[str] | None = None) -> dict[str, int]:
         documents = []
@@ -183,6 +261,7 @@ class RagPipeline:
             category_brand_map=_category_brand_map_from_documents(documents),
         )
         self.corpus.add_documents(documents)
+        self._update_raw_parse_manifest_for_paths(path_tags)
         if rebuild_index:
             stats = self._rebuild_stats(documents=len(documents), before=before)
         else:
@@ -195,6 +274,20 @@ class RagPipeline:
         stats["removed"] = removed
         stats["added_categories"] = added_categories
         return stats
+
+    def _update_raw_parse_manifest_for_paths(self, path_tags: list[tuple[Path, list[str]]]) -> None:
+        if not path_tags:
+            return
+        manifest = self._read_raw_parse_manifest()
+        changed = False
+        for path, tags in path_tags:
+            if not path.exists() or path.suffix.lower() not in {".txt", ".md", ".csv", ".xlsx", ".xls", ".docx", ".pdf"}:
+                continue
+            signature = _raw_file_signature(path, tags)
+            manifest[signature["key"]] = signature
+            changed = True
+        if changed:
+            self._write_raw_parse_manifest(manifest)
 
     def rebuild_index(self, progress_callback: Callable[[int, str], None] | None = None) -> int:
         def emit(percent: int, message: str) -> None:
@@ -802,7 +895,7 @@ def _looks_like_sparse_id_mapping(text: str) -> bool:
 
 
 def _known_brand_terms(query: str) -> list[str]:
-    known_brands = (
+    known_brands = [
         "美的",
         "东芝",
         "九阳",
@@ -818,9 +911,12 @@ def _known_brand_terms(query: str) -> list[str]:
         "雅兰",
         "菠萝斑马",
         "OOU",
-    )
+    ]
+    for brands in category_brands().values():
+        known_brands.extend(brands)
     lowered = query.lower()
-    return [brand.lower() for brand in known_brands if brand in query or brand.lower() in lowered]
+    matched = [brand.lower() for brand in known_brands if brand in query or brand.lower() in lowered]
+    return list(dict.fromkeys(matched))
 
 
 def _query_without_brands(query: str, brand_terms: list[str]) -> list[str]:
@@ -951,6 +1047,64 @@ def _build_tag_index(items: list[CorpusItem]) -> dict[str, list[CorpusItem]]:
             if value:
                 index.setdefault(value, []).append(item)
     return index
+
+
+def _items_by_source(items: list[CorpusItem]) -> dict[str, list[CorpusItem]]:
+    grouped: dict[str, list[CorpusItem]] = {}
+    for item in items:
+        grouped.setdefault(_raw_path_key(Path(item.source)), []).append(item)
+    return grouped
+
+
+def _documents_from_items(items: list[CorpusItem]) -> list[LoadedDocument]:
+    return [
+        LoadedDocument(
+            text=item.text,
+            source=item.source,
+            title=item.title,
+            location=item.location,
+            image_paths=item.image_paths,
+            tags=item.tags,
+            attributes=item.attributes,
+        )
+        for item in items
+    ]
+
+
+def _raw_file_signature(path: Path, tags: list[str]) -> dict:
+    stat = path.stat()
+    return {
+        "key": _raw_path_key(path),
+        "size": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+        "tags": _clean_tags(tags),
+        "parser_version": RAW_PARSE_CACHE_VERSION,
+    }
+
+
+def _tags_for_raw_path(path: Path, source_tags: dict[str, list[str]]) -> list[str]:
+    keys = _path_keys_for_raw(path)
+    for key, tags in source_tags.items():
+        if _normalize_path_value(key) in keys:
+            return _clean_tags(tags)
+    return []
+
+
+def _path_keys_for_raw(path: Path) -> set[str]:
+    keys = {str(path), str(path.resolve()), path.name, path.stem}
+    try:
+        keys.add(str(path.resolve().relative_to(Path.cwd().resolve())))
+    except ValueError:
+        pass
+    return {_normalize_path_value(value) for value in keys}
+
+
+def _raw_path_key(path: Path) -> str:
+    return _normalize_path_value(path.resolve())
+
+
+def _normalize_path_value(value: str | Path) -> str:
+    return str(value).replace("\\", "/").lower()
 
 
 def _category_tag_candidates(question: str) -> list[str]:

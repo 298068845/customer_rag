@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import hashlib
 
+from customer_rag.category_config import category_brands
 from customer_rag.category_config import category_terms as configured_category_terms
 from customer_rag.vector_store import RetrievedChunk
 
@@ -318,9 +319,12 @@ def _matches_product_question(question: str, product_name: str, fields: dict[str
 
 
 def _known_brand_terms(query: str) -> list[str]:
-    known_brands = ("美的", "东芝", "九阳", "大宇", "飞利浦", "西屋", "宜盾普", "源氏木语", "菠萝斑马", "OOU")
+    known_brands = ["美的", "东芝", "九阳", "大宇", "飞利浦", "西屋", "宜盾普", "源氏木语", "菠萝斑马", "OOU"]
+    for brands in category_brands().values():
+        known_brands.extend(brands)
     lowered = query.lower()
-    return [brand for brand in known_brands if brand in query or brand.lower() in lowered]
+    matched = [brand for brand in known_brands if brand in query or brand.lower() in lowered]
+    return list(dict.fromkeys(matched))
 
 
 def _query_without_brands(query: str, brand_terms: list[str]) -> list[str]:

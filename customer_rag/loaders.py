@@ -40,17 +40,24 @@ def load_documents(
 ) -> list[LoadedDocument]:
     raw_data_dir.mkdir(parents=True, exist_ok=True)
     docs: list[LoadedDocument] = []
-    paths = [
-        path
-        for path in sorted(raw_data_dir.rglob("*"))
-        if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
-    ]
+    paths = list_supported_files(raw_data_dir)
     total = len(paths)
     for index, path in enumerate(paths, start=1):
         docs.extend(load_document_file(path, tags=_tags_for_source(path, source_tags or {})))
         if progress_callback:
             progress_callback(index, total, path)
     return [doc for doc in docs if doc.text.strip()]
+
+
+def list_supported_files(raw_data_dir: Path) -> list[Path]:
+    raw_data_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[Path] = []
+    for path in sorted(raw_data_dir.rglob("*")):
+        if "_generated" in path.parts:
+            continue
+        if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES:
+            paths.append(path)
+    return paths
 
 
 def load_document_file(path: Path, tags: list[str] | None = None) -> list[LoadedDocument]:
@@ -404,10 +411,16 @@ def _read_sheet_hyperlinks(
 
 def _with_cell_hyperlinks(text: str, links: list[str]) -> str:
     value = str(text or "").strip()
+    if _contains_url(value):
+        return value
     for link in links:
         if link and link not in value:
             value = f"{value}\n{link}" if value else link
     return value
+
+
+def _contains_url(value: str) -> bool:
+    return bool(re.search(r"https?://\S+", str(value or ""), flags=re.IGNORECASE))
 
 
 def _cell_range_refs(ref: str) -> list[tuple[int, int]]:

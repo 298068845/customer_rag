@@ -5,6 +5,9 @@ import re
 from pathlib import Path
 
 
+IMAGE_RENDER_VERSION = "v1"
+
+
 def create_order_flow_image(
     product_info: str,
     order_flow: str,
@@ -21,6 +24,14 @@ def create_order_flow_image(
     ]
     if not any(value for _, value in cells):
         return None
+
+    digest_text = "|".join(value for _, value in cells)
+    digest = hashlib.sha1(f"{IMAGE_RENDER_VERSION}:{source_path}:{row_number}:{digest_text}".encode("utf-8")).hexdigest()[:16]
+    safe_stem = _safe_name(source_path.stem)
+    target_dir = output_root / safe_stem
+    target = target_dir / f"row-{row_number}-{digest}.png"
+    if target.exists():
+        return str(target)
 
     try:
         from PIL import Image, ImageDraw, ImageFont
@@ -71,12 +82,7 @@ def create_order_flow_image(
             y += line_height + line_gap
         x = right
 
-    digest_text = "|".join(value for _, value in cells)
-    digest = hashlib.sha1(f"{source_path}:{row_number}:{digest_text}".encode("utf-8")).hexdigest()[:16]
-    safe_stem = _safe_name(source_path.stem)
-    target_dir = output_root / safe_stem
     target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / f"row-{row_number}-{digest}.png"
     image.save(target)
     return str(target)
 

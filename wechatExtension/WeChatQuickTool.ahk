@@ -992,6 +992,19 @@ GetInputAnchor(hwnd, &anchorX, &anchorY) {
     WinGetPos &winX, &winY, &winW, &winH, "ahk_id " hwnd
     inputX := ReadIntConfig("send", "input_x", 520)
     inputY := ReadIntConfig("send", "input_y", 690)
+    ratioX := ReadFloatConfig("send", "input_ratio_x", -1)
+    ratioY := ReadFloatConfig("send", "input_ratio_y", -1)
+    savedWinW := ReadIntConfig("send", "input_window_w", 0)
+    savedWinH := ReadIntConfig("send", "input_window_h", 0)
+    canUseRatio := ratioX >= 0 && ratioX <= 1 && ratioY >= 0 && ratioY <= 1
+    windowSizeChanged := savedWinW > 0 && savedWinH > 0
+        && (Abs(winW - savedWinW) > 80 || Abs(winH - savedWinH) > 80)
+
+    if canUseRatio && (IsBadInputPoint(inputX, inputY, winW, winH) || windowSizeChanged) {
+        anchorX := winX + Clamp(Floor(winW * ratioX), 20, Max(20, winW - 20))
+        anchorY := winY + Clamp(Floor(winH * ratioY), 20, Max(20, winH - 20))
+        return
+    }
 
     if IsBadInputPoint(inputX, inputY, winW, winH) {
         anchorX := winX + Floor(winW * 0.72)
@@ -1048,13 +1061,58 @@ ApplyRoundedPreviewRegion() {
 
 CalibrateSendBoxPoint() {
     MouseGetPos &mouseX, &mouseY
-    WinGetPos &winX, &winY,,, "A"
+    targetHwnd := GetCalibrationWindowAtPoint(mouseX, mouseY)
+    if !targetHwnd {
+        targetHwnd := WinGetID("A")
+    }
+
+    WinGetPos &winX, &winY, &winW, &winH, "ahk_id " targetHwnd
     inputX := mouseX - winX
     inputY := mouseY - winY
+    inputRatioX := winW > 0 ? Round(inputX / winW, 6) : 0
+    inputRatioY := winH > 0 ? Round(inputY / winH, 6) : 0
 
     IniWrite inputX, CONFIG_PATH, "send", "input_x"
     IniWrite inputY, CONFIG_PATH, "send", "input_y"
+    IniWrite inputRatioX, CONFIG_PATH, "send", "input_ratio_x"
+    IniWrite inputRatioY, CONFIG_PATH, "send", "input_ratio_y"
+    IniWrite winW, CONFIG_PATH, "send", "input_window_w"
+    IniWrite winH, CONFIG_PATH, "send", "input_window_h"
     ShowTip("Saved input point: " inputX ", " inputY)
+}
+
+GetCalibrationWindowAtPoint(mouseX, mouseY) {
+    MouseGetPos ,, &mouseHwnd
+    if mouseHwnd {
+        rootHwnd := DllCall("GetAncestor", "ptr", mouseHwnd, "uint", 2, "ptr")
+        if rootHwnd && IsWeChatWindow(rootHwnd) {
+            return rootHwnd
+        }
+        if IsWeChatWindow(mouseHwnd) {
+            return mouseHwnd
+        }
+    }
+
+    activeHwnd := WinGetID("A")
+    return IsWeChatWindow(activeHwnd) ? activeHwnd : 0
+}
+
+IsWeChatWindow(hwnd) {
+    if !hwnd {
+        return false
+    }
+
+    try {
+        exeList := StrSplit(IniRead(CONFIG_PATH, "wechat", "exe_list", "WeChat.exe,Weixin.exe"), ",")
+        processName := WinGetProcessName("ahk_id " hwnd)
+        for exe in exeList {
+            if Trim(exe) = processName {
+                return true
+            }
+        }
+    }
+
+    return false
 }
 
 ReadSendText() {
@@ -1276,6 +1334,10 @@ text=
 click_before_paste=1
 input_x=520
 input_y=690
+input_ratio_x=0.72
+input_ratio_y=0.9
+input_window_w=0
+input_window_h=0
 after_click_ms=100
 clipboard_settle_ms=80
 image_clipboard_settle_ms_per_100kb=70

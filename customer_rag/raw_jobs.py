@@ -111,7 +111,15 @@ def _run_raw_job(config: RagConfig, task: str, job_id: str, scope: str = "all") 
                 stats = pipeline.replace_files_with_tags(pending_path_tags, rebuild_index=False)
                 update(100, f"本次下载文件解析完成：{len(pending_path_tags)} 个")
             else:
-                stats = pipeline.rebuild_corpus_from_raw(rebuild_index=False, progress_callback=update)
+                stats = pipeline.rebuild_corpus_from_raw(
+                    rebuild_index=False,
+                    force=scope == "full",
+                    progress_callback=update,
+                )
+                parsed_files = int(stats.get("parsed_files") or 0)
+                reused_files = int(stats.get("reused_files") or 0)
+                if parsed_files or reused_files:
+                    _add_log(state, f"原始文件解析：重新解析 {parsed_files} 个，复用 {reused_files} 个")
             state.documents = int(stats.get("documents") or 0)
             state.items = int(stats.get("items") or 0)
             state.chunks = int(stats.get("chunks") or 0)

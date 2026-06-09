@@ -55,6 +55,8 @@ categories:
     - 小半
     - MUU
     - 浪度
+    - 源氏木语
+    - 源也
   床头柜:
     aliases: []
     brands:
@@ -63,6 +65,7 @@ categories:
     - 小半
     - MUU
     - 续写
+    - 源氏木语
   刀具:
     aliases:
     - 菜刀
@@ -81,6 +84,8 @@ categories:
     - 小半
     - MUU
     - 浪度
+    - 源氏木语
+    - 源也
   餐桌:
     aliases: []
     brands:
@@ -91,6 +96,8 @@ categories:
     - MUU
     - 续写
     - 小写
+    - 源氏木语
+    - 源也
   椅:
     aliases:
     - 餐椅
@@ -159,6 +166,7 @@ categories:
     aliases: []
     brands:
     - 全友
+    - 源氏木语
   皮沙发-U标:
     aliases:
     - U标
@@ -212,6 +220,8 @@ categories:
     - 芝华仕
     - 全友
     - 雅兰
+    - 源氏木语
+    - 蓝盒子
   乳胶床垫:
     aliases: []
     brands:
@@ -245,12 +255,15 @@ categories:
     - 小半
     - MUU
     - 续写
+    - 源氏木语
+    - 源也
   斗柜:
     aliases: []
     brands:
     - 全友
     - 小半
     - MUU
+    - 源氏木语
   梳妆台:
     aliases: []
     brands:
@@ -282,6 +295,7 @@ categories:
     - 全友
     - MUU
     - 续写
+    - 源氏木语
   书柜:
     aliases: []
     brands:
@@ -289,10 +303,12 @@ categories:
     - 小半
     - MUU
     - 续写
+    - 源氏木语
   穿衣镜:
     aliases: []
     brands:
     - 全友
+    - 源氏木语
   置物架:
     aliases: []
     brands:
@@ -329,10 +345,12 @@ categories:
     aliases: []
     brands:
     - 全友
+    - 源氏木语
   沙发床:
     aliases: []
     brands:
     - 全友
+    - 源氏木语
   棉麻沙发:
     aliases: []
     brands:
@@ -349,6 +367,7 @@ categories:
     aliases: []
     brands:
     - 全友
+    - 源氏木语
   功能餐桌椅:
     aliases: []
     brands:
@@ -382,10 +401,12 @@ categories:
     aliases: []
     brands:
     - 全友
+    - 源氏木语
   鞋柜:
     aliases: []
     brands:
     - 全友
+    - 源氏木语
   转角柜:
     aliases: []
     brands:
@@ -394,10 +415,12 @@ categories:
     aliases: []
     brands:
     - 全友
+    - 源氏木语
   换鞋凳:
     aliases: []
     brands:
     - 全友
+    - 源氏木语
   一:
     aliases: []
     brands: []
@@ -411,6 +434,8 @@ categories:
     - MUU
     - 续写
     - 小写
+    - 源氏木语
+    - 源也
   小茶车:
     aliases: []
     brands:
@@ -451,11 +476,13 @@ categories:
     aliases: []
     brands:
     - 小写
+    - 全友
   电动床:
     aliases: []
     brands:
     - 半日闲
     - 菠萝斑马
+    - 蓝盒子
   床垫-弹簧床垫:
     aliases: []
     brands:
@@ -507,6 +534,7 @@ categories:
     - 支吾·天猫
     - 支吾·京东
     - 帕沙曼
+    - 全友
   休闲皮沙发:
     aliases: []
     brands:
@@ -553,44 +581,57 @@ categories:
     - 栖作
   沙发椅:
     aliases: []
-    brands: []
+    brands:
+    - 源氏木语
   化妆桌:
     aliases: []
-    brands: []
+    brands:
+    - 源氏木语
   玄关柜:
     aliases: []
-    brands: []
+    brands:
+    - 源氏木语
   堆叠凳:
     aliases: []
-    brands: []
+    brands:
+    - 源氏木语
   榻榻米:
     aliases: []
-    brands: []
+    brands:
+    - 源氏木语
   儿童书柜:
     aliases: []
-    brands: []
+    brands:
+    - 源氏木语
   儿童:
     aliases: []
-    brands: []
+    brands:
+    - 源氏木语
   架:
     aliases: []
-    brands: []
+    brands:
+    - 源氏木语
   衣架:
     aliases: []
-    brands: []
+    brands:
+    - 源氏木语
   鞋架:
     aliases: []
-    brands: []
+    brands:
+    - 源氏木语
   悬浮床头柜:
     aliases: []
-    brands: []
+    brands:
+    - 源也
   铺板升级:
     aliases: []
-    brands: []
+    brands:
+    - 源氏木语
   功能床:
     aliases: []
     brands:
     - 芝华仕
+    - 全友
   电动储物床:
     aliases: []
     brands:
@@ -599,24 +640,31 @@ categories:
     aliases: []
     brands:
     - '#REF!'
+    - 蓝盒子
   儿童沙发:
     aliases: []
-    brands: []
+    brands:
+    - 全友
   桌:
     aliases: []
-    brands: []
+    brands:
+    - 全友
   梳妆凳:
     aliases: []
-    brands: []
+    brands:
+    - 全友
   茶桌:
     aliases: []
-    brands: []
+    brands:
+    - 全友
   儿童储物收纳:
     aliases: []
-    brands: []
+    brands:
+    - 全友
   角柜:
     aliases: []
-    brands: []
+    brands:
+    - 全友
   床架套餐:
     aliases: []
     brands:
@@ -921,15 +969,19 @@ categories:
     - 扫地机
     brands:
     - 追觅
+    - 云鲸
+    - 科沃斯
   清洁电器-洗地机:
     aliases:
     - 洗地机
     brands:
     - 追觅
+    - 云鲸
   清洁电器-擦窗机:
     aliases:
     - 擦窗机
-    brands: []
+    brands:
+    - 科沃斯
   擦窗机器人:
     aliases: []
     brands:
@@ -944,6 +996,7 @@ categories:
     - 个护电器
     brands:
     - 西屋
+    - 东芝
   厨房电器-微蒸烤:
     aliases:
     - 微蒸烤
@@ -2220,7 +2273,8 @@ categories:
     - 汉纱
   纱窗纱门套餐:
     aliases: []
-    brands: []
+    brands:
+    - 汉纱
   品类:
     aliases: []
     brands:
@@ -2466,6 +2520,7 @@ categories:
     - 续写
     - 小半
     - MUU
+    - 蓝盒子
   锅:
     aliases: []
     brands:
@@ -2501,12 +2556,14 @@ categories:
     - 小半
     - MUU
     - 小写
+    - 源氏木语
   衣柜:
     aliases: []
     brands:
     - 全友
     - 小半
     - MUU
+    - 源氏木语
   电视柜:
     aliases: []
     brands:
@@ -2514,9 +2571,23 @@ categories:
     - 小半
     - MUU
     - 续写
+    - 源氏木语
   边柜:
     aliases: []
     brands:
     - 全友
     - MUU
     - 小写
+    - 源氏木语
+  像素沙发:
+    aliases: []
+    brands:
+    - 喜临门-京东
+  皮艺沙发:
+    aliases: []
+    brands:
+    - 全友
+  冰箱:
+    aliases: []
+    brands:
+    - 追觅

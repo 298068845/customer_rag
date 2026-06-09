@@ -162,7 +162,6 @@ def render_realtime_talk() -> None:
         )
         STORE.save_realtime_config(next_config)
         st.success("实时话术已保存。")
-        st.rerun()
     hint_col.caption("品牌清单和售卖状态会跟随商品类目页的“在售品牌”自动更新。")
 
 

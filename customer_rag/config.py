@@ -73,3 +73,25 @@ def load_config(path: str | Path = "config.yaml") -> RagConfig:
             n_gpu_layers=int(llm_data.get("n_gpu_layers", 0)),
         ),
     )
+
+
+def save_machine_config(
+    updates: dict[str, Any],
+    llm_updates: dict[str, Any] | None = None,
+    path: str | Path = "config.yaml",
+) -> None:
+    config_path = Path(path)
+    data: dict[str, Any] = {}
+    if config_path.exists():
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    for key, value in updates.items():
+        data[key] = value
+    if llm_updates:
+        llm_data = data.get("llm", {}) or {}
+        for key, value in llm_updates.items():
+            llm_data[key] = value
+        data["llm"] = llm_data
+    config_path.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )

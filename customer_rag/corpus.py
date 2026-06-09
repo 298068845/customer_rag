@@ -200,8 +200,7 @@ class CorpusStore:
 def _item_from_payload(payload: dict) -> CorpusItem:
     payload.setdefault("image_paths", [])
     payload.setdefault("tags", [])
-    if not payload.get("attributes"):
-        payload["attributes"] = extract_attributes(str(payload.get("text", "")))
+    payload.setdefault("attributes", {})
     return CorpusItem(**payload)
 
 
