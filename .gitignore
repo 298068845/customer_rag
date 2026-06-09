@@ -5,6 +5,7 @@ models/llm/**
 !models/llm/.gitkeep
 
 # Runtime data and generated indexes.
+category_aliases.yaml
 data/index/**
 data/raw/**
 data/browser_profile/**
@@ -26,6 +27,7 @@ wechatExtension/send-text.txt
 wechatExtension/last-selected.txt
 wechatExtension/rag-bridge.log
 wechatExtension/rag-bridge-test.log
+wechatExtension/sendbox-debug.log
 wechatExtension/preview-test-result.ini
 wechatExtension/*-test-result.ini
 

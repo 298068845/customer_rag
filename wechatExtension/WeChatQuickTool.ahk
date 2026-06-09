@@ -10,6 +10,7 @@ global CONFIG_PATH := A_ScriptDir "\config.ini"
 global SEND_TEXT_PATH := A_ScriptDir "\send-text.txt"
 global LAST_SELECTED_PATH := A_ScriptDir "\last-selected.txt"
 global PREVIEW_TEST_PATH := A_ScriptDir "\preview-test-result.ini"
+global SEND_BOX_DEBUG_PATH := A_ScriptDir "\sendbox-debug.log"
 global CUSTOM_TAB_PATHS := [
     A_ScriptDir "\custom-tab-1.txt",
     A_ScriptDir "\custom-tab-2.txt",
@@ -650,7 +651,10 @@ PasteTextToWeChat(text) {
     WaitForSendInterval()
     oldClipboard := ClipboardAll()
 
-    FocusSendBox()
+    if !FocusSendBox() {
+        ShowTip("未能自动定位微信发送框，已取消粘贴")
+        return
+    }
     if (Trim(textToSend) != "") {
         A_Clipboard := textToSend
         Sleep ReadIntConfig("send", "clipboard_settle_ms", 80)
@@ -907,14 +911,40 @@ FocusSendBox() {
     targetHwnd := PREVIEW_TARGET_HWND ? PREVIEW_TARGET_HWND : WinGetID("A")
     WinActivate "ahk_id " targetHwnd
     Sleep 80
-
-    if !ReadBoolConfig("send", "click_before_paste", true) {
-        return
+    ResetSendBoxDebug()
+    SendBoxDebug("target_hwnd=" targetHwnd)
+    try {
+        WinGetPos &debugX, &debugY, &debugW, &debugH, "ahk_id " targetHwnd
+        SendBoxDebug("window_rect=" debugX "," debugY "," debugW "," debugH)
+        SendBoxDebug("window_title=" WinGetTitle("ahk_id " targetHwnd))
+        SendBoxDebug("window_class=" WinGetClass("ahk_id " targetHwnd))
     }
 
-    GetInputAnchor(targetHwnd, &anchorX, &anchorY)
-    Click anchorX, anchorY
-    Sleep ReadIntConfig("send", "after_click_ms", 100)
+    if !ReadBoolConfig("send", "click_before_paste", true) {
+        SendBoxDebug("skip_focus=click_before_paste_disabled")
+        return true
+    }
+
+    if TryFocusSendBoxByUIAutomation(targetHwnd) || TryFocusSendBoxByControl(targetHwnd) {
+        Sleep ReadIntConfig("send", "after_click_ms", 100)
+        return true
+    }
+
+    if ReadBoolConfig("send", "allow_safe_geometry_fallback", true) && TryFocusSendBoxBySafeGeometry(targetHwnd) {
+        Sleep ReadIntConfig("send", "after_click_ms", 100)
+        return true
+    }
+
+    if ReadBoolConfig("send", "allow_saved_point_fallback", false) {
+        SendBoxDebug("fallback=saved_point")
+        GetInputAnchor(targetHwnd, &anchorX, &anchorY)
+        Click anchorX, anchorY
+        Sleep ReadIntConfig("send", "after_click_ms", 100)
+        return true
+    }
+
+    SendBoxDebug("result=not_found")
+    return false
 }
 
 PositionPreviewNearMouse(mouseX := "", mouseY := "") {
@@ -1020,6 +1050,329 @@ IsBadInputPoint(inputX, inputY, winW, winH) {
     return inputX < 0 || inputY < 0 || inputX > winW || inputY > winH
 }
 
+TryFocusSendBoxByControl(hwnd) {
+    try {
+        controls := WinGetControlsHwnd("ahk_id " hwnd)
+        WinGetPos &winX, &winY, &winW, &winH, "ahk_id " hwnd
+    } catch {
+        SendBoxDebug("control_scan=failed")
+        return false
+    }
+    SendBoxDebug("control_count=" controls.Length)
+
+    bestHwnd := 0
+    bestScore := -1
+    bestX := 0
+    bestY := 0
+    bestW := 0
+    bestH := 0
+    for controlHwnd in controls {
+        try {
+            className := WinGetClass("ahk_id " controlHwnd)
+            style := WinGetStyle("ahk_id " controlHwnd)
+            if !(style & 0x10000000) || (style & 0x08000000) {
+                continue
+            }
+            WinGetPos &ctrlX, &ctrlY, &ctrlW, &ctrlH, "ahk_id " controlHwnd
+        } catch {
+            continue
+        }
+
+        score := SendBoxControlScore(className, ctrlX, ctrlY, ctrlW, ctrlH, winX, winY, winW, winH)
+        if score > bestScore {
+            bestScore := score
+            bestHwnd := controlHwnd
+            bestX := ctrlX
+            bestY := ctrlY
+            bestW := ctrlW
+            bestH := ctrlH
+        }
+    }
+    SendBoxDebug("control_best_score=" bestScore)
+
+    if !bestHwnd || bestScore < 100 {
+        return false
+    }
+
+    try {
+        ControlFocus "ahk_id " bestHwnd
+        ClickSendBoxRect(bestX, bestY, bestW, bestH)
+        SendBoxDebug("control_hit=" bestX "," bestY "," bestW "," bestH)
+        return true
+    } catch {
+        SendBoxDebug("control_focus=failed")
+        return false
+    }
+}
+
+SendBoxControlScore(className, x, y, w, h, winX, winY, winW, winH) {
+    if w < 40 || h < 18 {
+        return -1
+    }
+
+    classLower := StrLower(className)
+    isEditor := InStr(classLower, "edit")
+        || InStr(classLower, "richedit")
+        || InStr(classLower, "scintilla")
+        || InStr(classLower, "textbox")
+    if !IsLikelySendBoxRect(x, y, w, h, winX, winY, winW, winH) {
+        return -1
+    }
+
+    relBottom := winH > 0 ? (y + h - winY) / winH : 0
+    relWidth := winW > 0 ? w / winW : 0
+    relHeight := winH > 0 ? h / winH : 0
+    score := isEditor ? 120 : 85
+    score += Round(relBottom * 80)
+    score += Round(Min(relWidth, 1) * 60)
+    score += relHeight <= 0.4 ? 25 : -25
+    return score
+}
+
+TryFocusSendBoxByUIAutomation(hwnd) {
+    try {
+        uia := CreateUIAutomation()
+        root := uia.ElementFromHandle(hwnd)
+        condition := uia.CreateTrueCondition()
+        elements := root.FindAll(4, condition)
+    } catch as exc {
+        SendBoxDebug("uia_scan=failed:" exc.Message)
+        return false
+    }
+
+    try WinGetPos &winX, &winY, &winW, &winH, "ahk_id " hwnd
+    catch {
+        return false
+    }
+
+    bestElement := 0
+    bestScore := -1
+    bestX := 0
+    bestY := 0
+    bestW := 0
+    bestH := 0
+    try count := elements.Length
+    catch {
+        SendBoxDebug("uia_count=failed")
+        return false
+    }
+    SendBoxDebug("uia_count=" count)
+
+    Loop count {
+        try {
+            element := elements.GetElement(A_Index - 1)
+            if element.CurrentIsOffscreen {
+                continue
+            }
+            if !TryGetUIARect(element, &rectX, &rectY, &rectW, &rectH) {
+                continue
+            }
+            controlType := element.CurrentControlType
+            name := ""
+            try name := element.CurrentName
+            score := SendBoxElementScore(controlType, name, rectX, rectY, rectW, rectH, winX, winY, winW, winH)
+        } catch {
+            continue
+        }
+
+        if score > bestScore {
+            bestScore := score
+            bestElement := element
+            bestX := rectX
+            bestY := rectY
+            bestW := rectW
+            bestH := rectH
+        }
+    }
+    SendBoxDebug("uia_best_score=" bestScore)
+
+    if !IsObject(bestElement) || bestScore < 100 {
+        return false
+    }
+
+    try {
+        bestElement.SetFocus()
+        ClickSendBoxRect(bestX, bestY, bestW, bestH)
+        SendBoxDebug("uia_hit=" bestX "," bestY "," bestW "," bestH)
+        return true
+    } catch {
+        SendBoxDebug("uia_focus=failed")
+        return false
+    }
+}
+
+CreateUIAutomation() {
+    try {
+        return ComObject("UIAutomationClient.CUIAutomation")
+    } catch {
+        return ComObject("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+    }
+}
+
+TryGetUIARect(element, &x, &y, &w, &h) {
+    try {
+        rect := element.GetCurrentPropertyValue(30001)
+        try {
+            x := rect[0]
+            y := rect[1]
+            w := rect[2]
+            h := rect[3]
+            return w > 0 && h > 0
+        }
+        try {
+            x := rect[1]
+            y := rect[2]
+            w := rect[3]
+            h := rect[4]
+            return w > 0 && h > 0
+        }
+        try {
+            x := rect.left
+            y := rect.top
+            w := rect.right - rect.left
+            h := rect.bottom - rect.top
+            return w > 0 && h > 0
+        }
+    }
+
+    try {
+        rect := element.CurrentBoundingRectangle
+        try {
+            x := rect.l
+            y := rect.t
+            w := rect.r - rect.l
+            h := rect.b - rect.t
+            return w > 0 && h > 0
+        }
+        try {
+            x := rect.left
+            y := rect.top
+            w := rect.right - rect.left
+            h := rect.bottom - rect.top
+            return w > 0 && h > 0
+        }
+        x := rect[0]
+        y := rect[1]
+        w := rect[2]
+        h := rect[3]
+        return w > 0 && h > 0
+    } catch {
+        return false
+    }
+}
+
+SendBoxElementScore(controlType, name, x, y, w, h, winX, winY, winW, winH) {
+    if w < 40 || h < 18 {
+        return -1
+    }
+
+    relLeft := winW > 0 ? (x - winX) / winW : 0
+    relTop := winH > 0 ? (y - winY) / winH : 0
+    relBottom := winH > 0 ? (y + h - winY) / winH : 0
+    relWidth := winW > 0 ? w / winW : 0
+    relHeight := winH > 0 ? h / winH : 0
+    if !IsLikelySendBoxRect(x, y, w, h, winX, winY, winW, winH) {
+        return -1
+    }
+
+    score := 75
+    switch controlType {
+        case 50004:
+            score += 60
+        case 50030, 50033, 50025:
+            score += 35
+        case 50020:
+            score += 10
+        default:
+            score += 0
+    }
+    nameLower := StrLower(name)
+    if InStr(nameLower, "输入") || InStr(nameLower, "编辑") || InStr(nameLower, "message") || InStr(nameLower, "send") {
+        score += 30
+    }
+    score += Round(relBottom * 90)
+    score += Round(Min(relWidth, 1) * 70)
+    score += relTop > 0.45 ? 35 : -20
+    score += relLeft < 0.55 ? 15 : 0
+    score += relHeight <= 0.35 ? 20 : -30
+    return score
+}
+
+IsLikelySendBoxRect(x, y, w, h, winX, winY, winW, winH) {
+    if winW <= 0 || winH <= 0 || w < 80 || h < 24 {
+        return false
+    }
+
+    relTop := (y - winY) / winH
+    relBottom := (y + h - winY) / winH
+    relCenterX := (x + w / 2 - winX) / winW
+    relWidth := w / winW
+    relHeight := h / winH
+
+    return relTop > 0.38
+        && relBottom > 0.58
+        && relCenterX > 0.38
+        && relWidth > 0.16
+        && relHeight < 0.38
+}
+
+ClickSendBoxRect(x, y, w, h) {
+    clickX := x + Floor(w * 0.5)
+    clickY := y + Floor(h * 0.55)
+    Click clickX, clickY
+}
+
+TryFocusSendBoxBySafeGeometry(hwnd) {
+    try {
+        WinGetPos &winX, &winY, &winW, &winH, "ahk_id " hwnd
+    } catch as exc {
+        SendBoxDebug("geometry=failed:" exc.Message)
+        return false
+    }
+
+    if winW < 760 || winH < 520 {
+        SendBoxDebug("geometry=skip_small_window:" winW "," winH)
+        return false
+    }
+
+    chatLeft := Max(Floor(winW * 0.34), 320)
+    clickX := winX + chatLeft + Floor((winW - chatLeft) * 0.55)
+    clickY := winY + winH - Max(86, Floor(winH * 0.085))
+
+    if clickX < winX + Floor(winW * 0.45) || clickX > winX + winW - 80 {
+        SendBoxDebug("geometry=unsafe_x:" clickX)
+        return false
+    }
+    if clickY < winY + Floor(winH * 0.65) || clickY > winY + winH - 35 {
+        SendBoxDebug("geometry=unsafe_y:" clickY)
+        return false
+    }
+
+    Click clickX, clickY
+    SendBoxDebug("geometry_hit=" clickX "," clickY)
+    return true
+}
+
+ResetSendBoxDebug() {
+    global SEND_BOX_DEBUG_PATH
+
+    if !ReadBoolConfig("send", "sendbox_debug", true) {
+        return
+    }
+    try FileDelete SEND_BOX_DEBUG_PATH
+    SendBoxDebug("started=" A_Now)
+}
+
+SendBoxDebug(message) {
+    global SEND_BOX_DEBUG_PATH
+
+    if !ReadBoolConfig("send", "sendbox_debug", true) {
+        return
+    }
+    try FileAppend message "`n", SEND_BOX_DEBUG_PATH, "UTF-8"
+}
+
+
 GetWorkAreaForPoint(x, y, &left, &top, &right, &bottom) {
     count := MonitorGetCount()
     Loop count {
@@ -1078,7 +1431,7 @@ CalibrateSendBoxPoint() {
     IniWrite inputRatioY, CONFIG_PATH, "send", "input_ratio_y"
     IniWrite winW, CONFIG_PATH, "send", "input_window_w"
     IniWrite winH, CONFIG_PATH, "send", "input_window_h"
-    ShowTip("Saved input point: " inputX ", " inputY)
+    ShowTip("已保存兜底输入框点位: " inputX ", " inputY)
 }
 
 GetCalibrationWindowAtPoint(mouseX, mouseY) {
@@ -1332,6 +1685,9 @@ send_mode=all
 [send]
 text=
 click_before_paste=1
+allow_saved_point_fallback=0
+allow_safe_geometry_fallback=1
+sendbox_debug=1
 input_x=520
 input_y=690
 input_ratio_x=0.72

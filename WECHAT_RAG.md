@@ -29,7 +29,7 @@ Flow:
 5. Multiple answer segments are separated by a standalone `---` line.
 6. Press `~` to open the send preview. The first tab is the RAG query result. Custom tabs read from `wechatExtension/custom-tab-2.txt` through `wechatExtension/custom-tab-5.txt` and are not checked by default.
 7. Keep pressing `~` to send each checked segment to WeChat.
-8. Before first use, place the mouse in the WeChat input box and press `F8` to save the paste position.
+8. The plugin now tries to focus the WeChat send box through window controls and Windows UI Automation. If the send box cannot be detected, the paste is cancelled instead of clicking a saved coordinate. Set `allow_saved_point_fallback=1` in `wechatExtension/config.ini` only if you explicitly want the old `F8` fallback behavior.
 
 The old stop script still stops only the WeChat hotkey tool:
 
