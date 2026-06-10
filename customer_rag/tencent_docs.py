@@ -27,6 +27,13 @@ class TencentDocSubscription:
     last_modified: str = ""
 
 
+@dataclass
+class TencentDocPage:
+    opener: urllib.request.OpenerDirector
+    html: str
+    basic_vars: dict
+
+
 DEFAULT_SUBSCRIPTIONS = [
     ("喜临门京东&迷住专属清单-26年618", "https://docs.qq.com/sheet/DVkh2aG9nbm52bGVI"),
     ("喜临门天猫&迷住专属清单-26年618", "https://docs.qq.com/sheet/DVmRDSE1odnFBUHpR"),
@@ -98,15 +105,17 @@ def download_subscription(
     raw_data_dir: Path,
     cookie: str = "",
     progress_callback: DownloadProgressCallback | None = None,
+    page: TencentDocPage | None = None,
 ) -> Path:
     doc_id = _extract_doc_id(subscription.url)
     raw_dir = raw_data_dir / "tencent_docs"
     raw_dir.mkdir(parents=True, exist_ok=True)
     output_path = raw_dir / f"{_safe_filename(subscription.name)}.xlsx"
 
-    opener = _build_opener(cookie)
-    html = _request_text(opener, subscription.url)
-    basic_vars = _read_basic_client_vars(html)
+    page = page or fetch_subscription_page(subscription, cookie)
+    opener = page.opener
+    html = page.html
+    basic_vars = page.basic_vars
     user_info = basic_vars.get("userInfo", {}) if isinstance(basic_vars.get("userInfo"), dict) else {}
     doc_info = basic_vars.get("docInfo", {}) if isinstance(basic_vars.get("docInfo"), dict) else {}
     pad_info = doc_info.get("padInfo", {}) if isinstance(doc_info.get("padInfo"), dict) else {}
@@ -163,15 +172,25 @@ def subscription_output_path(subscription: TencentDocSubscription, raw_data_dir:
 def fetch_subscription_last_modified(
     subscription: TencentDocSubscription,
     cookie: str = "",
+    page: TencentDocPage | None = None,
 ) -> str:
-    opener = _build_opener(cookie)
-    html = _request_text(opener, subscription.url)
-    basic_vars = _read_basic_client_vars(html)
+    page = page or fetch_subscription_page(subscription, cookie)
+    html = page.html
+    basic_vars = page.basic_vars
     doc_info = basic_vars.get("docInfo", {}) if isinstance(basic_vars.get("docInfo"), dict) else {}
     value = doc_info.get("lastModifyTime") or doc_info.get("lastModifyTimeMs") or ""
     if not value:
         value = _find_first(html, [r'"lastModifyTime"\s*:\s*(\d+)', r'"last_modify_time"\s*:\s*(\d+)'])
     return _format_remote_time(value)
+
+
+def fetch_subscription_page(
+    subscription: TencentDocSubscription,
+    cookie: str = "",
+) -> TencentDocPage:
+    opener = _build_opener(cookie)
+    html = _request_text(opener, subscription.url)
+    return TencentDocPage(opener=opener, html=html, basic_vars=_read_basic_client_vars(html))
 
 
 def update_subscription_status(

@@ -17,6 +17,7 @@ The launcher appears in the Windows bottom-right tray area. Right-click the tray
 - open the RAG page
 - turn the WeChat plugin on
 - turn the WeChat plugin off
+- choose the send-box locating mode: `UIA 定位` by default, or `F8 定位` for the saved point
 - restart the RAG service
 - exit the launcher
 
@@ -29,7 +30,7 @@ Flow:
 5. Multiple answer segments are separated by a standalone `---` line.
 6. Press `~` to open the send preview. The first tab is the RAG query result. Custom tabs read from `wechatExtension/custom-tab-2.txt` through `wechatExtension/custom-tab-5.txt` and are not checked by default.
 7. Keep pressing `~` to send each checked segment to WeChat.
-8. The plugin now tries to focus the WeChat send box through window controls and Windows UI Automation. If the send box cannot be detected, the paste is cancelled instead of clicking a saved coordinate. Set `allow_saved_point_fallback=1` in `wechatExtension/config.ini` only if you explicitly want the old `F8` fallback behavior.
+8. By default, the plugin focuses the WeChat send box through Windows UI Automation and window controls. To use the saved `F8` point instead, right-click the bottom-right tray icon and switch `定位模式` to `F8 定位`.
 
 The old stop script still stops only the WeChat hotkey tool:
 

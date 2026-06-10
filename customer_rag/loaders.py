@@ -171,7 +171,7 @@ def _rows_to_documents(path: Path, df: Any, title: str) -> Iterable[LoadedDocume
         fields = _prepare_row_fields(fields)
         if _has_core_product_fields(fields):
             text = _fields_to_text(fields)
-            image_paths = _order_flow_image_paths(path, row_number, fields)
+            image_paths: list[str] = []
             yield LoadedDocument(
                 text=text,
                 source=str(path),
@@ -219,7 +219,7 @@ def _load_xlsx_package(path: Path) -> list[LoadedDocument]:
 
                 if _has_core_product_fields(fields):
                     text = _fields_to_text(fields)
-                    order_flow_images = _order_flow_image_paths(path, row_number, fields)
+                    order_flow_images: list[str] = []
                     title = _build_row_title(path.name, sheet_name, row, headers)
                     docs.append(
                         LoadedDocument(

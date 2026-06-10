@@ -4,6 +4,7 @@ import json
 import html
 import importlib
 import re
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
@@ -276,8 +277,12 @@ def get_pipeline(cache_version: str = "llama-server-v1") -> RagPipeline:
 
 
 @st.cache_data(show_spinner=False)
+def cached_corpus_item_payloads(signature: tuple[int, int]) -> list[dict]:
+    return [asdict(item) for item in get_pipeline().list_corpus()]
+
+
 def cached_corpus_items(signature: tuple[int, int]) -> list:
-    return get_pipeline().list_corpus()
+    return [corpus_module.CorpusItem(**payload) for payload in cached_corpus_item_payloads(signature)]
 
 
 def corpus_signature() -> tuple[int, int]:

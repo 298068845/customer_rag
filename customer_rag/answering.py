@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import re
 import hashlib
+from pathlib import Path
 
 from customer_rag.category_config import category_brands
 from customer_rag.category_config import category_terms as configured_category_terms
+from customer_rag.order_flow_image import create_order_flow_image
 from customer_rag.vector_store import RetrievedChunk
 
 
@@ -61,9 +63,11 @@ def build_structured_product_answer(
     system_prompt: str | None = None,
     *,
     require_question_match: bool = True,
+    max_products: int = 5,
 ) -> str | None:
     products = []
     seen: set[str] = set()
+    max_products = max(1, int(max_products or 5))
     for source in sources:
         fields = _extract_fields(source.text)
         product_name = _product_title(fields.get("型号/规格") or source.title)
@@ -74,7 +78,7 @@ def build_structured_product_answer(
             continue
         seen.add(key)
         products.append((source, fields, product_name))
-        if len(products) >= 5:
+        if len(products) >= max_products:
             break
 
     if not products:
@@ -194,7 +198,7 @@ def _field_value(
         return None if hide_missing else "资料中未找到"
 
     if field_name == "图片":
-        return _answer_image_path(source.image_paths if source else []) or missing()
+        return _answer_image_path(source.image_paths if source else []) or _lazy_order_flow_image(fields, source) or missing()
     if field_name == "品牌":
         return fields.get("品牌") or missing()
     if field_name == "型号/规格":
@@ -289,6 +293,39 @@ def _answer_image_path(image_paths: list[str]) -> str | None:
         if "/_generated/order_flow/" in normalized:
             return path
     return None
+
+
+def _lazy_order_flow_image(fields: dict[str, str], source: RetrievedChunk | None) -> str | None:
+    if source is None or not source.source:
+        return None
+    row_number = _source_row_number(source.location)
+    if row_number < 1:
+        return None
+    source_path = Path(source.source)
+    if not source_path.exists():
+        return None
+    product_info = fields.get("型号/规格") or fields.get("产品信息") or ""
+    order_flow = fields.get("下单流程&权益") or fields.get("下单流程") or ""
+    other_note = fields.get("限制说明") or fields.get("其他说明") or ""
+    image_path = create_order_flow_image(
+        product_info,
+        order_flow,
+        other_note,
+        source_path=source_path,
+        row_number=row_number,
+        output_root=source_path.parent / "_generated" / "order_flow",
+    )
+    return image_path
+
+
+def _source_row_number(location: str) -> int:
+    matches = re.findall(r"(?:行|row)\s*(\d+)", str(location), flags=re.IGNORECASE)
+    if not matches:
+        return 0
+    try:
+        return int(matches[-1])
+    except ValueError:
+        return 0
 
 
 def _matches_product_question(question: str, product_name: str, fields: dict[str, str]) -> bool:

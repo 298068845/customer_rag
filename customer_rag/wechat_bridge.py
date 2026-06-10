@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from customer_rag.config import load_config
+from customer_rag.category_config import category_brands
 from customer_rag.pipeline import RagPipeline
 from customer_rag.prompt_defaults import DEFAULT_SYSTEM_PROMPT
 from customer_rag.talk_rag import TalkRagEngine
@@ -35,6 +37,9 @@ def main() -> int:
     parser.add_argument("--project-root", type=Path, default=PROJECT_ROOT)
     parser.add_argument("--log-file", type=Path)
     parser.add_argument("--tags", default="")
+    parser.add_argument("--brand", default="")
+    parser.add_argument("--brands-file", type=Path)
+    parser.add_argument("--top-k", type=int)
     parser.add_argument("--filters-file", type=Path)
     parser.add_argument("--talk-only", action="store_true")
     args = parser.parse_args()
@@ -64,10 +69,15 @@ def main() -> int:
             write_log(log_file, f"OK\nmode=talk-only\nquestion={question}\noutput={args.output_file}\n")
             return 0
 
-        pipeline = RagPipeline(load_config(project_root / "config.yaml"))
+        config = load_config(project_root / "config.yaml")
+        if args.top_k in {5, 10}:
+            config = replace(config, top_k=args.top_k)
+        pipeline = RagPipeline(config)
         system_prompt = load_system_prompt(project_root / "data" / "index" / "prompt_settings.json")
+        selected_brand = args.brand.strip()
+        effective_question = question if not selected_brand else f"{question}\n指定品牌：{selected_brand}"
         result = pipeline.ask(
-            question,
+            effective_question,
             system_prompt=system_prompt + DEFAULT_PROMPT_SUFFIX,
             tags=parse_tags(args.tags),
         )
@@ -77,7 +87,9 @@ def main() -> int:
 
         args.output_file.parent.mkdir(parents=True, exist_ok=True)
         args.output_file.write_text(answer, encoding="utf-8")
-        write_log(log_file, f"OK\nquestion={question}\noutput={args.output_file}\n")
+        if args.brands_file:
+            write_query_brands(args.brands_file, result.sources, selected_brand)
+        write_log(log_file, f"OK\nquestion={question}\nbrand={selected_brand}\noutput={args.output_file}\n")
         return 0
     except Exception as exc:  # noqa: BLE001 - CLI bridge should log any user-facing failure.
         write_log(log_file, f"ERROR\n{type(exc).__name__}: {exc}\n")
@@ -124,6 +136,46 @@ def write_filter_rows(path: Path, pipeline: RagPipeline) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     content = "\n".join("\t".join(row) for row in sorted(rows))
     path.write_text(content, encoding="utf-8")
+
+
+def write_query_brands(path: Path, sources: list, selected_brand: str = "") -> None:
+    brands: list[str] = []
+    if selected_brand and path.exists():
+        try:
+            for part in path.read_text(encoding="utf-8-sig").splitlines():
+                add_unique(brands, part)
+        except OSError:
+            brands = []
+    brand_map = category_brands()
+    category_lookup = {category.lower(): category for category in brand_map}
+    source_brands: list[str] = []
+    for source in sources:
+        text = getattr(source, "text", "")
+        category = field_value(text, "\u54c1\u7c7b")
+        category_key = category_lookup.get(category.lower())
+        if category_key:
+            for brand in brand_map.get(category_key, []):
+                add_unique(brands, brand)
+        brand = field_value(text, "\u54c1\u724c")
+        if valid_filter_term(brand):
+            add_unique(source_brands, brand)
+    if not brands:
+        for brand in source_brands:
+            add_unique(brands, brand)
+    if selected_brand:
+        add_unique(brands, selected_brand, prepend=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(brands), encoding="utf-8")
+
+
+def add_unique(values: list[str], value: str, *, prepend: bool = False) -> None:
+    value = str(value or "").strip()
+    if not value or value in values:
+        return
+    if prepend:
+        values.insert(0, value)
+    else:
+        values.append(value)
 
 
 def primary_filter_label(tags: list[str]) -> str:

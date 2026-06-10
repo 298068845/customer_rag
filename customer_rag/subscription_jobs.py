@@ -4,6 +4,7 @@ import json
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -14,11 +15,15 @@ from customer_rag.tencent_docs import (
     TencentDocSubscription,
     download_subscription,
     fetch_subscription_last_modified,
+    fetch_subscription_page,
     load_subscriptions,
     save_subscriptions,
     subscription_output_path,
     update_subscription_status,
 )
+
+
+SUBSCRIPTION_MAX_WORKERS = 4
 
 
 @dataclass
@@ -141,32 +146,50 @@ def _run_subscription_job(
     cookie: str,
     job_id: str,
 ) -> None:
-    downloaded_paths: list[Path] = []
-    next_subscriptions = subscriptions
     state = read_job_state(config)
-    try:
-        for index, subscription in enumerate(subscriptions, start=1):
-            if _stop_requested(config):
-                state.status = "stopped"
-                state.message = "任务已停止"
-                break
+    state_lock = threading.Lock()
+    next_subscriptions = subscriptions
+    downloaded_paths: list[Path] = []
+
+    def current_state_is_active() -> bool:
+        return read_job_state(config).job_id == job_id
+
+    def save_status(subscription: TencentDocSubscription, status: str, last_modified: str | None = None) -> None:
+        nonlocal next_subscriptions
+        next_subscriptions = update_subscription_status(
+            next_subscriptions,
+            subscription.url,
+            status,
+            last_modified=last_modified,
+        )
+        save_subscriptions(subscriptions_path, next_subscriptions)
+
+    def write_state() -> None:
+        if current_state_is_active():
+            _write_state(config, state)
+
+    def run_one(index: int, subscription: TencentDocSubscription) -> None:
+        nonlocal downloaded_paths
+        if _stop_requested(config):
+            return
+
+        with state_lock:
             state.current_index = index
             state.current_name = subscription.name
             state.current_downloaded = 0
             state.current_total = None
             state.message = f"正在更新：{subscription.name}"
-            next_subscriptions = update_subscription_status(next_subscriptions, subscription.url, "更新中")
-            save_subscriptions(subscriptions_path, next_subscriptions)
-            _add_log(
-                state,
-                f"{subscription.name} 开始检查；本地记录最后修改={subscription.last_modified or '空'}",
-            )
-            _write_state(config, state)
+            save_status(subscription, "更新中")
+            _add_log(state, f"{subscription.name} 开始检查；本地记录最后修改={subscription.last_modified or '空'}")
+            write_state()
 
-            try:
-                remote_modified = fetch_subscription_last_modified(subscription, cookie)
-                output_path = subscription_output_path(subscription, config.raw_data_dir)
-                local_exists = output_path.exists()
+        try:
+            page = fetch_subscription_page(subscription, cookie)
+            remote_modified = fetch_subscription_last_modified(subscription, cookie, page=page)
+            output_path = subscription_output_path(subscription, config.raw_data_dir)
+            local_exists = output_path.exists()
+
+            with state_lock:
                 _add_log(
                     state,
                     (
@@ -174,87 +197,93 @@ def _run_subscription_job(
                         f"本地文件={'存在' if local_exists else '不存在'}；路径={output_path}"
                     ),
                 )
-                if remote_modified and remote_modified == subscription.last_modified and output_path.exists():
+                write_state()
+
+            if remote_modified and remote_modified == subscription.last_modified and local_exists:
+                with state_lock:
                     state.skipped += 1
-                    next_subscriptions = update_subscription_status(
-                        next_subscriptions,
-                        subscription.url,
-                        "跳过：文件未变化",
-                        last_modified=remote_modified,
-                    )
-                    save_subscriptions(subscriptions_path, next_subscriptions)
+                    save_status(subscription, "跳过：文件未变化", last_modified=remote_modified)
                     _add_log(
                         state,
-                        (
-                            f"{subscription.name} 跳过：远端最后修改与已入库记录一致 "
-                            f"({remote_modified})，且本地文件存在"
-                        ),
+                        f"{subscription.name} 跳过：远端最后修改与已入库记录一致 ({remote_modified})，且本地文件存在",
                     )
-                    _write_state(config, state)
-                    continue
+                    write_state()
+                return
 
+            with state_lock:
                 if not remote_modified:
                     _add_log(state, f"{subscription.name} 决定下载：未读取到远端最后修改时间，无法确认本地是否最新")
                 elif remote_modified != subscription.last_modified:
                     _add_log(
                         state,
-                        (
-                            f"{subscription.name} 决定下载：远端最后修改 {remote_modified} "
-                            f"!= 已入库记录 {subscription.last_modified or '空'}"
-                        ),
+                        f"{subscription.name} 决定下载：远端最后修改 {remote_modified} != 已入库记录 {subscription.last_modified or '空'}",
                     )
                 elif not local_exists:
                     _add_log(state, f"{subscription.name} 决定下载：远端时间未变化但本地文件不存在")
+                write_state()
 
-                last_progress_write = 0.0
+            last_progress_write = 0.0
 
-                def progress(downloaded: int, total: int | None) -> None:
-                    nonlocal last_progress_write
+            def progress(downloaded: int, total: int | None) -> None:
+                nonlocal last_progress_write
+                now = time.monotonic()
+                if total and downloaded < total and now - last_progress_write < 0.5:
+                    return
+                last_progress_write = now
+                with state_lock:
+                    state.current_index = index
+                    state.current_name = subscription.name
                     state.current_downloaded = downloaded
                     state.current_total = total
                     state.message = f"正在下载：{subscription.name}"
-                    now = time.monotonic()
-                    if total and downloaded < total and now - last_progress_write < 0.5:
-                        return
-                    last_progress_write = now
-                    _write_state(config, state)
+                    write_state()
 
-                downloaded_path = download_subscription(
-                    subscription,
-                    config.raw_data_dir,
-                    cookie,
-                    progress_callback=progress,
-                )
+            downloaded_path = download_subscription(
+                subscription,
+                config.raw_data_dir,
+                cookie,
+                progress_callback=progress,
+                page=page,
+            )
+
+            with state_lock:
                 downloaded_paths.append(downloaded_path)
                 state.updated_files.append(str(downloaded_path.resolve()))
                 if remote_modified:
                     state.pending_modified_by_url[subscription.url] = remote_modified
                 state.downloaded += 1
-                next_subscriptions = update_subscription_status(
-                    next_subscriptions,
-                    subscription.url,
-                    "已下载待解析",
-                )
-                save_subscriptions(subscriptions_path, next_subscriptions)
+                save_status(subscription, "已下载待解析")
                 _add_log(
                     state,
-                    (
-                        f"{subscription.name} 下载完成；保存到={downloaded_path}；"
-                        f"待提交远端最后修改={remote_modified or '空'}"
-                    ),
+                    f"{subscription.name} 下载完成；保存到={downloaded_path}；待提交远端最后修改={remote_modified or '空'}",
                 )
-                _write_state(config, state)
-            except RuntimeError as exc:
+                write_state()
+        except RuntimeError as exc:
+            with state_lock:
                 state.failed += 1
-                next_subscriptions = update_subscription_status(next_subscriptions, subscription.url, f"失败：{exc}")
-                save_subscriptions(subscriptions_path, next_subscriptions)
+                save_status(subscription, f"失败：{exc}")
                 _add_log(state, f"{subscription.name} 更新失败：{exc}")
-                _write_state(config, state)
+                write_state()
+
+    try:
+        workers = min(SUBSCRIPTION_MAX_WORKERS, max(1, len(subscriptions)))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(run_one, index, subscription)
+                for index, subscription in enumerate(subscriptions, start=1)
+            ]
+            for future in as_completed(futures):
+                future.result()
+                if _stop_requested(config):
+                    with state_lock:
+                        state.status = "stopped"
+                        state.message = "任务已停止"
+                        state.finished_at = _now()
+                        write_state()
+                    break
 
         save_subscriptions(subscriptions_path, next_subscriptions)
         if state.status == "stopped":
-            state.finished_at = _now()
-            _write_state(config, state)
             return
         state.status = "completed"
         state.finished_at = _now()
@@ -263,7 +292,7 @@ def _run_subscription_job(
             _add_log(state, f"下载完成：新增/更新 {len(downloaded_paths)} 个原始文件，等待手动解析和重构索引")
         else:
             state.message = "订阅检查完成，无需下载。"
-        _write_state(config, state)
+        write_state()
     except Exception as exc:  # noqa: BLE001 - background jobs must persist diagnostics.
         state.status = "error"
         state.finished_at = _now()

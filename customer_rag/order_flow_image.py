@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 
-IMAGE_RENDER_VERSION = "v1"
+IMAGE_RENDER_VERSION = "v2"
 
 
 def create_order_flow_image(
@@ -39,16 +39,16 @@ def create_order_flow_image(
         return None
 
     font_path = _font_path()
-    header_font = ImageFont.truetype(font_path, 22) if font_path else ImageFont.load_default()
-    font = ImageFont.truetype(font_path, 21) if font_path else ImageFont.load_default()
+    header_font = ImageFont.truetype(font_path, 19) if font_path else ImageFont.load_default()
+    font = ImageFont.truetype(font_path, 18) if font_path else ImageFont.load_default()
 
-    width = 1320
-    column_widths = [360, 610, 350]
-    header_height = 46
-    padding_x = 18
-    padding_y = 16
-    line_height = 30
-    line_gap = 6
+    width = 1080
+    column_widths = [294, 499, 287]
+    header_height = 40
+    padding_x = 14
+    padding_y = 13
+    line_height = 26
+    line_gap = 4
     border = (210, 218, 230)
     header_fill = (242, 245, 249)
     header_text = (65, 72, 86)
@@ -83,7 +83,7 @@ def create_order_flow_image(
         x = right
 
     target_dir.mkdir(parents=True, exist_ok=True)
-    image.save(target)
+    image.save(target, optimize=True, compress_level=9)
     return str(target)
 
 

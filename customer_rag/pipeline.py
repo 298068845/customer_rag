@@ -426,6 +426,7 @@ class RagPipeline:
             answer_sources,
             system_prompt=system_prompt,
             require_question_match=not conditions,
+            max_products=self.config.top_k,
         )
         if answer is None:
             if is_product_query(question):
@@ -483,6 +484,7 @@ class RagPipeline:
             sources,
             system_prompt=system_prompt,
             require_question_match=False,
+            max_products=self.config.top_k,
         )
         if answer is None:
             answer = _format_fuzzy_sources(sources)

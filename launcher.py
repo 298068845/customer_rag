@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -25,10 +26,16 @@ TALK_STREAMLIT_LOG = ROOT / "talk-streamlit.log"
 TALK_STREAMLIT_ERR = ROOT / "talk-streamlit.err.log"
 WECHAT_START = ROOT / "wechatExtension" / "start.ps1"
 WECHAT_STOP = ROOT / "wechatExtension" / "stop.ps1"
+WECHAT_CONFIG = ROOT / "wechatExtension" / "config.ini"
 APP_URL = "http://127.0.0.1:8501"
 APP_PORT = 8501
 TALK_APP_URL = "http://127.0.0.1:8502"
 TALK_APP_PORT = 8502
+LOCATOR_MODE_DEFAULT = "uia"
+LOCATOR_MODE_LABELS = {
+    "uia": "UIA \u5b9a\u4f4d",
+    "f8": "F8 \u5b9a\u4f4d",
+}
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -66,6 +73,23 @@ def build_menu() -> pystray.Menu:
             toggle_wechat_plugin,
             checked=lambda _: get_wechat_running(),
             enabled=lambda _: not get_wechat_busy(),
+        ),
+        pystray.MenuItem(
+            "\u5b9a\u4f4d\u6a21\u5f0f",
+            pystray.Menu(
+                pystray.MenuItem(
+                    LOCATOR_MODE_LABELS["uia"],
+                    set_locator_mode_uia,
+                    checked=lambda _: get_locator_mode() == "uia",
+                    radio=True,
+                ),
+                pystray.MenuItem(
+                    LOCATOR_MODE_LABELS["f8"],
+                    set_locator_mode_f8,
+                    checked=lambda _: get_locator_mode() == "f8",
+                    radio=True,
+                ),
+            ),
         ),
         pystray.MenuItem("重启 RAG 服务", restart_streamlit),
         pystray.Menu.SEPARATOR,
@@ -335,6 +359,21 @@ def toggle_wechat_plugin(icon: pystray.Icon, _: object = None) -> None:
     threading.Thread(target=worker, daemon=True).start()
 
 
+def set_locator_mode_uia(icon: pystray.Icon, _: object = None) -> None:
+    set_locator_mode(icon, "uia")
+
+
+def set_locator_mode_f8(icon: pystray.Icon, _: object = None) -> None:
+    set_locator_mode(icon, "f8")
+
+
+def set_locator_mode(icon: pystray.Icon, mode: str) -> None:
+    mode = normalize_locator_mode(mode)
+    write_ini_value(WECHAT_CONFIG, "send", "locator_mode", mode)
+    icon.update_menu()
+    notify(icon, "\u5b9a\u4f4d\u6a21\u5f0f\u5df2\u5207\u6362", LOCATOR_MODE_LABELS[mode])
+
+
 def quit_launcher(icon: pystray.Icon, _: object = None) -> None:
     def worker() -> None:
         stop_wechat_plugin()
@@ -516,6 +555,76 @@ def set_wechat_busy(value: bool) -> None:
 def get_wechat_busy() -> bool:
     with state_lock:
         return wechat_busy
+
+
+def get_locator_mode() -> str:
+    return normalize_locator_mode(read_ini_value(WECHAT_CONFIG, "send", "locator_mode", LOCATOR_MODE_DEFAULT))
+
+
+def normalize_locator_mode(value: str | None) -> str:
+    mode = (value or LOCATOR_MODE_DEFAULT).strip().lower()
+    if mode in {"f8", "saved_point", "saved-point", "point"}:
+        return "f8"
+    return "uia"
+
+
+def read_ini_value(path: Path, section: str, key: str, default: str) -> str:
+    if not path.exists():
+        return default
+
+    current_section = ""
+    section_pattern = re.compile(r"^\s*\[([^\]]+)\]\s*$")
+    key_pattern = re.compile(r"^\s*([^=;#]+?)\s*=")
+    try:
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
+            section_match = section_pattern.match(line)
+            if section_match:
+                current_section = section_match.group(1).strip().lower()
+                continue
+            key_match = key_pattern.match(line)
+            if current_section == section.lower() and key_match and key_match.group(1).strip().lower() == key.lower():
+                return line.split("=", 1)[1].strip()
+    except OSError:
+        return default
+    return default
+
+
+def write_ini_value(path: Path, section: str, key: str, value: str) -> None:
+    lines = path.read_text(encoding="utf-8-sig").splitlines(keepends=True) if path.exists() else []
+    section_header = f"[{section}]\n"
+    key_line = f"{key}={value}\n"
+    section_pattern = re.compile(r"^\s*\[([^\]]+)\]\s*$")
+    key_pattern = re.compile(r"^\s*([^=;#]+?)\s*=")
+    in_section = False
+    section_found = False
+
+    for index, line in enumerate(lines):
+        section_match = section_pattern.match(line.strip())
+        if section_match:
+            if in_section:
+                lines.insert(index, key_line)
+                path.write_text("".join(lines), encoding="utf-8")
+                return
+            in_section = section_match.group(1).strip().lower() == section.lower()
+            section_found = section_found or in_section
+            continue
+
+        key_match = key_pattern.match(line)
+        if in_section and key_match and key_match.group(1).strip().lower() == key.lower():
+            newline = "\r\n" if line.endswith("\r\n") else "\n"
+            lines[index] = f"{key}={value}{newline}"
+            path.write_text("".join(lines), encoding="utf-8")
+            return
+
+    if section_found:
+        lines.append(key_line)
+    else:
+        if lines and not lines[-1].endswith(("\n", "\r")):
+            lines[-1] += "\n"
+        if lines and lines[-1].strip():
+            lines.append("\n")
+        lines.extend([section_header, key_line])
+    path.write_text("".join(lines), encoding="utf-8")
 
 
 def wechat_menu_label() -> str:

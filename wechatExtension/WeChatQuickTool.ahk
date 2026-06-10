@@ -9,6 +9,7 @@ CoordMode "ToolTip", "Screen"
 global CONFIG_PATH := A_ScriptDir "\config.ini"
 global SEND_TEXT_PATH := A_ScriptDir "\send-text.txt"
 global LAST_SELECTED_PATH := A_ScriptDir "\last-selected.txt"
+global RAG_BRANDS_PATH := A_ScriptDir "\rag-brands.txt"
 global PREVIEW_TEST_PATH := A_ScriptDir "\preview-test-result.ini"
 global SEND_BOX_DEBUG_PATH := A_ScriptDir "\sendbox-debug.log"
 global CUSTOM_TAB_PATHS := [
@@ -36,6 +37,11 @@ global PREVIEW_SHOW_TABS := false
 global PREVIEW_FALLBACK_MODE := false
 global PREVIEW_MODE_ALL := 0
 global PREVIEW_MODE_SPLIT := 0
+global PREVIEW_BRAND_SELECT := 0
+global PREVIEW_RETURN_COUNT_SELECT := 0
+global PREVIEW_BRANDS := []
+global PREVIEW_SELECTED_BRAND := ""
+global PREVIEW_FORCE_SPLIT := false
 global PREVIEW_CLOSE_BUTTON := 0
 global LAST_SEND_TICK := 0
 global MIN_SEND_INTERVAL_MS := 300
@@ -46,10 +52,15 @@ global STATUS_BODY := 0
 global RAG_QUERY_PID := 0
 global RAG_QUERY_STARTED_AT := 0
 global RAG_TALK_ONLY_PENDING := false
+global RAG_ORIGINAL_QUESTION := ""
+global RAG_SELECTED_BRAND := ""
+global RAG_PREVIEW_X := ""
+global RAG_PREVIEW_Y := ""
 global STATUS_TEST_FORCE_MONITOR := 0
 global QUERY_GUI := 0
 global QUERY_VISIBLE := false
 global QUERY_EDIT := 0
+global PASTE_ONLY_MODE := false
 
 EnsureBootstrapFiles()
 
@@ -70,6 +81,11 @@ if HasArg("--clipboard-file-test") {
 
 if HasArg("--clipboard-image-test") {
     RunClipboardImageSelfTest()
+    ExitApp
+}
+
+if HasArg("--paste-image-test") {
+    RunPasteImageSelfTest()
     ExitApp
 }
 
@@ -129,6 +145,8 @@ HandleTabHotkey() {
 }
 
 CaptureSelectedText() {
+    global RAG_ORIGINAL_QUESTION, RAG_SELECTED_BRAND, RAG_PREVIEW_X, RAG_PREVIEW_Y
+
     oldClipboard := ClipboardAll()
     A_Clipboard := ""
     Send "^c"
@@ -149,6 +167,10 @@ CaptureSelectedText() {
 
     FileDeleteSafe(LAST_SELECTED_PATH)
     FileAppend selectedText, LAST_SELECTED_PATH, "UTF-8"
+    RAG_ORIGINAL_QUESTION := selectedText
+    RAG_SELECTED_BRAND := ""
+    RAG_PREVIEW_X := ""
+    RAG_PREVIEW_Y := ""
     ShowQueryDialog(selectedText)
 }
 
@@ -163,7 +185,7 @@ ShowQueryDialog(selectedText) {
     QUERY_GUI.MarginY := 8
     QUERY_GUI.SetFont("s10 c2F2620", "Microsoft YaHei")
 
-    QUERY_EDIT := QUERY_GUI.AddEdit("xm ym w520 h28", selectedText)
+    QUERY_EDIT := QUERY_GUI.AddEdit("xm ym w260 h28", selectedText)
     closeButton := QUERY_GUI.AddText("x+8 yp w28 h28 Center 0x200 +0x100 c7A3F20 BackgroundEAD2B8", "X")
     closeButton.OnEvent("Click", CloseQueryDialog)
     QUERY_GUI.OnEvent("Close", CloseQueryDialog)
@@ -175,7 +197,7 @@ ShowQueryDialog(selectedText) {
 }
 
 StartRagFromQueryDialog(*) {
-    global QUERY_EDIT, RAG_QUERY_PID, SEND_IN_PROGRESS
+    global QUERY_EDIT, RAG_QUERY_PID, SEND_IN_PROGRESS, RAG_ORIGINAL_QUESTION, RAG_SELECTED_BRAND, RAG_PREVIEW_X, RAG_PREVIEW_Y
 
     if SEND_IN_PROGRESS {
         return
@@ -195,6 +217,10 @@ StartRagFromQueryDialog(*) {
         return
     }
 
+    RAG_ORIGINAL_QUESTION := question
+    RAG_SELECTED_BRAND := ""
+    RAG_PREVIEW_X := ""
+    RAG_PREVIEW_Y := ""
     FileDeleteSafe(LAST_SELECTED_PATH)
     FileAppend question, LAST_SELECTED_PATH, "UTF-8"
     CloseQueryDialog()
@@ -209,7 +235,7 @@ PositionQueryDialog() {
     }
     MouseGetPos &mouseX, &mouseY
     GetWorkAreaForPoint(mouseX, mouseY, &left, &top, &right, &bottom)
-    x := Clamp(mouseX + 14, left + 10, right - 600)
+    x := Clamp(mouseX + 14, left + 10, right - 340)
     y := Clamp(mouseY + 14, top + 10, bottom - 80)
     QUERY_GUI.Show("x" x " y" y " AutoSize")
 }
@@ -226,7 +252,7 @@ CloseQueryDialog(*) {
 }
 
 AskRagForSelection(tags := "", talkOnly := false) {
-    global RAG_QUERY_PID, RAG_QUERY_STARTED_AT, RAG_TALK_ONLY_PENDING
+    global RAG_QUERY_PID, RAG_QUERY_STARTED_AT, RAG_TALK_ONLY_PENDING, RAG_SELECTED_BRAND
 
     if !ReadBoolConfig("rag", "enabled", false) {
         return
@@ -255,7 +281,17 @@ AskRagForSelection(tags := "", talkOnly := false) {
     ShowStatus("loading", "RAG 查询中", "正在根据选中文字生成回复，请稍等...")
     RAG_TALK_ONLY_PENDING := talkOnly
     FileDeleteSafe(SEND_TEXT_PATH)
+    if (Trim(RAG_SELECTED_BRAND) = "") {
+        FileDeleteSafe(RAG_BRANDS_PATH)
+    }
     command := QuoteArg(python) " " QuoteArg(bridge) " --question-file " QuoteArg(LAST_SELECTED_PATH) " --output-file " QuoteArg(SEND_TEXT_PATH) " --project-root " QuoteArg(projectRoot) " --log-file " QuoteArg(logPath)
+    if (Trim(RAG_SELECTED_BRAND) != "") {
+        command .= " --brand " QuoteArg(RAG_SELECTED_BRAND)
+    }
+    if (!talkOnly) {
+        command .= " --brands-file " QuoteArg(RAG_BRANDS_PATH)
+        command .= " --top-k " ReadPreviewReturnCount()
+    }
     if (Trim(tags) != "") {
         command .= " --tags " QuoteArg(tags)
     }
@@ -327,6 +363,8 @@ WriteRagFallbackResult() {
 }
 
 ShowRagResultPreview() {
+    global RAG_PREVIEW_X, RAG_PREVIEW_Y
+
     text := ReadSendText()
     if (Trim(text) = "") {
         ShowStatus("error", "查询完成但结果为空", "send-text.txt 为空，请查看 rag-bridge.log。", 4200)
@@ -334,7 +372,11 @@ ShowRagResultPreview() {
     }
 
     CloseStatus()
-    ShowSendPreview(text, "", "", "query")
+    if (RAG_PREVIEW_X != "" && RAG_PREVIEW_Y != "") {
+        ShowSendPreview(text, RAG_PREVIEW_X, RAG_PREVIEW_Y, "query_fixed")
+    } else {
+        ShowSendPreview(text, "", "", "query")
+    }
 }
 
 PreviewOrSendNext() {
@@ -376,7 +418,9 @@ ShowSendPreview(text, mouseX := "", mouseY := "", mode := "query") {
     global PREVIEW_GUI, PREVIEW_VISIBLE, PREVIEW_TARGET_HWND, PREVIEW_SOURCE_TEXT
     global PREVIEW_EDIT, PREVIEW_LIST, PREVIEW_STATUS, PREVIEW_MODE_ALL, PREVIEW_MODE_SPLIT
     global PREVIEW_CLOSE_BUTTON, PREVIEW_TABS, PREVIEW_TAB_TEXTS, PREVIEW_ACTIVE_TAB, PREVIEW_SHOW_TABS
-    global PREVIEW_FALLBACK_MODE
+    global PREVIEW_FALLBACK_MODE, PREVIEW_BRAND_SELECT, PREVIEW_RETURN_COUNT_SELECT
+    global PREVIEW_BRANDS, PREVIEW_SELECTED_BRAND, PREVIEW_FORCE_SPLIT
+    global RAG_SELECTED_BRAND
 
     ClosePreview()
     DebugPreviewTest("show_after_close")
@@ -385,8 +429,11 @@ ShowSendPreview(text, mouseX := "", mouseY := "", mode := "query") {
     PREVIEW_TARGET_HWND := WinGetID("A")
     PREVIEW_SOURCE_TEXT := text
     PREVIEW_SHOW_TABS := mode = "custom"
+    PREVIEW_FORCE_SPLIT := InStr(mode, "query") = 1
     PREVIEW_TAB_TEXTS := PREVIEW_SHOW_TABS ? BuildCustomTabTexts() : [text]
     PREVIEW_ACTIVE_TAB := 1
+    PREVIEW_BRANDS := PREVIEW_SHOW_TABS ? [] : ReadQueryBrands()
+    PREVIEW_SELECTED_BRAND := RAG_SELECTED_BRAND
     DebugPreviewTest("show_after_target")
 
     PREVIEW_GUI := Gui("+AlwaysOnTop -Caption -Border +ToolWindow", T("window_title"))
@@ -395,20 +442,25 @@ ShowSendPreview(text, mouseX := "", mouseY := "", mode := "query") {
     PREVIEW_GUI.MarginY := 15
 
     PREVIEW_GUI.SetFont("s14 bold c2F2620", "Microsoft YaHei")
-    PREVIEW_GUI.AddText("xm ym w364 BackgroundFBF3E8", T("preview_title"))
+    PREVIEW_GUI.AddText("xm ym w440 BackgroundFBF3E8", T("preview_title"))
     PREVIEW_GUI.SetFont("s11 bold c7A3F20", "Microsoft YaHei")
     PREVIEW_CLOSE_BUTTON := PREVIEW_GUI.AddText("x+8 yp w28 h28 Center 0x200 +0x100 c7A3F20 BackgroundEAD2B8", "X")
     PREVIEW_CLOSE_BUTTON.OnEvent("Click", CancelPreview)
     DebugPreviewTest("show_after_header")
 
     PREVIEW_GUI.SetFont("s9 c7A5A43", "Microsoft YaHei")
-    PREVIEW_GUI.AddText("xm y+10 w400 BackgroundFBF3E8", T("hint"))
+    PREVIEW_GUI.AddText("xm y+10 w476 BackgroundFBF3E8", T("hint"))
 
-    PREVIEW_GUI.SetFont("s9 bold", "Microsoft YaHei")
-    PREVIEW_MODE_ALL := PREVIEW_GUI.AddText("xm y+14 w132 h32 Center 0x200 +0x100", T("send_all"))
-    PREVIEW_MODE_SPLIT := PREVIEW_GUI.AddText("x+10 yp w132 h32 Center 0x200 +0x100", T("send_split"))
-    PREVIEW_MODE_ALL.OnEvent("Click", (*) => SetPreviewMode("all"))
-    PREVIEW_MODE_SPLIT.OnEvent("Click", (*) => SetPreviewMode("split"))
+    if !PREVIEW_SHOW_TABS {
+        PREVIEW_GUI.SetFont("s9 c7A5A43", "Microsoft YaHei")
+        PREVIEW_GUI.AddText("xm y+10 w34 h26 0x200 BackgroundFBF3E8", T("brand_filter"))
+        PREVIEW_BRAND_SELECT := PREVIEW_GUI.AddDropDownList("x+8 yp w142", BuildBrandOptions(PREVIEW_BRANDS))
+        PREVIEW_BRAND_SELECT.Choose(BrandOptionIndex(PREVIEW_BRANDS, PREVIEW_SELECTED_BRAND))
+        PREVIEW_BRAND_SELECT.OnEvent("Change", PreviewBrandChanged)
+        PREVIEW_RETURN_COUNT_SELECT := PREVIEW_GUI.AddDropDownList("x+4 yp w180", BuildReturnCountOptions())
+        PREVIEW_RETURN_COUNT_SELECT.Choose(ReturnCountOptionIndex(ReadPreviewReturnCount()))
+        PREVIEW_RETURN_COUNT_SELECT.OnEvent("Change", PreviewReturnCountChanged)
+    }
 
     PREVIEW_TABS := 0
     if PREVIEW_SHOW_TABS {
@@ -427,8 +479,8 @@ ShowSendPreview(text, mouseX := "", mouseY := "", mode := "query") {
     }
 
     PREVIEW_GUI.SetFont("s9 c2F2620", "Microsoft YaHei")
-    PREVIEW_LIST := PREVIEW_GUI.AddListView("xm y+8 w400 h132 Checked -Multi BackgroundFFF9F2 c2F2620", [T("list_header"), "full_text"])
-    PREVIEW_LIST.ModifyCol(1, 376)
+    PREVIEW_LIST := PREVIEW_GUI.AddListView("xm y+8 w476 h132 Checked -Multi BackgroundFFF9F2 c2F2620", [T("list_header"), "full_text"])
+    PREVIEW_LIST.ModifyCol(1, 452)
     PREVIEW_LIST.ModifyCol(2, 0)
 
     PREVIEW_GUI.SetFont("s9 bold", "Microsoft YaHei")
@@ -436,6 +488,12 @@ ShowSendPreview(text, mouseX := "", mouseY := "", mode := "query") {
     cancelButton := PREVIEW_GUI.AddText("x+10 yp w78 h32 Center 0x200 +0x100 c7A5A43 BackgroundF0DDC8", T("cancel"))
     sendButton.OnEvent("Click", SendPreviewNow)
     cancelButton.OnEvent("Click", CancelPreview)
+
+    PREVIEW_MODE_ALL := PREVIEW_GUI.AddText("x0 y0 w1 h1 Hidden", T("send_all"))
+    PREVIEW_MODE_SPLIT := PREVIEW_GUI.AddText("x0 y0 w1 h1 Hidden", T("send_split"))
+    PREVIEW_MODE_ALL.OnEvent("Click", (*) => SetPreviewMode("all"))
+    PREVIEW_MODE_SPLIT.OnEvent("Click", (*) => SetPreviewMode("split"))
+
     PREVIEW_GUI.OnEvent("Close", CancelPreview)
     PREVIEW_GUI.OnEvent("Escape", CancelPreview)
     DebugPreviewTest("show_after_controls")
@@ -444,13 +502,76 @@ ShowSendPreview(text, mouseX := "", mouseY := "", mode := "query") {
     RebuildPreviewQueue()
     DebugPreviewTest("show_after_rebuild")
 
-    PositionPreviewNearMouse(mouseX, mouseY)
+    if (mode = "query_fixed") {
+        PositionPreviewAt(mouseX, mouseY)
+    } else {
+        PositionPreviewNearMouse(mouseX, mouseY)
+    }
     DebugPreviewTest("show_after_position")
 }
 
 SetPreviewMode(mode) {
     IniWrite mode, CONFIG_PATH, "preview", "send_mode"
     RebuildPreviewQueue()
+}
+
+PreviewBrandChanged(*) {
+    global PREVIEW_BRAND_SELECT, PREVIEW_BRANDS, PREVIEW_GUI
+    global RAG_ORIGINAL_QUESTION, RAG_SELECTED_BRAND, RAG_PREVIEW_X, RAG_PREVIEW_Y
+
+    if !IsObject(PREVIEW_BRAND_SELECT) {
+        return
+    }
+
+    index := PREVIEW_BRAND_SELECT.Value
+    brand := ""
+    if (index > 1 && index - 1 <= PREVIEW_BRANDS.Length) {
+        brand := PREVIEW_BRANDS[index - 1]
+    }
+    if (brand = RAG_SELECTED_BRAND) {
+        return
+    }
+    if (Trim(RAG_ORIGINAL_QUESTION) = "") {
+        return
+    }
+
+    RAG_SELECTED_BRAND := brand
+    SaveCurrentPreviewPosition()
+    FileDeleteSafe(LAST_SELECTED_PATH)
+    FileAppend RAG_ORIGINAL_QUESTION, LAST_SELECTED_PATH, "UTF-8"
+    ClosePreview()
+    AskRagForSelection()
+}
+
+PreviewReturnCountChanged(*) {
+    global PREVIEW_RETURN_COUNT_SELECT, RAG_ORIGINAL_QUESTION
+
+    if !IsObject(PREVIEW_RETURN_COUNT_SELECT) {
+        return
+    }
+
+    count := PREVIEW_RETURN_COUNT_SELECT.Value = 2 ? 10 : 5
+    if (count = ReadPreviewReturnCount()) {
+        return
+    }
+    IniWrite count, CONFIG_PATH, "preview", "return_count"
+    if (Trim(RAG_ORIGINAL_QUESTION) = "") {
+        return
+    }
+
+    SaveCurrentPreviewPosition()
+    FileDeleteSafe(LAST_SELECTED_PATH)
+    FileAppend RAG_ORIGINAL_QUESTION, LAST_SELECTED_PATH, "UTF-8"
+    ClosePreview()
+    AskRagForSelection()
+}
+
+SaveCurrentPreviewPosition() {
+    global PREVIEW_GUI, RAG_PREVIEW_X, RAG_PREVIEW_Y
+
+    if IsObject(PREVIEW_GUI) {
+        try WinGetPos &RAG_PREVIEW_X, &RAG_PREVIEW_Y,,, "ahk_id " PREVIEW_GUI.Hwnd
+    }
 }
 
 RebuildPreviewQueue() {
@@ -609,7 +730,8 @@ ClosePreview(*) {
     global PREVIEW_GUI, PREVIEW_VISIBLE, PREVIEW_TARGET_HWND, PREVIEW_SOURCE_TEXT
     global PREVIEW_PARTS, PREVIEW_INDEX, PREVIEW_EDIT, PREVIEW_STATUS, PREVIEW_MODE_ALL, PREVIEW_MODE_SPLIT
     global PREVIEW_LIST, PREVIEW_CLOSE_BUTTON, PREVIEW_TABS, PREVIEW_TAB_TEXTS, PREVIEW_ACTIVE_TAB, PREVIEW_SHOW_TABS
-    global PREVIEW_FALLBACK_MODE, SEND_IN_PROGRESS
+    global PREVIEW_FALLBACK_MODE, SEND_IN_PROGRESS, PREVIEW_BRAND_SELECT, PREVIEW_RETURN_COUNT_SELECT
+    global PREVIEW_BRANDS, PREVIEW_SELECTED_BRAND, PREVIEW_FORCE_SPLIT
 
     if SEND_IN_PROGRESS {
         return
@@ -633,13 +755,18 @@ ClosePreview(*) {
     PREVIEW_TABS := 0
     PREVIEW_SHOW_TABS := false
     PREVIEW_FALLBACK_MODE := false
+    PREVIEW_BRAND_SELECT := 0
+    PREVIEW_RETURN_COUNT_SELECT := 0
+    PREVIEW_BRANDS := []
+    PREVIEW_SELECTED_BRAND := ""
+    PREVIEW_FORCE_SPLIT := false
     PREVIEW_MODE_ALL := 0
     PREVIEW_MODE_SPLIT := 0
     PREVIEW_CLOSE_BUTTON := 0
 }
 
 PasteTextToWeChat(text) {
-    global LAST_SEND_TICK, MIN_SEND_INTERVAL_MS
+    global LAST_SEND_TICK, MIN_SEND_INTERVAL_MS, PASTE_ONLY_MODE
 
     imagePath := ExtractImagePath(text)
     textToSend := RemoveImageLines(text)
@@ -676,7 +803,7 @@ PasteTextToWeChat(text) {
         }
     }
 
-    if ReadBoolConfig("send", "press_enter", true) && (Trim(textToSend) != "" || imagePath != "") {
+    if !PASTE_ONLY_MODE && ReadBoolConfig("send", "press_enter", true) && (Trim(textToSend) != "" || imagePath != "") {
         Sleep ReadIntConfig("send", "before_enter_ms", 120)
         Send "{Enter}"
     }
@@ -925,6 +1052,16 @@ FocusSendBox() {
         return true
     }
 
+    locatorMode := NormalizeLocatorMode(IniRead(CONFIG_PATH, "send", "locator_mode", "uia"))
+    SendBoxDebug("locator_mode=" locatorMode)
+    if (locatorMode = "f8") {
+        SendBoxDebug("locator=f8_saved_point")
+        GetInputAnchor(targetHwnd, &anchorX, &anchorY)
+        Click anchorX, anchorY
+        Sleep ReadIntConfig("send", "after_click_ms", 100)
+        return true
+    }
+
     if TryFocusSendBoxByUIAutomation(targetHwnd) || TryFocusSendBoxByControl(targetHwnd) {
         Sleep ReadIntConfig("send", "after_click_ms", 100)
         return true
@@ -947,8 +1084,25 @@ FocusSendBox() {
     return false
 }
 
+NormalizeLocatorMode(value) {
+    mode := StrLower(Trim(value))
+    if mode = "f8" || mode = "saved_point" || mode = "saved-point" || mode = "point" {
+        return "f8"
+    }
+    return "uia"
+}
+
+FindWeChatWindow() {
+    for hwnd in WinGetList() {
+        if IsWeChatWindow(hwnd) {
+            return hwnd
+        }
+    }
+    return 0
+}
+
 PositionPreviewNearMouse(mouseX := "", mouseY := "") {
-    global PREVIEW_GUI, PREVIEW_EDIT, PREVIEW_CLOSE_BUTTON
+    global PREVIEW_GUI, PREVIEW_EDIT, PREVIEW_CLOSE_BUTTON, RAG_PREVIEW_X, RAG_PREVIEW_Y
 
     if !IsObject(PREVIEW_GUI) {
         return
@@ -1000,10 +1154,41 @@ PositionPreviewNearMouse(mouseX := "", mouseY := "") {
 
     PREVIEW_GUI.Show("x" best.x " y" best.y " AutoSize")
     Sleep 30
+    try WinGetPos &RAG_PREVIEW_X, &RAG_PREVIEW_Y,,, "ahk_id " PREVIEW_GUI.Hwnd
     DebugPreviewTest("position_after_show")
     ClearPreviewSelection()
     ApplyRoundedPreviewRegion()
     DebugPreviewTest("position_after_region")
+}
+
+PositionPreviewAt(x, y) {
+    global PREVIEW_GUI, RAG_PREVIEW_X, RAG_PREVIEW_Y
+
+    if !IsObject(PREVIEW_GUI) {
+        return
+    }
+
+    if (x = "" || y = "") {
+        PositionPreviewNearMouse()
+        return
+    }
+
+    GetWorkAreaForPoint(x, y, &left, &top, &right, &bottom)
+    PREVIEW_GUI.Show("x" x " y" y " AutoSize")
+    Sleep 30
+    try {
+        WinGetPos ,, &previewW, &previewH, "ahk_id " PREVIEW_GUI.Hwnd
+        x := Clamp(x, left + 10, right - previewW - 10)
+        y := Clamp(y, top + 10, bottom - previewH - 10)
+        PREVIEW_GUI.Show("x" x " y" y " AutoSize")
+        Sleep 30
+        WinGetPos &RAG_PREVIEW_X, &RAG_PREVIEW_Y,,, "ahk_id " PREVIEW_GUI.Hwnd
+    } catch {
+        RAG_PREVIEW_X := x
+        RAG_PREVIEW_Y := y
+    }
+    ClearPreviewSelection()
+    ApplyRoundedPreviewRegion()
 }
 
 ClearPreviewSelection() {
@@ -1490,6 +1675,74 @@ BuildCustomTabTexts() {
     return texts
 }
 
+ReadQueryBrands() {
+    global RAG_BRANDS_PATH
+
+    brands := []
+    seen := Map()
+    if !FileExist(RAG_BRANDS_PATH) {
+        return brands
+    }
+    text := StripBom(FileRead(RAG_BRANDS_PATH, "UTF-8"))
+    normalized := StrReplace(text, "`r`n", "`n")
+    normalized := StrReplace(normalized, "`r", "`n")
+    for line in StrSplit(normalized, "`n") {
+        brand := Trim(line, "`r`n `t")
+        if (brand = "" || seen.Has(StrLower(brand))) {
+            continue
+        }
+        seen[StrLower(brand)] := true
+        brands.Push(brand)
+    }
+    return brands
+}
+
+BuildBrandOptions(brands) {
+    options := [T("no_brand_filter")]
+    for brand in brands {
+        options.Push(brand)
+    }
+    return options
+}
+
+BrandOptionIndex(brands, selectedBrand) {
+    selectedBrand := Trim(selectedBrand)
+    if (selectedBrand = "") {
+        return 1
+    }
+    for index, brand in brands {
+        if (brand = selectedBrand) {
+            return index + 1
+        }
+    }
+    return 1
+}
+
+BuildReturnCountOptions() {
+    return [T("return_count_5"), T("return_count_10")]
+}
+
+ReturnCountOptionText(count) {
+    return ReadReturnCountValue(count) = 10 ? T("return_count_10") : T("return_count_5")
+}
+
+ReturnCountOptionIndex(count) {
+    return ReadReturnCountValue(count) = 10 ? 2 : 1
+}
+
+ReadPreviewReturnCount() {
+    return ReadReturnCountValue(IniRead(CONFIG_PATH, "preview", "return_count", "5"))
+}
+
+ReadReturnCountValue(value) {
+    try {
+        count := Integer(value)
+    } catch {
+        count := 5
+    }
+    return count = 10 ? 10 : 5
+}
+
 PreparePreviewSourceText(text) {
     global PREVIEW_FALLBACK_MODE
 
@@ -1611,6 +1864,11 @@ JoinParts(parts) {
 }
 
 GetPreviewMode() {
+    global PREVIEW_FORCE_SPLIT
+
+    if PREVIEW_FORCE_SPLIT {
+        return "split"
+    }
     mode := StrLower(IniRead(CONFIG_PATH, "preview", "send_mode", "all"))
     return mode = "split" ? "split" : "all"
 }
@@ -1622,7 +1880,15 @@ T(key) {
         case "preview_title":
             return C(21457, 36865, 39044, 35272)
         case "hint":
-            return "~ " C(38190) " " C(21457, 36865, 19979, 19968, 26465) ", Esc " C(21462, 28040) "." C(20998, 21106, 32447) ": " C(21333, 29420, 19968, 34892) " ---"
+            return "Tab " C(38190) " " C(21457, 36865, 19979, 19968, 26465) ", Esc " C(21462, 28040)
+        case "brand_filter":
+            return C(21697, 29260)
+        case "no_brand_filter":
+            return C(26080, 25351, 23450)
+        case "return_count_5":
+            return C(36820, 22238, 25968, 30446) ": 5"
+        case "return_count_10":
+            return C(36820, 22238, 25968, 30446) ": 10"
         case "send_all":
             return C(19968, 27425, 24615, 21457, 36865)
         case "send_split":
@@ -1681,9 +1947,11 @@ timeout_seconds=0.6
 
 [preview]
 send_mode=all
+return_count=5
 
 [send]
 text=
+locator_mode=uia
 click_before_paste=1
 allow_saved_point_fallback=0
 allow_safe_geometry_fallback=1
@@ -1801,6 +2069,38 @@ RunClipboardImageSelfTest() {
     if FileExist(imagePath) {
         ok := SetClipboardImage(imagePath)
         FileAppend "set_clipboard_image=" (ok ? "1" : "0") "`n", resultPath, "UTF-8"
+    }
+}
+
+RunPasteImageSelfTest() {
+    global PREVIEW_TARGET_HWND, PASTE_ONLY_MODE
+
+    resultPath := A_ScriptDir "\paste-image-test-result.ini"
+    imagePath := A_ScriptDir "\..\data\tmp\order_flow_preview\test\row-2-330a5ea49e8d8164.png"
+    FileDeleteSafe(resultPath)
+    FileAppend "[debug]`nstarted=1`nimage=" imagePath "`nexists=" (FileExist(imagePath) ? "1" : "0") "`n", resultPath, "UTF-8"
+
+    hwnd := FindWeChatWindow()
+    FileAppend "wechat_hwnd=" hwnd "`n", resultPath, "UTF-8"
+    if !hwnd {
+        FileAppend "pasted=0`nerror=wechat_window_not_found`n", resultPath, "UTF-8"
+        return
+    }
+    if !FileExist(imagePath) {
+        FileAppend "pasted=0`nerror=image_not_found`n", resultPath, "UTF-8"
+        return
+    }
+
+    PREVIEW_TARGET_HWND := hwnd
+    PASTE_ONLY_MODE := true
+    try {
+        PasteTextToWeChat("图片：" imagePath)
+        FileAppend "pasted=1`n", resultPath, "UTF-8"
+    } catch as exc {
+        FileAppend "pasted=0`nerror=" exc.Message "`n", resultPath, "UTF-8"
+    } finally {
+        PASTE_ONLY_MODE := false
+        PREVIEW_TARGET_HWND := 0
     }
 }
 
