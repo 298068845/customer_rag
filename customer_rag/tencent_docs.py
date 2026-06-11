@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import json
 import base64
+import io
+import os
 import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+from uuid import uuid4
+
+from customer_rag.time_format import display_datetime
 
 
 DownloadProgressCallback = Callable[[int, int | None], None]
@@ -86,7 +92,7 @@ def load_subscriptions(path: Path) -> list[TencentDocSubscription]:
                 enabled=bool(item.get("enabled", True)),
                 last_updated=str(item.get("last_updated", "")),
                 last_status=str(item.get("last_status", "")),
-                last_modified=str(item.get("last_modified", "")),
+                last_modified=display_datetime(item.get("last_modified", "")),
             )
         )
     return [subscription for subscription in subscriptions if subscription.name and subscription.url]
@@ -161,12 +167,32 @@ def download_subscription(
     data = _request_bytes(opener, file_url, progress_callback=progress_callback)
     if not data:
         raise RuntimeError(f"腾讯文档导出为空：{subscription.name}")
-    output_path.write_bytes(data)
+    _write_xlsx_atomically(output_path, data)
     return output_path
 
 
 def subscription_output_path(subscription: TencentDocSubscription, raw_data_dir: Path) -> Path:
     return raw_data_dir / "tencent_docs" / f"{_safe_filename(subscription.name)}.xlsx"
+
+
+def _write_xlsx_atomically(output_path: Path, data: bytes) -> None:
+    if not zipfile.is_zipfile(io.BytesIO(data)):
+        raise RuntimeError(f"腾讯文档导出文件不完整：{output_path.name}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = output_path.with_name(f"{output_path.name}.{uuid4().hex}.tmp")
+    try:
+        tmp_path.write_bytes(data)
+        last_error: OSError | None = None
+        for attempt in range(8):
+            try:
+                os.replace(tmp_path, output_path)
+                return
+            except OSError as exc:
+                last_error = exc
+                time.sleep(0.08 * (attempt + 1))
+        raise last_error or RuntimeError(f"无法保存腾讯文档导出文件：{output_path.name}")
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def fetch_subscription_last_modified(
@@ -200,6 +226,7 @@ def update_subscription_status(
     last_modified: str | None = None,
 ) -> list[TencentDocSubscription]:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    formatted_last_modified = display_datetime(last_modified) if last_modified is not None else None
     updated = []
     for subscription in subscriptions:
         if subscription.url == target_url:
@@ -211,7 +238,7 @@ def update_subscription_status(
                     enabled=subscription.enabled,
                     last_updated=now,
                     last_status=status,
-                    last_modified=subscription.last_modified if last_modified is None else last_modified,
+                    last_modified=subscription.last_modified if formatted_last_modified is None else formatted_last_modified,
                 )
             )
         else:
@@ -354,10 +381,10 @@ def _format_remote_time(value: object) -> str:
     try:
         number = int(float(text))
     except ValueError:
-        return text
+        return display_datetime(text)
     timestamp = number / 1000 if number > 10_000_000_000 else number
     try:
-        return datetime.fromtimestamp(timestamp).astimezone().isoformat(timespec="seconds")
+        return datetime.fromtimestamp(timestamp).astimezone().strftime("%Y-%m-%d %H:%M:%S")
     except (OSError, OverflowError, ValueError):
         return text
 

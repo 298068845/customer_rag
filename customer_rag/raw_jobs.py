@@ -4,6 +4,7 @@ import json
 import os
 import threading
 import time
+import zipfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,9 @@ from uuid import uuid4
 
 from customer_rag.config import RagConfig
 from customer_rag.pipeline import RagPipeline
+from customer_rag.process_utils import process_is_alive, start_worker_process
+from customer_rag.task_coordinator import release, try_acquire
+from customer_rag.time_format import display_datetimes_in_text, now_display
 
 
 @dataclass
@@ -29,6 +33,8 @@ class RawJobState:
     committed_subscriptions: int = 0
     error: str = ""
     logs: list[str] = field(default_factory=list)
+    worker_pid: int = 0
+    resume_attempts: int = 0
 
 
 _lock = threading.Lock()
@@ -51,45 +57,91 @@ def read_raw_job_state(config: RagConfig) -> RawJobState:
     defaults.update({key: payload.get(key, value) for key, value in defaults.items()})
     if defaults["logs"] is None:
         defaults["logs"] = []
+    defaults["logs"] = [display_datetimes_in_text(log) for log in defaults["logs"]]
+    defaults["message"] = display_datetimes_in_text(defaults["message"])
+    defaults["error"] = display_datetimes_in_text(defaults["error"])
     return RawJobState(**defaults)
 
 
 def is_raw_job_worker_alive() -> bool:
-    return bool(_worker and _worker.is_alive())
+    state = read_raw_job_state(load_config_for_pid_check())
+    return bool(_worker and _worker.is_alive()) or process_is_alive(int(state.worker_pid or 0))
 
 
 def recover_interrupted_raw_job(config: RagConfig) -> RawJobState:
     state = read_raw_job_state(config)
-    if state.status == "running" and not is_raw_job_worker_alive():
+    worker_alive = bool(_worker and _worker.is_alive()) or process_is_alive(int(state.worker_pid or 0))
+    if state.status == "running" and not worker_alive:
         state.status = "error"
         state.finished_at = _now()
         state.error = "任务已中断：服务重启或后台 worker 已不存在"
         state.message = "任务已中断"
         _add_log(state, state.error)
         _write_state(config, state)
+        from customer_rag.task_coordinator import mark_stale_idle
+
+        mark_stale_idle(config)
     return state
 
 
 def start_raw_job(config: RagConfig, task: str, scope: str = "all") -> RawJobState:
     global _worker
-    if task not in {"rebuild_raw", "rebuild_index"}:
+    if task not in {"import_data", "rebuild_raw", "rebuild_index"}:
         return RawJobState(status="error", error=f"未知任务：{task}")
     with _lock:
         state = recover_interrupted_raw_job(config)
-        if state.status == "running" and _worker and _worker.is_alive():
+        if state.status == "running" and (bool(_worker and _worker.is_alive()) or process_is_alive(int(state.worker_pid or 0))):
             return state
+        resume_attempts = int(state.resume_attempts or 0) if _can_resume_state(state) else 0
+        job_id = uuid4().hex
+        if not try_acquire(config, "manual_import", job_id):
+            return RawJobState(status="busy", message="订阅下载或其他导入任务正在运行")
         state = RawJobState(
-            job_id=uuid4().hex,
+            job_id=job_id,
             task=task,
             status="running",
             started_at=_now(),
             percent=0,
             message=_task_label(task) + "已启动",
+            resume_attempts=resume_attempts,
         )
         _write_state(config, state)
-        _worker = threading.Thread(target=_run_raw_job, args=(config, task, state.job_id, scope), daemon=True)
-        _worker.start()
+        if os.environ.get("CUSTOMER_RAG_INLINE_WORKER") == "1":
+            _worker = threading.Thread(target=_run_raw_job, args=(config, task, state.job_id, scope), daemon=True)
+            _worker.start()
+        else:
+            try:
+                state.worker_pid = start_worker_process(["raw", state.job_id, task, scope], Path.cwd())
+                _write_state(config, state)
+            except Exception as exc:
+                state.status = "error"
+                state.finished_at = _now()
+                state.error = f"启动独立导入进程失败：{exc}"
+                state.message = "导入任务启动失败"
+                _write_state(config, state)
+                release(config, job_id, state.status)
         return state
+
+
+def resume_interrupted_raw_job(config: RagConfig) -> RawJobState:
+    state = recover_interrupted_raw_job(config)
+    if not _can_resume_state(state):
+        return state
+    if int(state.resume_attempts or 0) >= 3:
+        return state
+    from customer_rag.task_coordinator import mark_stale_idle, read_state
+
+    coordinator = read_state(config)
+    if coordinator.active_job_id == state.job_id:
+        mark_stale_idle(config)
+        coordinator = read_state(config)
+    if coordinator.active_kind:
+        return state
+    task = "import_data" if state.task in {"import_data", "rebuild_raw"} else "rebuild_index"
+    scope = "pending" if task == "import_data" else "all"
+    state.resume_attempts = int(state.resume_attempts or 0) + 1
+    _write_state(config, state)
+    return start_raw_job(config, task, scope=scope)
 
 
 def _run_raw_job(config: RagConfig, task: str, job_id: str, scope: str = "all") -> None:
@@ -104,12 +156,12 @@ def _run_raw_job(config: RagConfig, task: str, job_id: str, scope: str = "all") 
 
     try:
         pipeline = RagPipeline(config)
-        if task == "rebuild_raw":
+        if task in {"import_data", "rebuild_raw"}:
             pending_path_tags = _pending_subscription_path_tags(config) if scope == "pending" else []
             if pending_path_tags:
                 update(5, f"正在解析本次下载文件：{len(pending_path_tags)} 个")
                 stats = pipeline.replace_files_with_tags(pending_path_tags, rebuild_index=False)
-                update(100, f"本次下载文件解析完成：{len(pending_path_tags)} 个")
+                update(55, f"本次下载文件解析完成：{len(pending_path_tags)} 个")
             else:
                 stats = pipeline.rebuild_corpus_from_raw(
                     rebuild_index=False,
@@ -124,6 +176,11 @@ def _run_raw_job(config: RagConfig, task: str, job_id: str, scope: str = "all") 
             state.items = int(stats.get("items") or 0)
             state.chunks = int(stats.get("chunks") or 0)
             state.index_error = str(stats.get("index_error") or "")
+            if task == "import_data":
+                update(60, "解析完成，正在重建向量索引")
+                state.chunks = int(pipeline.rebuild_index(progress_callback=lambda percent, message: update(60 + int(percent * 0.4), message)) or 0)
+                committed = _commit_pending_subscription_updates(config)
+                state.committed_subscriptions = committed
         else:
             chunks = pipeline.rebuild_index(progress_callback=update)
             state.chunks = int(chunks or 0)
@@ -148,6 +205,11 @@ def _run_raw_job(config: RagConfig, task: str, job_id: str, scope: str = "all") 
         state.message = _task_label(task) + "失败"
         _add_log(state, f"{state.message}：{exc}")
         _write_state(config, state)
+        from customer_rag.task_coordinator import mark_stale_idle
+
+        mark_stale_idle(config)
+    finally:
+        release(config, job_id, state.status)
 
 
 def _write_state(config: RagConfig, state: RawJobState) -> None:
@@ -175,11 +237,13 @@ def _write_state(config: RagConfig, state: RawJobState) -> None:
 
 
 def _add_log(state: RawJobState, message: str) -> None:
-    state.logs.append(f"{_now()} {message}")
+    state.logs.append(f"{now_display()} {message}")
     state.logs = state.logs[-30:]
 
 
 def _task_label(task: str) -> str:
+    if task == "import_data":
+        return "导入数据"
     if task == "rebuild_raw":
         return "重新解析原始文件"
     if task == "rebuild_index":
@@ -194,7 +258,7 @@ def _commit_pending_subscription_updates(config: RagConfig) -> int:
 
 
 def _pending_subscription_path_tags(config: RagConfig) -> list[tuple[Path, list[str]]]:
-    from customer_rag.subscription_jobs import read_job_state
+    from customer_rag.subscription_jobs import discard_pending_subscription_files, read_job_state
     from customer_rag.tencent_docs import load_subscriptions, subscription_output_path
 
     job_state = read_job_state(config)
@@ -203,11 +267,18 @@ def _pending_subscription_path_tags(config: RagConfig) -> list[tuple[Path, list[
         return []
     subscriptions = load_subscriptions(config.index_dir / "tencent_doc_subscriptions.json")
     result: list[tuple[Path, list[str]]] = []
+    invalid_urls: set[str] = set()
+    invalid_paths: set[Path] = set()
     for subscription in subscriptions:
         output_path = subscription_output_path(subscription, config.raw_data_dir)
         candidates = _path_keys(output_path)
         if candidates.intersection(pending_files):
+            if output_path.suffix.lower() == ".xlsx" and not zipfile.is_zipfile(output_path):
+                invalid_urls.add(subscription.url)
+                invalid_paths.add(output_path)
+                continue
             result.append((output_path, subscription.tags))
+    discard_pending_subscription_files(config, invalid_urls, invalid_paths)
     return result
 
 
@@ -224,5 +295,19 @@ def _normalize_path_key(value: str | Path) -> str:
     return str(value).replace("\\", "/").lower()
 
 
+def _can_resume_state(state: RawJobState) -> bool:
+    return (
+        state.status == "error"
+        and state.task in {"import_data", "rebuild_raw", "rebuild_index"}
+        and "worker 已不存在" in (state.error or state.message)
+    )
+
+
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def load_config_for_pid_check() -> RagConfig:
+    from customer_rag.config import load_config
+
+    return load_config()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import socket
@@ -29,6 +30,8 @@ WECHAT_STOP = ROOT / "wechatExtension" / "stop.ps1"
 WECHAT_CONFIG = ROOT / "wechatExtension" / "config.ini"
 APP_URL = "http://127.0.0.1:8501"
 APP_PORT = 8501
+TASK_API_URL = "http://127.0.0.1:8512"
+SUBSCRIPTION_JOB_STATE = ROOT / "data" / "index" / "subscription_update_job.json"
 TALK_APP_URL = "http://127.0.0.1:8502"
 TALK_APP_PORT = 8502
 LOCATOR_MODE_DEFAULT = "uia"
@@ -59,6 +62,7 @@ def main() -> None:
         menu=build_menu(),
     )
     threading.Thread(target=start_all, args=(icon,), daemon=True).start()
+    threading.Thread(target=monitor_cookie_login_state, args=(icon,), daemon=True).start()
     icon.run()
 
 
@@ -68,6 +72,24 @@ def build_menu() -> pystray.Menu:
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("打开 RAG 页面", open_app),
         pystray.MenuItem("打开话术 RAG 页面", open_talk_app),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem(
+            "腾讯文档：等待登录",
+            noop,
+            enabled=False,
+            visible=lambda _: is_waiting_for_cookie(),
+        ),
+        pystray.MenuItem(
+            "我已完成登录",
+            confirm_tencent_docs_login,
+            visible=lambda _: is_waiting_for_cookie(),
+        ),
+        pystray.MenuItem(
+            "取消本次更新",
+            cancel_waiting_subscription_update,
+            visible=lambda _: is_waiting_for_cookie(),
+        ),
+        pystray.Menu.SEPARATOR,
         pystray.MenuItem(
             lambda _: wechat_menu_label(),
             toggle_wechat_plugin,
@@ -90,6 +112,11 @@ def build_menu() -> pystray.Menu:
                     radio=True,
                 ),
             ),
+        ),
+        pystray.MenuItem(
+            "\u6d4b\u8bd5\u6a21\u5f0f\uff08\u4ec5\u7c98\u8d34\uff0c\u4e0d\u53d1\u9001\uff09",
+            toggle_test_mode,
+            checked=lambda _: get_test_mode(),
         ),
         pystray.MenuItem("重启 RAG 服务", restart_streamlit),
         pystray.Menu.SEPARATOR,
@@ -319,6 +346,67 @@ def open_talk_app(icon: pystray.Icon | None = None, *_: object) -> None:
     webbrowser.open(TALK_APP_URL)
 
 
+def is_waiting_for_cookie() -> bool:
+    return read_subscription_job_payload().get("status") == "waiting_cookie"
+
+
+def read_subscription_job_payload() -> dict:
+    if not SUBSCRIPTION_JOB_STATE.exists():
+        return {}
+    try:
+        return json.loads(SUBSCRIPTION_JOB_STATE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def monitor_cookie_login_state(icon: pystray.Icon) -> None:
+    was_waiting = False
+    notified_completed_job = ""
+    while True:
+        payload = read_subscription_job_payload()
+        waiting = payload.get("status") == "waiting_cookie"
+        if waiting and not was_waiting:
+            notify(
+                icon,
+                "腾讯文档 Cookie 已失效",
+                "请重新登录腾讯文档。完成后可等待自动检测，或在托盘菜单点击“我已完成登录”。",
+            )
+            icon.update_menu()
+        elif was_waiting and not waiting:
+            icon.update_menu()
+        job_id = str(payload.get("job_id") or "")
+        if payload.get("status") == "completed" and payload.get("origin") == "auto" and job_id and job_id != notified_completed_job:
+            names = "、".join(payload.get("updated_names") or []) or "订阅文件"
+            seconds = max(0, int(payload.get("duration_seconds") or 0))
+            duration = f"{seconds // 60}分{seconds % 60}秒" if seconds >= 60 else f"{seconds}秒"
+            notify(icon, "订阅更新完成", f"{names} 已经订阅更新完毕，本次更新总耗时 {duration}。")
+            notified_completed_job = job_id
+        was_waiting = waiting
+        time.sleep(2)
+
+
+def confirm_tencent_docs_login(icon: pystray.Icon, _: object = None) -> None:
+    try:
+        with urllib.request.urlopen(f"{TASK_API_URL}/cookie/login/read", timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if payload.get("status") == "completed":
+            notify(icon, "Cookie 获取成功", "后台订阅更新将从失败位置继续。")
+        else:
+            notify(icon, "尚未获取到 Cookie", payload.get("message") or "请确认腾讯文档已经登录后重试。")
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        notify(icon, "Cookie 获取失败", str(exc))
+    icon.update_menu()
+
+
+def cancel_waiting_subscription_update(icon: pystray.Icon, _: object = None) -> None:
+    try:
+        urllib.request.urlopen(f"{TASK_API_URL}/subscription/stop", timeout=10).read()
+        notify(icon, "订阅更新已取消", "本次等待登录的自动更新已停止。")
+    except (OSError, urllib.error.URLError) as exc:
+        notify(icon, "取消失败", str(exc))
+    icon.update_menu()
+
+
 def start_wechat_plugin(icon: pystray.Icon | None = None, _: object = None) -> None:
     set_wechat_busy(True)
     try:
@@ -372,6 +460,18 @@ def set_locator_mode(icon: pystray.Icon, mode: str) -> None:
     write_ini_value(WECHAT_CONFIG, "send", "locator_mode", mode)
     icon.update_menu()
     notify(icon, "\u5b9a\u4f4d\u6a21\u5f0f\u5df2\u5207\u6362", LOCATOR_MODE_LABELS[mode])
+
+
+def toggle_test_mode(icon: pystray.Icon, _: object = None) -> None:
+    enabled = not get_test_mode()
+    write_ini_value(WECHAT_CONFIG, "send", "test_mode", "1" if enabled else "0")
+    icon.update_menu()
+    message = (
+        "\u5df2\u5f00\u542f\uff1a\u53ea\u7c98\u8d34\u5230\u53d1\u9001\u6846\uff0c\u4e0d\u6309 Enter"
+        if enabled
+        else "\u5df2\u5173\u95ed\uff1a\u6062\u590d\u6b63\u5e38\u53d1\u9001"
+    )
+    notify(icon, "\u6d4b\u8bd5\u6a21\u5f0f", message)
 
 
 def quit_launcher(icon: pystray.Icon, _: object = None) -> None:
@@ -559,6 +659,11 @@ def get_wechat_busy() -> bool:
 
 def get_locator_mode() -> str:
     return normalize_locator_mode(read_ini_value(WECHAT_CONFIG, "send", "locator_mode", LOCATOR_MODE_DEFAULT))
+
+
+def get_test_mode() -> bool:
+    value = read_ini_value(WECHAT_CONFIG, "send", "test_mode", "0").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 def normalize_locator_mode(value: str | None) -> str:

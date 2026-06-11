@@ -93,7 +93,7 @@ def _stop_login_window(port: int) -> None:
     port_marker = f"remote-debugging-port={port}"
     command = (
         "$targets = Get-CimInstance Win32_Process | "
-        f"Where-Object {{ $_.Name -eq 'chrome.exe' -and ($_.CommandLine -like '*{profile_marker}*' "
+        f"Where-Object {{ $_.Name -in @('chrome.exe','msedge.exe') -and ($_.CommandLine -like '*{profile_marker}*' "
         f"-or $_.CommandLine -like '*{port_marker}*') }}; "
         "$targets | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
     )
@@ -104,6 +104,10 @@ def _stop_login_window(port: int) -> None:
         stderr=subprocess.DEVNULL,
     )
     time.sleep(2)
+
+
+def close_tencent_docs_login_window(port: int = DEBUG_PORT) -> None:
+    _stop_login_window(port)
 
 
 def read_tencent_docs_cookie() -> BrowserCookieResult:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -33,11 +35,14 @@ class VectorStore:
         self.batch_size = max(1, batch_size)
         self.index_path = index_dir / "faiss.index"
         self.meta_path = index_dir / "chunks.jsonl"
+        self.manifest_path = index_dir / "vector_index_manifest.json"
         self.embedding_cache_path = index_dir / "embedding_cache.npz"
         self.model: Any | None = None
         self.index: Any | None = None
         self.chunks: list[Chunk] = []
         self._query_embedding_cache: dict[str, Any] = {}
+        self._loaded_generation: str | None = None
+        self._load_lock = threading.RLock()
 
     def build(self, chunks: list[Chunk], progress_callback: BuildProgressCallback | None = None) -> None:
         def emit(percent: int, message: str) -> None:
@@ -45,7 +50,14 @@ class VectorStore:
                 progress_callback(max(0, min(percent, 100)), message)
 
         if not chunks:
-            self.clear()
+            self.index_dir.mkdir(parents=True, exist_ok=True)
+            generation = uuid.uuid4().hex
+            self._publish_manifest(generation, "", "", 0, empty=True)
+            with self._load_lock:
+                self.index = None
+                self.chunks = []
+                self._loaded_generation = generation
+            self._cleanup_old_generations(generation)
             emit(100, "没有可索引的片段，已清空向量索引")
             return
 
@@ -61,8 +73,13 @@ class VectorStore:
 
         emit(95, "正在写入索引文件")
         self.index_dir.mkdir(parents=True, exist_ok=True)
-        faiss.write_index(index, str(self.index_path))
-        with self.meta_path.open("w", encoding="utf-8") as fp:
+        generation = uuid.uuid4().hex
+        index_path = self.index_dir / f"faiss.{generation}.index"
+        meta_path = self.index_dir / f"chunks.{generation}.jsonl"
+        index_tmp = index_path.with_suffix(index_path.suffix + ".tmp")
+        meta_tmp = meta_path.with_suffix(meta_path.suffix + ".tmp")
+        faiss.write_index(index, str(index_tmp))
+        with meta_tmp.open("w", encoding="utf-8") as fp:
             total = len(chunks)
             step = max(1, total // 20)
             for index_in_file, chunk in enumerate(chunks, start=1):
@@ -70,38 +87,60 @@ class VectorStore:
                 if index_in_file % step == 0 or index_in_file == total:
                     emit(95 + int(index_in_file / total * 4), f"正在写入片段元数据 {index_in_file}/{total}")
 
-        self.index = index
-        self.chunks = chunks
+        os.replace(index_tmp, index_path)
+        os.replace(meta_tmp, meta_path)
+        self._publish_manifest(generation, index_path.name, meta_path.name, len(chunks))
+        with self._load_lock:
+            self.index = index
+            self.chunks = chunks
+            self._loaded_generation = generation
+        self._cleanup_old_generations(generation)
         emit(100, f"向量索引写入完成：{len(chunks)} 个片段")
 
     def load(self) -> None:
-        if not self.index_path.exists() or not self.meta_path.exists():
-            raise FileNotFoundError("向量索引不存在，请先导入语料并重建索引。")
-
-        faiss = _get_faiss()
-        self.index = faiss.read_index(str(self.index_path))
-        self.chunks = []
-        with self.meta_path.open("r", encoding="utf-8") as fp:
-            for line in fp:
-                payload = json.loads(line)
-                payload.setdefault("image_paths", [])
-                payload.setdefault("tags", [])
-                if not payload.get("attributes"):
-                    payload["attributes"] = extract_attributes(str(payload.get("text", "")))
-                self.chunks.append(Chunk(**payload))
+        with self._load_lock:
+            generation, index_path, meta_path = self._active_paths()
+            if self.index is not None and generation == self._loaded_generation:
+                return
+            if index_path is None or meta_path is None:
+                self.index = None
+                self.chunks = []
+                self._loaded_generation = generation
+                return
+            if not index_path.exists() or not meta_path.exists():
+                raise FileNotFoundError("向量索引不存在，请先导入语料并重建索引。")
+            faiss = _get_faiss()
+            index = faiss.read_index(str(index_path))
+            chunks: list[Chunk] = []
+            with meta_path.open("r", encoding="utf-8") as fp:
+                for line in fp:
+                    payload = json.loads(line)
+                    payload.setdefault("image_paths", [])
+                    payload.setdefault("tags", [])
+                    if not payload.get("attributes"):
+                        payload["attributes"] = extract_attributes(str(payload.get("text", "")))
+                    chunks.append(Chunk(**payload))
+            if index.ntotal != len(chunks):
+                raise RuntimeError("向量索引与片段元数据不一致，请重新构建索引。")
+            self.index = index
+            self.chunks = chunks
+            self._loaded_generation = generation
 
     def search(self, query: str, top_k: int) -> list[RetrievedChunk]:
+        self.load()
         if self.index is None:
-            self.load()
-        assert self.index is not None
-
+            return []
         query_embedding = self._embed_query(query)
-        scores, indices = self.index.search(query_embedding, top_k)
+        with self._load_lock:
+            assert self.index is not None
+            index = self.index
+            chunks = self.chunks
+        scores, indices = index.search(query_embedding, top_k)
         results: list[RetrievedChunk] = []
         for score, index in zip(scores[0], indices[0]):
             if index < 0:
                 continue
-            chunk = self.chunks[int(index)]
+            chunk = chunks[int(index)]
             results.append(
                 RetrievedChunk(
                     text=chunk.text,
@@ -188,12 +227,64 @@ class VectorStore:
 
     def clear(self) -> None:
         self.index_dir.mkdir(parents=True, exist_ok=True)
-        for path in (self.index_path, self.meta_path, self.embedding_cache_path):
+        versioned_paths = list(self.index_dir.glob("faiss.*.index")) + list(self.index_dir.glob("chunks.*.jsonl"))
+        for path in (self.index_path, self.meta_path, self.embedding_cache_path, self.manifest_path, *versioned_paths):
             if path.exists():
                 path.unlink()
         self.index = None
         self.chunks = []
         self._query_embedding_cache.clear()
+        self._loaded_generation = None
+
+    def _active_paths(self) -> tuple[str, Path | None, Path | None]:
+        if self.manifest_path.exists():
+            try:
+                payload = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+                generation = str(payload["generation"])
+                if payload.get("empty"):
+                    return generation, None, None
+                return generation, self.index_dir / payload["index"], self.index_dir / payload["metadata"]
+            except (OSError, KeyError, TypeError, json.JSONDecodeError):
+                pass
+        return "legacy", self.index_path, self.meta_path
+
+    def _publish_manifest(
+        self,
+        generation: str,
+        index_name: str,
+        meta_name: str,
+        chunks: int,
+        *,
+        empty: bool = False,
+    ) -> None:
+        payload = {
+            "generation": generation,
+            "index": index_name,
+            "metadata": meta_name,
+            "chunks": chunks,
+            "empty": empty,
+        }
+        tmp_path = self.manifest_path.with_name(f"{self.manifest_path.name}.{generation}.tmp")
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp_path, self.manifest_path)
+
+    def _cleanup_old_generations(self, active_generation: str) -> None:
+        candidates: dict[str, list[Path]] = {}
+        for pattern in ("faiss.*.index", "chunks.*.jsonl"):
+            for path in self.index_dir.glob(pattern):
+                parts = path.name.split(".")
+                if len(parts) >= 3:
+                    candidates.setdefault(parts[1], []).append(path)
+        old = sorted(
+            ((max(path.stat().st_mtime for path in paths), generation, paths) for generation, paths in candidates.items() if generation != active_generation),
+            reverse=True,
+        )
+        for _, _, paths in old[1:]:
+            for path in paths:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
 
     def _load_embedding_cache(self) -> dict[str, Any]:
         if not self.embedding_cache_path.exists():

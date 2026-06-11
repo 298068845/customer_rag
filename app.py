@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import html
-import importlib
 import re
 from dataclasses import asdict
 from datetime import datetime
@@ -17,21 +16,16 @@ import customer_rag.corpus as corpus_module
 import customer_rag.pipeline as pipeline_module
 import customer_rag.subscription_jobs as subscription_jobs_module
 from customer_rag.config import load_config, save_machine_config
+from customer_rag.cookie_login import has_saved_cookie, load_saved_cookie, start_cookie_login
 from customer_rag.llama_server import build_llama_server_plan, is_llama_server_healthy
+from customer_rag.task_coordinator import activity, read_state as read_coordinator_state
+from uuid import uuid4
 
-browser_cookies = importlib.reload(browser_cookies)
-corpus_module = importlib.reload(corpus_module)
-pipeline_module = importlib.reload(pipeline_module)
-subscription_jobs_module = importlib.reload(subscription_jobs_module)
-from customer_rag.browser_cookies import (
-    is_tencent_docs_login_window_open,
-    open_tencent_docs_login_window,
-    read_tencent_docs_cookie_from_login_window,
-)
 from customer_rag.category_config import category_aliases, category_brands, save_category_catalog
 from customer_rag.local_task_api import ensure_local_task_api
 from customer_rag.loaders import SUPPORTED_SUFFIXES
 from customer_rag.prompt_defaults import DEFAULT_SYSTEM_PROMPT
+from customer_rag.time_format import display_datetime
 RagPipeline = pipeline_module.RagPipeline
 is_subscription_job_running = subscription_jobs_module.is_subscription_job_running
 read_job_state = subscription_jobs_module.read_job_state
@@ -386,7 +380,8 @@ def render_raw_files_table(raw_files: list[Path], recent_files: list[str]) -> No
                 "name": str(path.relative_to(cfg.raw_data_dir)),
                 "source": "腾讯文档" if "tencent_docs" in path.parts else "上传文件",
                 "status": "已保存",
-                "updated": remote_modified or datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="minutes"),
+                "updated": display_datetime(remote_modified)
+                or datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
                 "recent": is_recent,
             }
         )
@@ -523,7 +518,7 @@ def render_raw_action_panel(api_url: str, pending_count: int = 0) -> None:
         <style>
           .raw-actions {{
             display: grid;
-            grid-template-columns: minmax(170px, 0.2fr) minmax(170px, 0.2fr) minmax(170px, 0.18fr) minmax(140px, 0.16fr) 1fr;
+            grid-template-columns: minmax(180px, 0.22fr) minmax(190px, 0.2fr) minmax(150px, 0.17fr) 1fr;
             gap: 18px;
             align-items: center;
             margin: 0;
@@ -594,8 +589,7 @@ def render_raw_action_panel(api_url: str, pending_count: int = 0) -> None:
         </style>
         <div id="{component_id}">
           <div class="raw-actions">
-            <button data-task="rebuild_raw">① 重新解析原始文件</button>
-            <button data-task="rebuild_index">② 重建向量索引</button>
+            <button data-task="import_data">导入数据</button>
             <label class="raw-scope">
               <input type="checkbox" data-role="pending-scope" {"disabled" if pending_count <= 0 else ""}>
               <span>仅解析待入库更新文件</span>
@@ -629,7 +623,7 @@ def render_raw_action_panel(api_url: str, pending_count: int = 0) -> None:
               const message = state.message || state.error || "空闲";
               bar.style.width = `${{percent}}%`;
               line.textContent = state.status === "idle" ? "空闲" : `${{message}} · ${{percent}}%`;
-              if (state.status === "running") {{
+              if (state.status === "running" || state.status === "busy") {{
                 setBusy(true);
               }} else if (state.status === "completed") {{
                 setBusy(false);
@@ -674,7 +668,7 @@ def render_raw_action_panel(api_url: str, pending_count: int = 0) -> None:
             async function startTask(task) {{
               setBusy(true);
               line.textContent = "正在启动...";
-              const scope = task === "rebuild_raw"
+              const scope = task === "import_data"
                 ? (pendingScope && pendingScope.checked ? "pending" : (fullScope && fullScope.checked ? "full" : "all"))
                 : "all";
               const response = await fetch(`${{api}}/raw/start?task=${{encodeURIComponent(task)}}&scope=${{encodeURIComponent(scope)}}`, {{ cache: "no-store" }});
@@ -692,10 +686,154 @@ def render_raw_action_panel(api_url: str, pending_count: int = 0) -> None:
               render(state);
               if (state.status === "running") startPolling();
             }}).catch(() => {{}});
+            async function refreshCoordinator() {{
+              try {{
+                const response = await fetch(`${{api}}/auto/status`, {{cache:"no-store"}});
+                const state = await response.json();
+                setBusy(Boolean(state.active_kind));
+              }} catch (error) {{}}
+            }}
+            refreshCoordinator();
+            window.setInterval(refreshCoordinator, 1500);
           }})();
         </script>
         """,
         height=92,
+        scrolling=False,
+    )
+
+
+def render_subscription_header(api_url: str) -> None:
+    components.html(
+        f"""
+        <style>
+          body {{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#202b42}}
+          .header {{display:flex;flex-direction:column;gap:12px;width:100%;padding:2px 0;box-sizing:border-box}}
+          .header-main {{display:flex;align-items:center;justify-content:space-between;gap:16px;min-width:0}}
+          .auth {{display:flex;align-items:center;justify-content:flex-end;gap:14px;min-width:0}}
+          .settings {{display:flex;align-items:center;flex-wrap:wrap;column-gap:22px;row-gap:10px;min-height:24px}}
+          .schedule {{min-height:18px;color:#687181;font-size:13px}}
+          .title {{font-size:24px;font-weight:750}}
+          .auto {{display:inline-flex;align-items:center;gap:8px;white-space:nowrap;font-size:14px;color:#4e5665}}
+          .auto input {{width:17px;height:17px;accent-color:#2f7de1}}
+          button {{height:40px;min-width:150px;padding:0 18px;border:1px solid #1d64bb;border-radius:8px;background:#2f7de1;color:#fff;font-weight:650;cursor:pointer;white-space:nowrap}}
+          button:disabled {{opacity:.58;cursor:not-allowed}}
+          .pill {{white-space:nowrap;font-weight:650;font-size:14px}}
+          .hint {{min-height:16px;text-align:right;font-size:12px;color:#687181}}
+          @media (max-width: 720px) {{
+            .header-main {{align-items:flex-start;flex-direction:column}}
+            .auth {{justify-content:flex-start;flex-wrap:wrap}}
+          }}
+        </style>
+        <div class="header">
+          <div class="header-main">
+            <div class="title">订阅获取</div>
+            <div class="auth">
+              <button data-role="login">登录腾讯文档</button>
+              <div class="pill" data-role="cookie">Cookie：读取中...</div>
+            </div>
+          </div>
+          <div class="settings">
+            <label class="auto"><input type="checkbox" data-role="pending-scope"><span>仅解析待入库更新文件</span></label>
+            <label class="auto"><input type="checkbox" data-role="full-scope"><span>强制全量解析</span></label>
+            <label class="auto"><input type="checkbox" data-role="auto"><span>定时获取间隔：20分钟</span></label>
+          </div>
+          <div class="schedule" data-role="schedule"></div>
+        </div>
+        <div class="hint" data-role="hint"></div>
+        <script>
+          (() => {{
+            const api="{api_url}";
+            const auto=document.querySelector('[data-role="auto"]');
+            const pendingScope=document.querySelector('[data-role="pending-scope"]');
+            const fullScope=document.querySelector('[data-role="full-scope"]');
+            const login=document.querySelector('[data-role="login"]');
+            const cookie=document.querySelector('[data-role="cookie"]');
+            const hint=document.querySelector('[data-role="hint"]');
+            const schedule=document.querySelector('[data-role="schedule"]');
+            let lastCookieSuccess="";
+            let lastCookieError="";
+            let nextAutoAt="";
+            let autoEnabled=false;
+            let cookieActionStarted=false;
+            function pad(value) {{ return String(value).padStart(2,"0"); }}
+            function updateCountdown() {{
+              if(!autoEnabled) {{ schedule.textContent="定时获取未开启"; return; }}
+              if(!nextAutoAt) {{ schedule.textContent="下次自动更新：等待调度"; return; }}
+              const due=new Date(nextAutoAt);
+              if(Number.isNaN(due.getTime())) {{ schedule.textContent=`下次自动更新：${{nextAutoAt}}`; return; }}
+              const diff=Math.max(0, due.getTime()-Date.now());
+              const totalSeconds=Math.ceil(diff/1000);
+              const minutes=Math.floor(totalSeconds/60);
+              const seconds=totalSeconds%60;
+              const timeText=`${{pad(due.getHours())}}:${{pad(due.getMinutes())}}:${{pad(due.getSeconds())}}`;
+              schedule.textContent=diff<=0
+                ? `下次自动更新：${{timeText}}，即将开始`
+                : `下次自动更新：${{timeText}}，倒计时 ${{minutes}}分${{pad(seconds)}}秒`;
+            }}
+            function setParentButtonsDisabled(disabled) {{
+              try {{
+                const labels=new Set(["开始后台更新","后台更新中...","增加订阅","保存订阅"]);
+                window.parent.document.querySelectorAll('button').forEach((button)=>{{
+                  if(labels.has((button.innerText||"").trim())) button.disabled=disabled;
+                }});
+              }} catch(error) {{}}
+            }}
+            function showToast(text,kind="success") {{
+              let doc=document; try {{if(window.parent&&window.parent.document)doc=window.parent.document}} catch(error){{}}
+              const id="customer-rag-cookie-toast"; const old=doc.getElementById(id); if(old)old.remove();
+              const toast=doc.createElement("div"); toast.id=id; toast.textContent=text;
+              toast.style.cssText=`position:fixed;right:24px;bottom:24px;z-index:999999;max-width:460px;padding:14px 18px;border-radius:10px;background:${{kind==='error'?'#fff2f0':'#f0fff4'}};color:${{kind==='error'?'#a61b1b':'#216e39'}};border:1px solid ${{kind==='error'?'#efb1aa':'#9bd4aa'}};box-shadow:0 10px 30px rgba(31,41,55,.18);font:600 14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif`;
+              doc.body.appendChild(toast); window.setTimeout(()=>toast.remove(),8000);
+            }}
+            async function refresh() {{
+              const response=await fetch(`${{api}}/subscription/status`,{{cache:"no-store"}}); const state=await response.json();
+              const coordinator=state.coordinator||{{}}; const loginState=state.cookie_login||{{}};
+              autoEnabled=Boolean(coordinator.auto_enabled);
+              nextAutoAt=coordinator.next_auto_at||"";
+              auto.checked=autoEnabled;
+              const importScope=coordinator.subscription_import_scope||"pending";
+              pendingScope.checked=importScope!=="full";
+              fullScope.checked=importScope==="full";
+              cookie.textContent=`Cookie：${{state.cookie_saved?"已获取":"未获取"}}`;
+              const windowOpen=Boolean(state.cookie_window_open);
+              login.disabled=false;
+              login.textContent=windowOpen?"获取 Cookie":"登录腾讯文档";
+              hint.textContent=windowOpen?"完成登录后，再次点击获取 Cookie":"";
+              updateCountdown();
+              setParentButtonsDisabled(Boolean(coordinator.active_kind));
+              if(cookieActionStarted&&loginState.status==="completed"&&loginState.finished_at&&lastCookieSuccess!==loginState.finished_at){{
+                lastCookieSuccess=loginState.finished_at;
+                cookieActionStarted=false;
+                showToast(loginState.message||"腾讯文档登录凭证已保存");
+              }}
+              if(state.cookie_refresh_required&&lastCookieError!==state.job_id){{
+                lastCookieError=state.job_id;
+                try {{const key="customer-rag-cookie-error-job";if(window.localStorage.getItem(key)!==state.job_id){{window.localStorage.setItem(key,state.job_id);showToast("订阅下载失败，请重新获取 Cookie","error")}}}} catch(error){{showToast("订阅下载失败，请重新获取 Cookie","error")}}
+              }}
+            }}
+            auto.addEventListener("change",async()=>{{await fetch(`${{api}}/auto/set?enabled=${{auto.checked?1:0}}&interval=20`,{{cache:"no-store"}});await refresh()}});
+            async function setImportScope(scope) {{
+              await fetch(`${{api}}/subscription/import-scope?scope=${{scope}}`,{{cache:"no-store"}});
+              await refresh();
+            }}
+            pendingScope.addEventListener("change",()=>setImportScope(pendingScope.checked?"pending":"full"));
+            fullScope.addEventListener("change",()=>setImportScope(fullScope.checked?"full":"pending"));
+            login.addEventListener("click",async()=>{{
+              login.disabled=true;
+              cookieActionStarted=true;
+              const action=login.textContent.includes("获取")?"read":"open";
+              hint.textContent=action==="open"?"正在打开腾讯文档登录页...":"正在读取 Cookie...";
+              const response=await fetch(`${{api}}/cookie/login/${{action}}`,{{cache:"no-store"}});
+              const result=await response.json();
+              if(action==="read"&&result.status!=="completed"){{cookieActionStarted=false;showToast(result.message||"尚未读取到有效 Cookie","error");}}
+              await refresh();
+            }});
+            refresh().catch(()=>{{}}); window.setInterval(()=>refresh().catch(()=>{{}}),1500); window.setInterval(updateCountdown,1000);
+          }})();
+        </script>
+        """,
+        height=132,
         scrolling=False,
     )
 
@@ -772,6 +910,24 @@ def render_subscription_task_panel(api_url: str) -> None:
             line-height: 1.55;
             white-space: pre-wrap;
           }}
+          .subscription-toast {{
+            position: fixed;
+            right: 24px;
+            bottom: 24px;
+            z-index: 999999;
+            max-width: 460px;
+            padding: 14px 18px;
+            border: 1px solid #9bd4aa;
+            border-radius: 10px;
+            background: #f0fff4;
+            color: #216e39;
+            box-shadow: 0 10px 30px rgba(31, 41, 55, .18);
+            font: 600 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            opacity: 0;
+            transform: translateY(12px);
+            transition: opacity .2s ease, transform .2s ease;
+          }}
+          .subscription-toast.visible {{ opacity: 1; transform: translateY(0); }}
         </style>
         <div id="{component_id}" class="sub-task" style="display:none">
           <div class="sub-head">
@@ -781,6 +937,8 @@ def render_subscription_task_panel(api_url: str) -> None:
           <div class="sub-line" data-role="status">读取中...</div>
           <div class="sub-line" data-role="detail"></div>
           <div class="sub-progress"><div data-role="bar"></div></div>
+          <div class="sub-line" data-role="import-status" style="display:none"></div>
+          <div class="sub-progress" data-role="import-progress" style="display:none"><div data-role="import-bar"></div></div>
           <div class="sub-log" data-role="logs"></div>
         </div>
         <script>
@@ -791,12 +949,17 @@ def render_subscription_task_panel(api_url: str) -> None:
             const statusLine = root.querySelector('[data-role="status"]');
             const detailLine = root.querySelector('[data-role="detail"]');
             const bar = root.querySelector('[data-role="bar"]');
+            const importStatus = root.querySelector('[data-role="import-status"]');
+            const importProgress = root.querySelector('[data-role="import-progress"]');
+            const importBar = root.querySelector('[data-role="import-bar"]');
             const logsBox = root.querySelector('[data-role="logs"]');
             let lastLogsText = "";
             let userPinnedToBottom = true;
-            const runningStatuses = new Set(["running", "rebuilding", "stopping"]);
+            const runningStatuses = new Set(["running", "waiting_cookie", "rebuilding", "stopping"]);
+            let toastTimer = null;
             const labels = {{
               running: "运行中",
+              waiting_cookie: "等待登录",
               rebuilding: "处理中",
               stopping: "停止中",
               stopped: "已停止",
@@ -813,7 +976,9 @@ def render_subscription_task_panel(api_url: str) -> None:
               root.style.display = "block";
               const total = Number(state.total || 0);
               const current = Number(state.current_index || 0);
-              const percent = total ? Math.min(100, Math.round(current / total * 100)) : 0;
+              const percent = state.percent !== null && state.percent !== undefined && Number.isFinite(Number(state.percent))
+                ? Math.max(0, Math.min(100, Number(state.percent)))
+                : (total ? Math.min(100, Math.round(current / total * 100)) : 0);
               bar.style.width = `${{percent}}%`;
               const message = state.message === "订阅更新完成"
                 ? "下载完成。请在下方点击重新解析文件完成后再重构索引。"
@@ -837,6 +1002,51 @@ def render_subscription_task_panel(api_url: str) -> None:
               }}
               stopButton.style.display = runningStatuses.has(state.status) ? "inline-flex" : "none";
               stopButton.disabled = state.status === "stopping";
+              if (state.status === "completed" && Array.isArray(state.updated_names) && state.updated_names.length) {{
+                showCompletionToast(state);
+              }}
+              if (state.cookie_refresh_required) {{
+                showErrorToast("订阅下载失败，请重新获取 Cookie。腾讯文档登录页已打开。", state.job_id);
+              }}
+            }}
+            function formatDuration(seconds) {{
+              const total = Math.max(0, Number(seconds || 0));
+              const minutes = Math.floor(total / 60);
+              const remain = total % 60;
+              return minutes ? `${{minutes}}分${{remain}}秒` : `${{remain}}秒`;
+            }}
+            function showCompletionToast(state) {{
+              const storageKey = "customer-rag-subscription-toast-job";
+              try {{
+                if (window.localStorage.getItem(storageKey) === state.job_id) return;
+                window.localStorage.setItem(storageKey, state.job_id);
+              }} catch (error) {{}}
+              let doc = document;
+              try {{ if (window.parent && window.parent.document) doc = window.parent.document; }} catch (error) {{}}
+              const oldToast = doc.getElementById("customer-rag-subscription-toast");
+              if (oldToast) oldToast.remove();
+              const toast = doc.createElement("div");
+              toast.id = "customer-rag-subscription-toast";
+              toast.className = "subscription-toast";
+              toast.textContent = `${{state.updated_names.join("、")}} 已经订阅更新完毕，本次更新总耗时 ${{formatDuration(state.duration_seconds)}}`;
+              const style = doc.createElement("style");
+              style.textContent = `.subscription-toast{{position:fixed;right:24px;bottom:24px;z-index:999999;max-width:460px;padding:14px 18px;border:1px solid #9bd4aa;border-radius:10px;background:#f0fff4;color:#216e39;box-shadow:0 10px 30px rgba(31,41,55,.18);font:600 14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;opacity:0;transform:translateY(12px);transition:opacity .2s ease,transform .2s ease}}.subscription-toast.visible{{opacity:1;transform:translateY(0)}}`;
+              doc.head.appendChild(style);
+              doc.body.appendChild(toast);
+              requestAnimationFrame(() => toast.classList.add("visible"));
+              if (toastTimer) window.clearTimeout(toastTimer);
+              toastTimer = window.setTimeout(() => {{
+                toast.classList.remove("visible");
+                window.setTimeout(() => {{ toast.remove(); style.remove(); }}, 250);
+              }}, 8000);
+            }}
+            function showErrorToast(text, jobId) {{
+              const storageKey = "customer-rag-cookie-error-job";
+              try {{ if (window.localStorage.getItem(storageKey) === jobId) return; window.localStorage.setItem(storageKey, jobId); }} catch (error) {{}}
+              let doc = document; try {{ if (window.parent && window.parent.document) doc = window.parent.document; }} catch (error) {{}}
+              const toast = doc.createElement("div"); toast.textContent = text;
+              toast.style.cssText = 'position:fixed;right:24px;bottom:24px;z-index:999999;max-width:460px;padding:14px 18px;border:1px solid #efb1aa;border-radius:10px;background:#fff2f0;color:#a61b1b;box-shadow:0 10px 30px rgba(31,41,55,.18);font:600 14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+              doc.body.appendChild(toast); window.setTimeout(() => toast.remove(), 8000);
             }}
             logsBox.addEventListener("scroll", () => {{
               userPinnedToBottom = logsBox.scrollHeight - logsBox.scrollTop - logsBox.clientHeight < 24;
@@ -844,6 +1054,18 @@ def render_subscription_task_panel(api_url: str) -> None:
             async function fetchStatus() {{
               const response = await fetch(`${{api}}/subscription/status`, {{ cache: "no-store" }});
               render(await response.json());
+              const rawResponse = await fetch(`${{api}}/raw/status`, {{ cache: "no-store" }});
+              const raw = await rawResponse.json();
+              if (raw.status && raw.status !== "idle") {{
+                const rawPercent = Math.max(0, Math.min(100, Number(raw.percent || 0)));
+                importStatus.style.display = "block";
+                importProgress.style.display = "block";
+                importStatus.textContent = `导入数据：${{raw.message || raw.error || raw.status}} · ${{rawPercent}}%`;
+                importBar.style.width = `${{rawPercent}}%`;
+              }} else {{
+                importStatus.style.display = "none";
+                importProgress.style.display = "none";
+              }}
             }}
             stopButton.addEventListener("click", async () => {{
               stopButton.disabled = true;
@@ -1249,7 +1471,7 @@ def subscription_rows_to_items(rows: list[dict]) -> list[TencentDocSubscription]
                 tags=parse_tags(str(row.get("Tag", ""))),
                 enabled=bool(row.get("启用", True)),
                 last_status=str(row.get("状态", "") or ""),
-                last_modified=str(row.get("最后修改", "") or ""),
+                last_modified=display_datetime(row.get("最后修改", "")),
             )
         )
     return subscriptions
@@ -1728,6 +1950,8 @@ with tab_import:
     st.subheader("导入文件")
     job_state = read_job_state(cfg)
     job_running = is_subscription_job_running(cfg)
+    coordinator_state = read_coordinator_state(cfg)
+    task_busy = bool(coordinator_state.active_kind)
 
     def display_subscription_status(subscription: TencentDocSubscription) -> str:
         raw_status = str(subscription.last_status or "")
@@ -1760,7 +1984,7 @@ with tab_import:
                     url=url,
                     tags=parse_tags(str(row.get("Tag", ""))),
                     enabled=bool(row.get("", True)),
-                    last_modified=str(row.get("最后修改", "") or ""),
+                    last_modified=display_datetime(row.get("最后修改", "")),
                     last_status=str(row.get("状态", "") or ""),
                 )
             )
@@ -1771,7 +1995,7 @@ with tab_import:
             {
                 "": subscription.enabled,
                 "名称": subscription.name,
-                "最后修改": subscription.last_modified,
+                "最后修改": display_datetime(subscription.last_modified),
                 "状态": display_subscription_status(subscription),
                 "腾讯文档地址": subscription.url,
                 "Tag": tag_text(subscription.tags),
@@ -1793,44 +2017,18 @@ with tab_import:
 
     left, right = st.columns([0.55, 0.45], gap="large")
     with left:
-        title_col, login_col, cookie_col = st.columns([0.48, 0.31, 0.21], gap="small")
-        title_col.markdown('<div class="import-title">订阅获取</div>', unsafe_allow_html=True)
-        login_button_label = "点击获取 Cookie" if st.session_state.get("tencent_docs_login_window_open", False) else "登录腾讯文档"
-        if login_col.button(login_button_label, use_container_width=True, disabled=job_running, key="login_tencent_docs"):
-            login_window_open = bool(st.session_state.get("tencent_docs_login_window_open", False))
-            if not login_window_open:
-                login_window_open = is_tencent_docs_login_window_open()
-            if login_window_open:
-                try:
-                    cookie_result = read_tencent_docs_cookie_from_login_window()
-                    st.session_state["qq_cookie"] = cookie_result.cookie
-                    st.session_state["tencent_docs_login_window_open"] = True
-                    st.success(f"Cookie 已获取：{cookie_result.count} 个")
-                except RuntimeError as exc:
-                    st.warning(f"读取 Cookie 失败：{exc}")
-            else:
-                try:
-                    open_tencent_docs_login_window()
-                    st.session_state["tencent_docs_login_window_open"] = True
-                    st.info("登录窗口已打开，完成登录后点击“点击获取 Cookie”。")
-                except RuntimeError as exc:
-                    st.warning(f"打开登录窗口失败：{exc}")
-        cookie_col.markdown(
-            f'<div class="cookie-pill">Cookie：{"已获取" if st.session_state.get("qq_cookie") else "未获取"}</div>',
-            unsafe_allow_html=True,
-        )
-
+        render_subscription_header(LOCAL_TASK_API_URL)
         st.markdown('<div class="import-action-style"></div>', unsafe_allow_html=True)
         start_col, add_col, save_col = st.columns([1.1, 0.9, 0.9], gap="small")
         start_label = "后台更新中..." if job_running else "开始后台更新"
         start_clicked = start_col.button(
             start_label,
             use_container_width=True,
-            disabled=job_running,
+            disabled=task_busy,
             key="subscription_start",
         )
-        add_clicked = add_col.button("增加订阅", use_container_width=True, disabled=job_running, key="subscription_add")
-        save_clicked = save_col.button("保存订阅", use_container_width=True, disabled=job_running, key="subscription_save")
+        add_clicked = add_col.button("增加订阅", use_container_width=True, disabled=task_busy, key="subscription_add")
+        save_clicked = save_col.button("保存订阅", use_container_width=True, disabled=task_busy, key="subscription_save")
 
         subscriptions = load_subscriptions(subscriptions_path())
         base_subscription_rows = subscription_rows_from_items(subscriptions)
@@ -1842,7 +2040,7 @@ with tab_import:
         if add_clicked:
             batch_add_subscription_dialog()
 
-        if job_running:
+        if task_busy:
             render_subscription_dataframe(base_subscription_rows)
             edited_subscription_records = base_subscription_rows
         else:
@@ -1878,14 +2076,23 @@ with tab_import:
                 if not enabled_subscriptions:
                     st.info("请先启用至少一个订阅。")
                 else:
-                    start_subscription_job(
-                        cfg,
-                        subscriptions_path(),
-                        enabled_subscriptions,
-                        st.session_state.get("qq_cookie", ""),
-                    )
-                    remember_recent_raw_files([])
-                    job_running = True
+                    cookie = load_saved_cookie(cfg)
+                    if not cookie:
+                        start_cookie_login(cfg)
+                        st.warning("尚未获取 Cookie，已打开腾讯文档登录页；获取成功后请再次开始更新。")
+                    else:
+                        result = start_subscription_job(
+                            cfg,
+                            subscriptions_path(),
+                            enabled_subscriptions,
+                            cookie,
+                            origin="manual",
+                        )
+                        if result.status == "busy":
+                            st.warning(result.message)
+                        else:
+                            remember_recent_raw_files([])
+                            job_running = True
 
         if save_clicked:
             if subscription_errors:
@@ -1914,9 +2121,9 @@ with tab_import:
             label_visibility="collapsed",
         )
         upload_clicked = upload_button_col.button(
-            "保存并导入",
+            "导入数据",
             use_container_width=True,
-            disabled=not uploaded_files,
+            disabled=not uploaded_files or task_busy,
             key="upload_import",
         )
 
@@ -1949,7 +2156,8 @@ with tab_import:
                     )
                     file_tags = parse_tags(file_tag_text) if str(file_tag_text).strip() else default_tags
                     path_tags.append((saved_path, file_tags))
-                stats = pipeline.ingest_files_with_tags(path_tags)
+                with activity(cfg, "manual_upload", uuid4().hex):
+                    stats = pipeline.ingest_files_with_tags(path_tags)
                 remember_recent_raw_files(saved_paths)
                 st.success(f"完成：解析 {stats['documents']} 个文档单元，新增 {stats['items']} 条语料")
                 if stats.get("index_error"):
@@ -1958,18 +2166,6 @@ with tab_import:
                     st.success(f"索引已重建：{stats['chunks']} 个片段")
             except RuntimeError as exc:
                 st.error(str(exc))
-
-    st.divider()
-    st.markdown("### 原始文件与索引")
-    recent_raw_files = recent_raw_files_from_state()
-    render_raw_action_panel(LOCAL_TASK_API_URL, pending_count=len(recent_raw_files))
-
-    raw_files = (
-        sorted([path for path in cfg.raw_data_dir.glob("**/*") if path.is_file() and is_user_source_file(path)])
-        if cfg.raw_data_dir.exists()
-        else []
-    )
-    render_raw_files_table(raw_files, recent_raw_files)
 
 with tab_prompt:
     st.subheader("Prompt 设置")

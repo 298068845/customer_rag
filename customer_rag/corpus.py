@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -192,9 +193,49 @@ class CorpusStore:
 
     def replace_all(self, items: list[CorpusItem]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("w", encoding="utf-8") as fp:
+        tmp_path = self.path.with_name(f"{self.path.name}.{uuid.uuid4().hex}.tmp")
+        with tmp_path.open("w", encoding="utf-8") as fp:
             for item in items:
                 fp.write(json.dumps(asdict(item), ensure_ascii=False) + "\n")
+        os.replace(tmp_path, self.path)
+
+    def replace_sources(self, sources: set[str], documents: list[LoadedDocument]) -> tuple[int, int]:
+        normalized_sources = {_normalize_source(source) for source in sources}
+        current = self.list_items()
+        retained = [item for item in current if _normalize_source(item.source) not in normalized_sources]
+        removed = len(current) - len(retained)
+        existing_keys = {_dedupe_key(item.source, item.location, item.text) for item in retained}
+        now = _now()
+        added = 0
+        for doc in documents:
+            if not doc.text.strip():
+                continue
+            key = _dedupe_key(doc.source, doc.location, doc.text)
+            if key in existing_keys:
+                continue
+            existing_keys.add(key)
+            retained.append(
+                CorpusItem(
+                    id=str(uuid.uuid4()),
+                    title=doc.title,
+                    text=doc.text.strip(),
+                    source=doc.source,
+                    location=doc.location,
+                    created_at=now,
+                    updated_at=now,
+                    image_paths=doc.image_paths or [],
+                    tags=_clean_tags(doc.tags or []),
+                    attributes=doc.attributes or {},
+                )
+            )
+            added += 1
+        self.replace_all(retained)
+        return removed, added
+
+    def replace_documents(self, documents: list[LoadedDocument]) -> int:
+        current_sources = {item.source for item in self.list_items()}
+        _, added = self.replace_sources(current_sources, documents)
+        return added
 
 
 def _item_from_payload(payload: dict) -> CorpusItem:

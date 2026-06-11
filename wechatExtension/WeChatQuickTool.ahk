@@ -2,6 +2,7 @@
 #SingleInstance Force
 #NoTrayIcon
 
+try DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
 SetTitleMatchMode 2
 CoordMode "Mouse", "Screen"
 CoordMode "ToolTip", "Screen"
@@ -86,6 +87,11 @@ if HasArg("--clipboard-image-test") {
 
 if HasArg("--paste-image-test") {
     RunPasteImageSelfTest()
+    ExitApp
+}
+
+if HasArg("--send-box-test") {
+    RunSendBoxSelfTest()
     ExitApp
 }
 
@@ -768,6 +774,7 @@ ClosePreview(*) {
 PasteTextToWeChat(text) {
     global LAST_SEND_TICK, MIN_SEND_INTERVAL_MS, PASTE_ONLY_MODE
 
+    testMode := PASTE_ONLY_MODE || ReadBoolConfig("send", "test_mode", false)
     imagePath := ExtractImagePath(text)
     textToSend := RemoveImageLines(text)
     if (Trim(textToSend) = "" && imagePath = "") {
@@ -794,7 +801,7 @@ PasteTextToWeChat(text) {
             Sleep ImageClipboardSettleMs(imagePath)
             Send "^v"
             Sleep ImagePasteWaitMs(imagePath)
-            if ReadBoolConfig("send", "send_image_before_text", false) {
+            if !testMode && ReadBoolConfig("send", "send_image_before_text", false) {
                 Send "{Enter}"
                 Sleep ReadIntConfig("send", "after_image_enter_ms", 500)
             }
@@ -803,7 +810,7 @@ PasteTextToWeChat(text) {
         }
     }
 
-    if !PASTE_ONLY_MODE && ReadBoolConfig("send", "press_enter", true) && (Trim(textToSend) != "" || imagePath != "") {
+    if !testMode && ReadBoolConfig("send", "press_enter", true) && (Trim(textToSend) != "" || imagePath != "") {
         Sleep ReadIntConfig("send", "before_enter_ms", 120)
         Send "{Enter}"
     }
@@ -812,7 +819,7 @@ PasteTextToWeChat(text) {
         A_Clipboard := oldClipboard
     }
     LAST_SEND_TICK := A_TickCount
-    ShowTip("已粘贴到发送框")
+    ShowTip(testMode ? "测试模式：已粘贴，未发送" : "已粘贴到发送框")
 }
 
 ImageClipboardSettleMs(imagePath) {
@@ -1043,6 +1050,7 @@ FocusSendBox() {
     try {
         WinGetPos &debugX, &debugY, &debugW, &debugH, "ahk_id " targetHwnd
         SendBoxDebug("window_rect=" debugX "," debugY "," debugW "," debugH)
+        SendBoxDebug("window_dpi=" DllCall("GetDpiForWindow", "ptr", targetHwnd, "uint"))
         SendBoxDebug("window_title=" WinGetTitle("ahk_id " targetHwnd))
         SendBoxDebug("window_class=" WinGetClass("ahk_id " targetHwnd))
     }
@@ -1204,6 +1212,27 @@ FitsInWorkArea(x, y, w, h, left, top, right, bottom) {
 }
 
 GetInputAnchor(hwnd, &anchorX, &anchorY) {
+    clientX := ReadIntConfig("send", "input_client_x", -1)
+    clientY := ReadIntConfig("send", "input_client_y", -1)
+    savedClientW := ReadIntConfig("send", "input_client_w", 0)
+    savedClientH := ReadIntConfig("send", "input_client_h", 0)
+    clientRatioX := ReadFloatConfig("send", "input_client_ratio_x", -1)
+    clientRatioY := ReadFloatConfig("send", "input_client_ratio_y", -1)
+    if GetClientSize(hwnd, &clientW, &clientH) && clientW > 0 && clientH > 0 {
+        hasClientPoint := clientX >= 0 && clientY >= 0 && clientX <= clientW && clientY <= clientH
+        hasClientRatio := clientRatioX >= 0 && clientRatioX <= 1 && clientRatioY >= 0 && clientRatioY <= 1
+        clientSizeChanged := savedClientW > 0 && savedClientH > 0
+            && (Abs(clientW - savedClientW) > 80 || Abs(clientH - savedClientH) > 80)
+        if hasClientPoint || hasClientRatio {
+            pointX := hasClientRatio && clientSizeChanged ? Floor(clientW * clientRatioX) : clientX
+            pointY := hasClientRatio && clientSizeChanged ? Floor(clientH * clientRatioY) : clientY
+            if ClientPointToScreen(hwnd, pointX, pointY, &anchorX, &anchorY) {
+                SendBoxDebug("f8_client_hit=" anchorX "," anchorY ",client=" pointX "," pointY ",size=" clientW "," clientH)
+                return
+            }
+        }
+    }
+
     WinGetPos &winX, &winY, &winW, &winH, "ahk_id " hwnd
     inputX := ReadIntConfig("send", "input_x", 520)
     inputY := ReadIntConfig("send", "input_y", 690)
@@ -1610,13 +1639,60 @@ CalibrateSendBoxPoint() {
     inputRatioX := winW > 0 ? Round(inputX / winW, 6) : 0
     inputRatioY := winH > 0 ? Round(inputY / winH, 6) : 0
 
+    hasClientPoint := ScreenPointToClient(targetHwnd, mouseX, mouseY, &clientX, &clientY)
+        && GetClientSize(targetHwnd, &clientW, &clientH)
+    if hasClientPoint {
+        clientRatioX := clientW > 0 ? Round(clientX / clientW, 6) : 0
+        clientRatioY := clientH > 0 ? Round(clientY / clientH, 6) : 0
+        IniWrite clientX, CONFIG_PATH, "send", "input_client_x"
+        IniWrite clientY, CONFIG_PATH, "send", "input_client_y"
+        IniWrite clientRatioX, CONFIG_PATH, "send", "input_client_ratio_x"
+        IniWrite clientRatioY, CONFIG_PATH, "send", "input_client_ratio_y"
+        IniWrite clientW, CONFIG_PATH, "send", "input_client_w"
+        IniWrite clientH, CONFIG_PATH, "send", "input_client_h"
+    }
+
     IniWrite inputX, CONFIG_PATH, "send", "input_x"
     IniWrite inputY, CONFIG_PATH, "send", "input_y"
     IniWrite inputRatioX, CONFIG_PATH, "send", "input_ratio_x"
     IniWrite inputRatioY, CONFIG_PATH, "send", "input_ratio_y"
     IniWrite winW, CONFIG_PATH, "send", "input_window_w"
     IniWrite winH, CONFIG_PATH, "send", "input_window_h"
-    ShowTip("已保存兜底输入框点位: " inputX ", " inputY)
+    ShowTip(hasClientPoint ? "已保存输入框客户区点位: " clientX ", " clientY : "已保存兜底输入框点位: " inputX ", " inputY)
+}
+
+GetClientSize(hwnd, &width, &height) {
+    rect := Buffer(16, 0)
+    if !DllCall("GetClientRect", "ptr", hwnd, "ptr", rect.Ptr) {
+        return false
+    }
+    width := NumGet(rect, 8, "int") - NumGet(rect, 0, "int")
+    height := NumGet(rect, 12, "int") - NumGet(rect, 4, "int")
+    return true
+}
+
+ScreenPointToClient(hwnd, screenX, screenY, &clientX, &clientY) {
+    point := Buffer(8, 0)
+    NumPut("int", screenX, point, 0)
+    NumPut("int", screenY, point, 4)
+    if !DllCall("ScreenToClient", "ptr", hwnd, "ptr", point.Ptr) {
+        return false
+    }
+    clientX := NumGet(point, 0, "int")
+    clientY := NumGet(point, 4, "int")
+    return true
+}
+
+ClientPointToScreen(hwnd, clientX, clientY, &screenX, &screenY) {
+    point := Buffer(8, 0)
+    NumPut("int", clientX, point, 0)
+    NumPut("int", clientY, point, 4)
+    if !DllCall("ClientToScreen", "ptr", hwnd, "ptr", point.Ptr) {
+        return false
+    }
+    screenX := NumGet(point, 0, "int")
+    screenY := NumGet(point, 4, "int")
+    return true
 }
 
 GetCalibrationWindowAtPoint(mouseX, mouseY) {
@@ -1952,6 +2028,7 @@ return_count=5
 [send]
 text=
 locator_mode=uia
+test_mode=0
 click_before_paste=1
 allow_saved_point_fallback=0
 allow_safe_geometry_fallback=1
@@ -1962,6 +2039,12 @@ input_ratio_x=0.72
 input_ratio_y=0.9
 input_window_w=0
 input_window_h=0
+input_client_x=-1
+input_client_y=-1
+input_client_ratio_x=-1
+input_client_ratio_y=-1
+input_client_w=0
+input_client_h=0
 after_click_ms=100
 clipboard_settle_ms=80
 image_clipboard_settle_ms_per_100kb=70
@@ -2100,6 +2183,60 @@ RunPasteImageSelfTest() {
         FileAppend "pasted=0`nerror=" exc.Message "`n", resultPath, "UTF-8"
     } finally {
         PASTE_ONLY_MODE := false
+        PREVIEW_TARGET_HWND := 0
+    }
+}
+
+RunSendBoxSelfTest() {
+    global PREVIEW_TARGET_HWND
+
+    resultPath := A_ScriptDir "\send-box-test-result.ini"
+    marker := "[Customer RAG send-box test " A_Now "]"
+    FileDeleteSafe(resultPath)
+    FileAppend "[debug]`nstarted=1`nmarker=" marker "`n", resultPath, "UTF-8"
+
+    hwnd := FindWeChatWindow()
+    FileAppend "wechat_hwnd=" hwnd "`n", resultPath, "UTF-8"
+    if !hwnd {
+        FileAppend "focused=0`nverified=0`nerror=wechat_window_not_found`n", resultPath, "UTF-8"
+        return
+    }
+
+    oldClipboard := ClipboardAll()
+    PREVIEW_TARGET_HWND := hwnd
+    try {
+        focused := FocusSendBox()
+        FileAppend "focused=" (focused ? "1" : "0") "`n", resultPath, "UTF-8"
+        if !focused {
+            FileAppend "verified=0`nerror=focus_failed`n", resultPath, "UTF-8"
+            return
+        }
+
+        A_Clipboard := marker
+        Sleep 120
+        Send "^v"
+        Sleep 250
+        A_Clipboard := ""
+        Send "^a"
+        Sleep 80
+        Send "^c"
+        copied := ClipWait(0.8) ? A_Clipboard : ""
+        verified := InStr(copied, marker) > 0
+        FileAppend "verified=" (verified ? "1" : "0") "`n", resultPath, "UTF-8"
+        FileAppend "copied_length=" StrLen(copied) "`n", resultPath, "UTF-8"
+        Send "^z"
+        Sleep 120
+        A_Clipboard := ""
+        Send "^a"
+        Sleep 80
+        Send "^c"
+        afterUndo := ClipWait(0.8) ? A_Clipboard : ""
+        cleaned := InStr(afterUndo, marker) = 0
+        FileAppend "cleanup_verified=" (cleaned ? "1" : "0") "`n", resultPath, "UTF-8"
+    } catch as exc {
+        FileAppend "verified=0`nerror=" exc.Message "`n", resultPath, "UTF-8"
+    } finally {
+        A_Clipboard := oldClipboard
         PREVIEW_TARGET_HWND := 0
     }
 }

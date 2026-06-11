@@ -18,6 +18,7 @@ The launcher appears in the Windows bottom-right tray area. Right-click the tray
 - turn the WeChat plugin on
 - turn the WeChat plugin off
 - choose the send-box locating mode: `UIA 定位` by default, or `F8 定位` for the saved point
+- toggle `测试模式（仅粘贴，不发送）`; it is off by default
 - restart the RAG service
 - exit the launcher
 

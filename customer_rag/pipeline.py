@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 import queue
@@ -8,6 +9,7 @@ import re
 import threading
 import time
 from typing import Callable
+import uuid
 
 from customer_rag.answering import build_structured_product_answer, is_product_query
 from customer_rag.attributes import NumericCondition, attributes_match, attributes_score, parse_numeric_conditions
@@ -109,8 +111,7 @@ class RagPipeline:
             category_brand_map=_category_brand_map_from_documents(documents, source_tags),
         )
         emit(65, "正在写入语料库")
-        self.corpus.clear()
-        self.corpus.add_documents(documents)
+        self.corpus.replace_documents(documents)
         index_error = None
         chunks = 0
         if rebuild_index:
@@ -186,10 +187,12 @@ class RagPipeline:
     def _write_raw_parse_manifest(self, files: dict[str, dict]) -> None:
         path = self._raw_parse_manifest_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        tmp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+        tmp_path.write_text(
             json.dumps({"version": RAW_PARSE_CACHE_VERSION, "files": files}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        os.replace(tmp_path, path)
 
     def ingest_files(self, paths: list[Path], tags: list[str] | None = None) -> dict[str, int]:
         documents = []
@@ -240,8 +243,6 @@ class RagPipeline:
     ) -> dict[str, int | str | None]:
         documents: list[LoadedDocument] = []
         source_paths = {str(path) for path, _ in path_tags}
-        removed = self.corpus.delete_by_sources(source_paths)
-        before = len(self.corpus.list_items())
         for path, tags in path_tags:
             file_tags = _clean_tags(tags)
             for doc in load_document_file(path, tags=file_tags):
@@ -260,14 +261,14 @@ class RagPipeline:
             _category_terms_from_documents(documents),
             category_brand_map=_category_brand_map_from_documents(documents),
         )
-        self.corpus.add_documents(documents)
+        removed, added = self.corpus.replace_sources(source_paths, documents)
         self._update_raw_parse_manifest_for_paths(path_tags)
         if rebuild_index:
-            stats = self._rebuild_stats(documents=len(documents), before=before)
+            stats = self._rebuild_stats(documents=len(documents), before=len(self.corpus.list_items()) - added)
         else:
             stats = {
                 "documents": len(documents),
-                "items": len(self.corpus.list_items()) - before,
+                "items": added,
                 "chunks": 0,
                 "index_error": None,
             }
