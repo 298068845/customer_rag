@@ -227,6 +227,12 @@ def _run_subscription_job(
         if current_state_is_active():
             _write_state(config, state)
 
+    def processed_count() -> int:
+        return int(state.downloaded or 0) + int(state.skipped or 0) + int(state.failed or 0)
+
+    def update_download_percent() -> None:
+        state.percent = min(55, int(processed_count() / max(1, state.total) * 55))
+
     def run_one(index: int, subscription: TencentDocSubscription) -> None:
         nonlocal downloaded_paths, active_cookie
         if _stop_requested(config):
@@ -263,6 +269,7 @@ def _run_subscription_job(
             if remote_modified and display_datetime(remote_modified) == local_modified and local_exists:
                 with state_lock:
                     state.skipped += 1
+                    update_download_percent()
                     save_status(subscription, "跳过：文件未变化", last_modified=remote_modified)
                     _add_log(
                         state,
@@ -313,7 +320,7 @@ def _run_subscription_job(
                 if remote_modified:
                     state.pending_modified_by_url[subscription.url] = remote_modified
                 state.downloaded += 1
-                state.percent = min(55, int(state.downloaded / max(1, state.total) * 55))
+                update_download_percent()
                 state.updated_names.append(subscription.name)
                 save_status(subscription, "已下载待解析")
                 _add_log(
@@ -324,6 +331,7 @@ def _run_subscription_job(
         except Exception as exc:  # noqa: BLE001 - one failed document must not abort the batch.
             with state_lock:
                 state.failed += 1
+                update_download_percent()
                 failed_subscriptions.append(subscription)
                 if _is_cookie_error(exc):
                     state.cookie_refresh_required = True
@@ -386,6 +394,11 @@ def _run_subscription_job(
         save_subscriptions(subscriptions_path, next_subscriptions)
         if state.status == "stopped":
             return
+        state.current_index = min(state.total, processed_count())
+        state.current_name = ""
+        state.current_downloaded = 0
+        state.current_total = None
+        update_download_percent()
         updated_name_set = set(state.updated_names)
         state.updated_names = [subscription.name for subscription in subscriptions if subscription.name in updated_name_set]
         if downloaded_paths:

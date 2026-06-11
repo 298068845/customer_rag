@@ -975,7 +975,7 @@ def render_subscription_task_panel(api_url: str) -> None:
               }}
               root.style.display = "block";
               const total = Number(state.total || 0);
-              const current = Number(state.current_index || 0);
+              const current = Math.max(0, Number(state.downloaded || 0) + Number(state.skipped || 0) + Number(state.failed || 0));
               const percent = state.percent !== null && state.percent !== undefined && Number.isFinite(Number(state.percent))
                 ? Math.max(0, Math.min(100, Number(state.percent)))
                 : (total ? Math.min(100, Math.round(current / total * 100)) : 0);

@@ -222,6 +222,7 @@ def test_complete_subscription_flow(config: RagConfig) -> None:
 
     state = read_job_state(config)
     assert state.status == "completed"
+    assert state.current_index == state.total == 1
     assert state.updated_names == ["测试订阅"]
     assert state.documents == 3 and state.items == 4 and state.removed == 2 and state.chunks == 7
     assert state.duration_seconds >= 0
