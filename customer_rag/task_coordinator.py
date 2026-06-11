@@ -83,8 +83,8 @@ def try_acquire(config: RagConfig, kind: str, job_id: str) -> bool:
         state.active_kind = kind
         state.active_job_id = job_id
         state.active_started_at = _now()
-        if state.auto_enabled and kind != "subscription:auto":
-            state.next_auto_at = _after_minutes(state.auto_interval_minutes)
+        if state.auto_enabled:
+            state.next_auto_at = ""
         write_state(config, state)
         return True
 
@@ -94,12 +94,11 @@ def release(config: RagConfig, job_id: str, result: str = "completed") -> None:
         state = read_state(config)
         if state.active_job_id != job_id:
             return
-        active_kind = state.active_kind
         state.active_kind = ""
         state.active_job_id = ""
         state.active_started_at = ""
         state.last_activity_finished_at = _now()
-        if state.auto_enabled and active_kind == "subscription:auto":
+        if state.auto_enabled and result in {"completed", "auto:completed"}:
             state.next_auto_at = _after_minutes(state.auto_interval_minutes)
         state.last_auto_result = result if result.startswith("auto:") else state.last_auto_result
         write_state(config, state)

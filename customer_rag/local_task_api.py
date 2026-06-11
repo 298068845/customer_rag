@@ -16,9 +16,13 @@ from customer_rag.cookie_login import (
     read_login_state,
 )
 from customer_rag.raw_jobs import recover_interrupted_raw_job, resume_interrupted_raw_job, start_raw_job
-from customer_rag.subscription_jobs import recover_interrupted_subscription_job, read_job_state, request_stop_subscription_job
+from customer_rag.subscription_jobs import (
+    read_job_state,
+    recover_interrupted_subscription_job,
+    request_stop_subscription_job,
+    resume_interrupted_subscription_job,
+)
 from customer_rag.task_coordinator import (
-    defer_auto,
     mark_stale_idle,
     read_state as read_coordinator_state,
     set_auto_enabled,
@@ -41,16 +45,13 @@ def ensure_local_task_api(port: int = 8512) -> str:
         recover_interrupted_raw_job(config)
         before_recovery = read_job_state(config)
         recovered = recover_interrupted_subscription_job(config)
-        interrupted_auto = (
-            before_recovery.status in {"running", "waiting_cookie", "rebuilding", "stopping"}
-            and recovered.status == "error"
-            and recovered.origin == "auto"
-        )
-        if interrupted_auto:
+        interrupted = before_recovery.status in {"running", "waiting_cookie", "rebuilding", "stopping"} and recovered.status == "error"
+        resumed = resume_interrupted_subscription_job(config)
+        resume_started = resumed.status == "running" and bool(resumed.job_id)
+        if interrupted and not resume_started:
             mark_stale_idle(config)
-            defer_auto(config, "deferred_after_interruption")
         resume_interrupted_raw_job(config)
-        ensure_auto_update_scheduler(config, run_immediately=not interrupted_auto)
+        ensure_auto_update_scheduler(config, run_immediately=not resume_started)
         return f"http://127.0.0.1:{port}"
 
 

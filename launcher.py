@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.request
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 
 import pystray
@@ -32,6 +33,9 @@ APP_URL = "http://127.0.0.1:8501"
 APP_PORT = 8501
 TASK_API_URL = "http://127.0.0.1:8512"
 SUBSCRIPTION_JOB_STATE = ROOT / "data" / "index" / "subscription_update_job.json"
+RAW_JOB_STATE = ROOT / "data" / "index" / "raw_job_state.json"
+NOTIFICATION_LOG = ROOT / "data" / "index" / "notification.log"
+NOTIFICATION_REQUEST = ROOT / "data" / "index" / "notification.request.json"
 TALK_APP_URL = "http://127.0.0.1:8502"
 TALK_APP_PORT = 8502
 LOCATOR_MODE_DEFAULT = "uia"
@@ -120,7 +124,7 @@ def build_menu() -> pystray.Menu:
         ),
         pystray.MenuItem("重启 RAG 服务", restart_streamlit),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("退出启动器", quit_launcher),
+        pystray.MenuItem("退出并停止全部服务", quit_launcher),
     )
 
 
@@ -223,11 +227,7 @@ def stop_streamlit() -> None:
     global streamlit_process
     set_rag_ready(False)
     if streamlit_process and streamlit_process.poll() is None:
-        streamlit_process.terminate()
-        try:
-            streamlit_process.wait(timeout=8)
-        except subprocess.TimeoutExpired:
-            streamlit_process.kill()
+        stop_process_tree(streamlit_process.pid)
     streamlit_process = None
 
     for owner in port_owner_pids(APP_PORT):
@@ -237,11 +237,7 @@ def stop_streamlit() -> None:
 def stop_talk_streamlit() -> None:
     global talk_streamlit_process
     if talk_streamlit_process and talk_streamlit_process.poll() is None:
-        talk_streamlit_process.terminate()
-        try:
-            talk_streamlit_process.wait(timeout=8)
-        except subprocess.TimeoutExpired:
-            talk_streamlit_process.kill()
+        stop_process_tree(talk_streamlit_process.pid)
     talk_streamlit_process = None
 
     for owner in port_owner_pids(TALK_APP_PORT):
@@ -286,11 +282,7 @@ def stop_llama_server() -> None:
     global llama_server_process
     config = load_config(ROOT / "config.yaml")
     if llama_server_process and llama_server_process.poll() is None:
-        llama_server_process.terminate()
-        try:
-            llama_server_process.wait(timeout=8)
-        except subprocess.TimeoutExpired:
-            llama_server_process.kill()
+        stop_process_tree(llama_server_process.pid)
     llama_server_process = None
     for owner in port_owner_pids(config.llm.llama_server_port):
         run_powershell(f"Stop-Process -Id {owner} -Force")
@@ -363,6 +355,7 @@ def monitor_cookie_login_state(icon: pystray.Icon) -> None:
     was_waiting = False
     notified_completed_job = ""
     while True:
+        deliver_notification_request(icon)
         payload = read_subscription_job_payload()
         waiting = payload.get("status") == "waiting_cookie"
         if waiting and not was_waiting:
@@ -375,14 +368,28 @@ def monitor_cookie_login_state(icon: pystray.Icon) -> None:
         elif was_waiting and not waiting:
             icon.update_menu()
         job_id = str(payload.get("job_id") or "")
-        if payload.get("status") == "completed" and payload.get("origin") == "auto" and job_id and job_id != notified_completed_job:
-            names = "、".join(payload.get("updated_names") or []) or "订阅文件"
+        if payload.get("status") == "completed" and job_id and job_id != notified_completed_job:
+            updated_names = payload.get("updated_names") or []
             seconds = max(0, int(payload.get("duration_seconds") or 0))
             duration = f"{seconds // 60}分{seconds % 60}秒" if seconds >= 60 else f"{seconds}秒"
-            notify(icon, "订阅更新完成", f"{names} 已经订阅更新完毕，本次更新总耗时 {duration}。")
+            result = f"{len(updated_names)} 个订阅已更新完毕" if updated_names else "订阅检查完成，无需更新"
+            notify(icon, "订阅更新完成", f"{result}，本次任务耗时 {duration}。")
             notified_completed_job = job_id
         was_waiting = waiting
         time.sleep(2)
+
+
+def deliver_notification_request(icon: pystray.Icon) -> None:
+    if not NOTIFICATION_REQUEST.exists():
+        return
+    try:
+        payload = json.loads(NOTIFICATION_REQUEST.read_text(encoding="utf-8-sig"))
+        title = str(payload.get("title") or "Customer RAG 测试通知")
+        message = str(payload.get("message") or "Windows 托盘气泡通知已正常显示。")
+        NOTIFICATION_REQUEST.unlink(missing_ok=True)
+        notify(icon, title, message)
+    except (OSError, json.JSONDecodeError):
+        NOTIFICATION_REQUEST.unlink(missing_ok=True)
 
 
 def confirm_tencent_docs_login(icon: pystray.Icon, _: object = None) -> None:
@@ -476,6 +483,7 @@ def toggle_test_mode(icon: pystray.Icon, _: object = None) -> None:
 
 def quit_launcher(icon: pystray.Icon, _: object = None) -> None:
     def worker() -> None:
+        stop_background_jobs()
         stop_wechat_plugin()
         stop_llama_server()
         stop_streamlit()
@@ -484,6 +492,26 @@ def quit_launcher(icon: pystray.Icon, _: object = None) -> None:
         icon.stop()
 
     threading.Thread(target=worker, daemon=True).start()
+
+
+def stop_background_jobs() -> None:
+    try:
+        urllib.request.urlopen(f"{TASK_API_URL}/subscription/stop", timeout=3).read()
+    except (OSError, urllib.error.URLError):
+        pass
+    time.sleep(1)
+    for state_path in (SUBSCRIPTION_JOB_STATE, RAW_JOB_STATE):
+        worker_pid = read_worker_pid(state_path)
+        if worker_pid:
+            stop_process_tree(worker_pid)
+
+
+def read_worker_pid(state_path: Path) -> int:
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+        return max(0, int(payload.get("worker_pid") or 0))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return 0
 
 
 def refresh_wechat_state() -> None:
@@ -524,6 +552,21 @@ def port_owner_pids(port: int) -> list[str]:
             if owner not in owners:
                 owners.append(owner)
     return owners
+
+
+def stop_process_tree(pid: int | str) -> None:
+    try:
+        process_id = int(pid)
+    except (TypeError, ValueError):
+        return
+    if process_id <= 0 or process_id == os.getpid():
+        return
+    subprocess.run(
+        ["taskkill", "/PID", str(process_id), "/T", "/F"],
+        cwd=ROOT,
+        capture_output=True,
+        creationflags=CREATE_NO_WINDOW,
+    )
 
 
 def run_powershell(command: str) -> subprocess.CompletedProcess:
@@ -636,8 +679,32 @@ def get_rag_ready() -> bool:
 
 def notify(icon: pystray.Icon, title: str, message: str) -> None:
     try:
+        NOTIFICATION_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with NOTIFICATION_LOG.open("a", encoding="utf-8") as fp:
+            fp.write(f"{datetime.now().isoformat(timespec='seconds')}\t{title}\t{message}\n")
+    except OSError:
+        pass
+    try:
         icon.notify(message, title)
     except Exception:
+        pass
+    show_desktop_notification(title, message)
+
+
+def show_desktop_notification(title: str, message: str) -> None:
+    pythonw = PYTHON.with_name("pythonw.exe")
+    if not pythonw.exists():
+        return
+    try:
+        subprocess.Popen(
+            [str(pythonw), "-m", "customer_rag.desktop_notification", title, message],
+            cwd=ROOT,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except OSError:
         pass
 
 

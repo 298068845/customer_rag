@@ -6,6 +6,7 @@ import sys
 import io
 import zipfile
 import os
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -20,10 +21,11 @@ from customer_rag.browser_cookies import BrowserCookieResult
 from customer_rag.config import LlmConfig, RagConfig
 from customer_rag.cookie_login import CookieLoginState, _poll_cookie, capture_cookie, load_saved_cookie, open_cookie_login
 from customer_rag.raw_jobs import read_raw_job_state, start_raw_job
-from customer_rag.subscription_jobs import is_subscription_worker_alive, read_job_state, start_subscription_job
+from customer_rag.subscription_jobs import SubscriptionJobState, is_subscription_worker_alive, read_job_state, start_subscription_job
 from customer_rag.task_coordinator import (
     TaskCoordinatorState,
     read_state,
+    release,
     set_auto_enabled,
     set_subscription_import_scope,
     schedule_auto_now_on_start,
@@ -32,6 +34,7 @@ from customer_rag.task_coordinator import (
 )
 from customer_rag.tencent_docs import TencentDocSubscription, save_subscriptions
 from customer_rag.tencent_docs import _write_xlsx_atomically
+from customer_rag.process_utils import CREATE_NO_WINDOW, DETACHED_PROCESS, _worker_executable, start_worker_process
 
 
 def make_config(root: Path) -> RagConfig:
@@ -100,16 +103,99 @@ def test_incomplete_xlsx_does_not_replace_existing(config: RagConfig) -> None:
     assert zipfile.is_zipfile(output)
 
 
+def test_worker_process_is_always_hidden(config: RagConfig) -> None:
+    with patch("customer_rag.process_utils.subprocess.Popen") as popen:
+        popen.return_value.pid = 123
+        assert start_worker_process(["raw", "job", "task", "all"], config.index_dir) == 123
+    kwargs = popen.call_args.kwargs
+    command = popen.call_args.args[0]
+    if os.name == "nt":
+        assert Path(command[0]).name.lower() == "pythonw.exe"
+        assert _worker_executable().name.lower() == "pythonw.exe"
+    assert kwargs["stdout"] is subprocess.DEVNULL
+    assert kwargs["stderr"] is subprocess.DEVNULL
+    assert kwargs["creationflags"] == CREATE_NO_WINDOW | DETACHED_PROCESS
+
+
 def test_manual_reschedules_auto(config: RagConfig) -> None:
     state = set_auto_enabled(config, True, 20)
     state.next_auto_at = datetime.now().isoformat(timespec="seconds")
     write_state(config, state)
     assert try_acquire(config, "manual_import", "manual-job")
     scheduled = read_state(config)
-    assert datetime.fromisoformat(scheduled.next_auto_at) > datetime.now() + timedelta(minutes=19)
-    scheduled.active_kind = ""
-    scheduled.active_job_id = ""
-    write_state(config, scheduled)
+    assert scheduled.next_auto_at == ""
+    release(config, "manual-job", "completed")
+    finished = read_state(config)
+    assert datetime.fromisoformat(finished.next_auto_at) > datetime.now() + timedelta(minutes=19)
+
+
+def test_subscription_resume_uses_checkpoint(config: RagConfig) -> None:
+    done = TencentDocSubscription(name="已完成", url="https://docs.qq.com/done", tags=["测试"])
+    pending = TencentDocSubscription(name="待继续", url="https://docs.qq.com/pending", tags=["测试"])
+    subscriptions_path = config.index_dir / "tencent_doc_subscriptions.json"
+    save_subscriptions(subscriptions_path, [done, pending])
+    done_path = config.raw_data_dir / "tencent_docs" / "已完成.xlsx"
+    pending_path = config.raw_data_dir / "tencent_docs" / "待继续.xlsx"
+    done_path.parent.mkdir(parents=True, exist_ok=True)
+    done_path.write_bytes(b"done")
+
+    checkpoint = SubscriptionJobState(
+        job_id="interrupted",
+        status="stopped",
+        started_at=datetime.now().isoformat(timespec="seconds"),
+        total=2,
+        downloaded=1,
+        updated_files=[str(done_path.resolve())],
+        pending_modified_by_url={done.url: "2026-06-11T10:00:00+08:00"},
+        updated_names=[done.name],
+        processed_urls=[done.url],
+        origin="auto",
+    )
+
+    class FakePipeline:
+        def __init__(self, _config):
+            pass
+
+        def replace_files_with_tags(self, path_tags, rebuild_index=False):
+            assert [path.name for path, _tags in path_tags] == [done_path.name, pending_path.name]
+            assert all(tags == ["测试"] for _path, tags in path_tags)
+            return {"documents": 2, "items": 2, "removed": 0}
+
+        def rebuild_index(self, progress_callback=None):
+            return 2
+
+    def fake_page(subscription, _cookie):
+        assert subscription.url == pending.url
+        return object()
+
+    def fake_download(subscription, *_args, **_kwargs):
+        assert subscription.url == pending.url
+        pending_path.write_bytes(b"pending")
+        return pending_path
+
+    set_auto_enabled(config, True, 20)
+    with patch("customer_rag.subscription_jobs.fetch_subscription_page", side_effect=fake_page), patch(
+        "customer_rag.subscription_jobs.fetch_subscription_last_modified", return_value="2026-06-11T11:00:00+08:00"
+    ), patch("customer_rag.subscription_jobs.download_subscription", side_effect=fake_download) as download, patch(
+        "customer_rag.pipeline.RagPipeline", FakePipeline
+    ):
+        started = start_subscription_job(
+            config,
+            subscriptions_path,
+            [done, pending],
+            "cookie=ok",
+            origin="auto",
+            resume_from=checkpoint,
+        )
+        assert started.status == "running"
+        assert read_state(config).next_auto_at == ""
+        wait_until(lambda: read_job_state(config).status in {"completed", "error", "stopped"})
+
+    state = read_job_state(config)
+    assert state.status == "completed", state
+    assert state.updated_names == [done.name, pending.name]
+    assert download.call_count == 1
+    assert datetime.fromisoformat(read_state(config).next_auto_at) > datetime.now() + timedelta(minutes=19)
 
 
 def test_scheduler_init_is_idempotent(config: RagConfig) -> None:
@@ -352,7 +438,9 @@ def main() -> None:
         tests = [
             test_scheduler_rules,
             test_incomplete_xlsx_does_not_replace_existing,
+            test_worker_process_is_always_hidden,
             test_manual_reschedules_auto,
+            test_subscription_resume_uses_checkpoint,
             test_scheduler_init_is_idempotent,
             test_coordinator_write_retries_windows_file_lock,
             test_subscription_import_scope,

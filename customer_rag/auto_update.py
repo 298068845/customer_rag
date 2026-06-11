@@ -5,7 +5,7 @@ import time
 
 from customer_rag.config import RagConfig
 from customer_rag.cookie_login import has_saved_cookie, load_saved_cookie, start_cookie_login
-from customer_rag.subscription_jobs import start_subscription_job
+from customer_rag.subscription_jobs import resume_interrupted_subscription_job, start_subscription_job
 from customer_rag.task_coordinator import auto_is_due, defer_auto, read_state, schedule_auto_now_on_start
 from customer_rag.tencent_docs import load_subscriptions
 
@@ -31,6 +31,9 @@ def run_auto_update_check(config: RagConfig) -> str:
     if state.active_kind:
         defer_auto(config, f"skipped_busy:{state.active_kind}")
         return "skipped_busy"
+    resumed = resume_interrupted_subscription_job(config)
+    if resumed.status == "running":
+        return "resumed"
     subscriptions_path = config.index_dir / "tencent_doc_subscriptions.json"
     enabled = [item for item in load_subscriptions(subscriptions_path) if item.enabled]
     if not enabled:

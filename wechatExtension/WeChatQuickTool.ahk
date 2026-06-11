@@ -326,7 +326,9 @@ CheckRagQueryDone() {
     }
 
     if ProcessExist(RAG_QUERY_PID) {
-        fallbackMs := Max(1, ReadFloatConfig("rag", "fallback_seconds", 3.0)) * 1000
+        configuredSeconds := ReadFloatConfig("rag", "fallback_seconds", 5.0)
+        fallbackSeconds := RAG_TALK_ONLY_PENDING ? Max(1, configuredSeconds) : Max(5, configuredSeconds)
+        fallbackMs := fallbackSeconds * 1000
         if (RAG_QUERY_STARTED_AT && A_TickCount - RAG_QUERY_STARTED_AT >= fallbackMs) {
             try ProcessClose RAG_QUERY_PID
             RAG_QUERY_PID := 0
@@ -2061,7 +2063,7 @@ restore_clipboard_after_paste=0
 
 [rag]
 enabled=1
-fallback_seconds=3
+fallback_seconds=5
 )"
 }
 

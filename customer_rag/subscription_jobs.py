@@ -54,9 +54,11 @@ class SubscriptionJobState:
     updated_files: list[str] = field(default_factory=list)
     pending_modified_by_url: dict[str, str] = field(default_factory=dict)
     updated_names: list[str] = field(default_factory=list)
+    processed_urls: list[str] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
     origin: str = "manual"
     duration_seconds: int = 0
+    resume_count: int = 0
     cookie_refresh_required: bool = False
     worker_pid: int = 0
 
@@ -94,6 +96,8 @@ def read_job_state(config: RagConfig) -> SubscriptionJobState:
     defaults["current_name"] = display_datetimes_in_text(defaults["current_name"])
     if defaults["updated_names"] is None:
         defaults["updated_names"] = []
+    if defaults["processed_urls"] is None:
+        defaults["processed_urls"] = []
     return SubscriptionJobState(**defaults)
 
 
@@ -121,6 +125,7 @@ def start_subscription_job(
     cookie: str,
     *,
     origin: str = "manual",
+    resume_from: SubscriptionJobState | None = None,
 ) -> SubscriptionJobState:
     global _worker
     with _lock:
@@ -133,15 +138,32 @@ def start_subscription_job(
         if not try_acquire(config, f"subscription:{origin}", job_id):
             return SubscriptionJobState(status="busy", message="另一个导入或订阅任务正在运行")
         stop_flag_path(config).unlink(missing_ok=True)
-        state = SubscriptionJobState(
-            job_id=job_id,
-            status="running",
-            started_at=_now(),
-            total=len(subscriptions),
-            percent=0,
-            message="订阅下载已启动",
-            origin=origin,
-        )
+        if resume_from is None:
+            state = SubscriptionJobState(
+                job_id=job_id,
+                status="running",
+                started_at=_now(),
+                total=len(subscriptions),
+                percent=0,
+                message="订阅下载已启动",
+                origin=origin,
+            )
+        else:
+            state = resume_from
+            state.job_id = job_id
+            state.status = "running"
+            state.finished_at = ""
+            state.current_name = ""
+            state.current_downloaded = 0
+            state.current_total = None
+            state.total = len(subscriptions)
+            state.failed = 0
+            state.index_error = ""
+            state.message = "从安全点继续订阅更新"
+            state.origin = origin
+            state.worker_pid = 0
+            state.resume_count = int(state.resume_count or 0) + 1
+            _add_log(state, f"第 {state.resume_count} 次从安全点继续，已完成 {len(state.processed_urls)} / {state.total} 个订阅")
         _write_state(config, state)
         if os.environ.get("CUSTOMER_RAG_INLINE_WORKER") == "1":
             _worker = threading.Thread(
@@ -165,7 +187,10 @@ def start_subscription_job(
                     ),
                     encoding="utf-8",
                 )
-                state.worker_pid = start_worker_process(["subscription", job_id, str(request_path), origin], Path.cwd())
+                state.worker_pid = start_worker_process(
+                    ["subscription", job_id, str(request_path), origin],
+                    Path.cwd(),
+                )
                 _write_state(config, state)
             except Exception as exc:
                 state.status = "error"
@@ -174,6 +199,38 @@ def start_subscription_job(
                 _write_state(config, state)
                 release(config, job_id, f"auto:{state.status}" if origin == "auto" else state.status)
         return state
+
+
+def resume_interrupted_subscription_job(config: RagConfig) -> SubscriptionJobState:
+    state = recover_interrupted_subscription_job(config)
+    resumable = state.status == "stopped" or (
+        state.status == "error" and "任务已中断" in (state.message or "")
+    )
+    if not resumable or int(state.resume_count or 0) >= 3:
+        return state
+    cookie = load_saved_cookie(config)
+    if not cookie:
+        return state
+    from customer_rag.task_coordinator import mark_stale_idle
+
+    coordinator = read_coordinator_state(config)
+    if coordinator.active_job_id == state.job_id:
+        mark_stale_idle(config)
+        coordinator = read_coordinator_state(config)
+    if coordinator.active_kind:
+        return state
+    subscriptions_path = config.index_dir / "tencent_doc_subscriptions.json"
+    subscriptions = [item for item in load_subscriptions(subscriptions_path) if item.enabled]
+    if not subscriptions:
+        return state
+    return start_subscription_job(
+        config,
+        subscriptions_path,
+        subscriptions,
+        cookie,
+        origin=state.origin,
+        resume_from=state,
+    )
 
 
 def request_stop_subscription_job(config: RagConfig) -> None:
@@ -205,7 +262,7 @@ def _run_subscription_job(
     started_monotonic = time.monotonic()
     state_lock = threading.Lock()
     next_subscriptions = subscriptions
-    downloaded_paths: list[Path] = []
+    downloaded_paths = [Path(path) for path in state.updated_files if Path(path).exists()]
     failed_subscriptions: list[TencentDocSubscription] = []
     cookie_failed_subscriptions: list[TencentDocSubscription] = []
     active_cookie = cookie
@@ -269,6 +326,8 @@ def _run_subscription_job(
             if remote_modified and display_datetime(remote_modified) == local_modified and local_exists:
                 with state_lock:
                     state.skipped += 1
+                    if subscription.url not in state.processed_urls:
+                        state.processed_urls.append(subscription.url)
                     update_download_percent()
                     save_status(subscription, "跳过：文件未变化", last_modified=remote_modified)
                     _add_log(
@@ -320,6 +379,8 @@ def _run_subscription_job(
                 if remote_modified:
                     state.pending_modified_by_url[subscription.url] = remote_modified
                 state.downloaded += 1
+                if subscription.url not in state.processed_urls:
+                    state.processed_urls.append(subscription.url)
                 update_download_percent()
                 state.updated_names.append(subscription.name)
                 save_status(subscription, "已下载待解析")
@@ -342,6 +403,9 @@ def _run_subscription_job(
 
     try:
         def run_batch(batch: list[TencentDocSubscription]) -> None:
+            batch = [subscription for subscription in batch if subscription.url not in state.processed_urls]
+            if not batch:
+                return
             workers = min(SUBSCRIPTION_MAX_WORKERS, max(1, len(batch)))
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 futures = [executor.submit(run_one, index, subscription) for index, subscription in enumerate(batch, start=1)]
@@ -467,17 +531,20 @@ def _run_subscription_job(
             save_subscriptions(subscriptions_path, next_subscriptions)
             state.pending_modified_by_url = {}
             state.updated_files = []
+            state.processed_urls = []
             state.percent = 100
-            state.message = f"{'、'.join(state.updated_names)} 已经订阅更新完毕"
+            state.message = f"订阅更新完成：{len(state.updated_names)} 个"
             _add_log(state, f"索引原子切换完成：{state.chunks} 个片段")
         else:
             state.message = "订阅检查完成，无需下载。"
             state.percent = 100
+            state.processed_urls = []
         if state.failed:
             state.message += f"；本次有 {state.failed} 个订阅更新失败，将在下次定时任务重试"
         state.status = "completed"
         state.finished_at = _now()
         state.duration_seconds = max(0, int(time.monotonic() - started_monotonic))
+        _add_log(state, f"任务完成，总耗时 {state.duration_seconds} 秒")
         write_state()
     except Exception as exc:  # noqa: BLE001 - background jobs must persist diagnostics.
         state.status = "error"
@@ -582,7 +649,8 @@ def discard_pending_subscription_files(
 
 
 def _add_log(state: SubscriptionJobState, message: str) -> None:
-    state.logs.append(f"{now_display()} {message}")
+    line = f"{now_display()} {message}"
+    state.logs.append(line)
     state.logs = state.logs[-300:]
 
 

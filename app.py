@@ -759,7 +759,7 @@ def render_subscription_header(api_url: str) -> None:
             function pad(value) {{ return String(value).padStart(2,"0"); }}
             function updateCountdown() {{
               if(!autoEnabled) {{ schedule.textContent="定时获取未开启"; return; }}
-              if(!nextAutoAt) {{ schedule.textContent="下次自动更新：等待调度"; return; }}
+              if(!nextAutoAt) {{ schedule.textContent="当前任务完成后开始下一轮倒计时"; return; }}
               const due=new Date(nextAutoAt);
               if(Number.isNaN(due.getTime())) {{ schedule.textContent=`下次自动更新：${{nextAutoAt}}`; return; }}
               const diff=Math.max(0, due.getTime()-Date.now());
@@ -908,7 +908,15 @@ def render_subscription_task_panel(api_url: str) -> None:
             color: #4e5665;
             font-size: 12px;
             line-height: 1.55;
+          }}
+          .sub-log-line {{
             white-space: pre-wrap;
+            overflow-wrap: anywhere;
+          }}
+          .sub-log-line + .sub-log-line {{
+            margin-top: 6px;
+            padding-top: 6px;
+            border-top: 1px dashed #e2e7ee;
           }}
           .subscription-toast {{
             position: fixed;
@@ -980,11 +988,14 @@ def render_subscription_task_panel(api_url: str) -> None:
                 ? Math.max(0, Math.min(100, Number(state.percent)))
                 : (total ? Math.min(100, Math.round(current / total * 100)) : 0);
               bar.style.width = `${{percent}}%`;
-              const message = state.message === "订阅更新完成"
-                ? "下载完成。请在下方点击重新解析文件完成后再重构索引。"
-                : String(state.message || "").includes("解析完成后提交")
-                  ? "当前没有待解析订阅文件。订阅修改时间只会在重建向量索引完成后提交。"
-                : (state.message || state.current_name || "");
+              const updatedNames = Array.isArray(state.updated_names) ? state.updated_names : [];
+              const message = state.status === "completed" && updatedNames.length
+                ? `订阅更新完成：${{updatedNames.length}} 个`
+                : state.message === "订阅更新完成"
+                  ? "下载完成。请在下方点击重新解析文件完成后再重构索引。"
+                  : String(state.message || "").includes("解析完成后提交")
+                    ? "当前没有待解析订阅文件。订阅修改时间只会在重建向量索引完成后提交。"
+                    : (state.message || state.current_name || "");
               statusLine.textContent = `状态：${{labels[state.status] || state.status}} · ${{message}}`;
               detailLine.textContent = `进度：${{current}} / ${{total}} · 下载 ${{state.downloaded || 0}} 个，跳过 ${{state.skipped || 0}} 个，失败 ${{state.failed || 0}} 个`;
               const logs = Array.isArray(state.logs) ? state.logs : [];
@@ -992,7 +1003,12 @@ def render_subscription_task_panel(api_url: str) -> None:
               const nearBottom = logsBox.scrollHeight - logsBox.scrollTop - logsBox.clientHeight < 24;
               if (nextLogsText !== lastLogsText) {{
                 const previousScrollTop = logsBox.scrollTop;
-                logsBox.textContent = nextLogsText;
+                logsBox.replaceChildren(...(logs.length ? logs : ["暂无详细日志"]).map((log) => {{
+                  const line = document.createElement("div");
+                  line.className = "sub-log-line";
+                  line.textContent = log;
+                  return line;
+                }}));
                 if (userPinnedToBottom && nearBottom) {{
                   logsBox.scrollTop = logsBox.scrollHeight;
                 }} else {{
@@ -1002,7 +1018,7 @@ def render_subscription_task_panel(api_url: str) -> None:
               }}
               stopButton.style.display = runningStatuses.has(state.status) ? "inline-flex" : "none";
               stopButton.disabled = state.status === "stopping";
-              if (state.status === "completed" && Array.isArray(state.updated_names) && state.updated_names.length) {{
+              if (state.status === "completed") {{
                 showCompletionToast(state);
               }}
               if (state.cookie_refresh_required) {{
@@ -1010,25 +1026,32 @@ def render_subscription_task_panel(api_url: str) -> None:
               }}
             }}
             function formatDuration(seconds) {{
-              const total = Math.max(0, Number(seconds || 0));
+              const total = Math.max(0, Math.round(Number(seconds || 0)));
+              const hours = Math.floor(total / 3600);
               const minutes = Math.floor(total / 60);
               const remain = total % 60;
+              if (hours) return `${{hours}}小时${{minutes % 60}}分${{remain}}秒`;
               return minutes ? `${{minutes}}分${{remain}}秒` : `${{remain}}秒`;
             }}
             function showCompletionToast(state) {{
               const storageKey = "customer-rag-subscription-toast-job";
-              try {{
-                if (window.localStorage.getItem(storageKey) === state.job_id) return;
-                window.localStorage.setItem(storageKey, state.job_id);
-              }} catch (error) {{}}
               let doc = document;
               try {{ if (window.parent && window.parent.document) doc = window.parent.document; }} catch (error) {{}}
+              try {{
+                const storage = doc.defaultView.localStorage;
+                if (storage.getItem(storageKey) === state.job_id) return;
+                storage.setItem(storageKey, state.job_id);
+              }} catch (error) {{}}
               const oldToast = doc.getElementById("customer-rag-subscription-toast");
               if (oldToast) oldToast.remove();
               const toast = doc.createElement("div");
               toast.id = "customer-rag-subscription-toast";
               toast.className = "subscription-toast";
-              toast.textContent = `${{state.updated_names.join("、")}} 已经订阅更新完毕，本次更新总耗时 ${{formatDuration(state.duration_seconds)}}`;
+              const updatedNames = Array.isArray(state.updated_names) ? state.updated_names : [];
+              const resultText = updatedNames.length
+                ? `${{updatedNames.length}} 个订阅已更新完毕`
+                : "订阅检查完成，无需更新";
+              toast.textContent = `${{resultText}}，本次任务耗时 ${{formatDuration(state.duration_seconds)}}`;
               const style = doc.createElement("style");
               style.textContent = `.subscription-toast{{position:fixed;right:24px;bottom:24px;z-index:999999;max-width:460px;padding:14px 18px;border:1px solid #9bd4aa;border-radius:10px;background:#f0fff4;color:#216e39;box-shadow:0 10px 30px rgba(31,41,55,.18);font:600 14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;opacity:0;transform:translateY(12px);transition:opacity .2s ease,transform .2s ease}}.subscription-toast.visible{{opacity:1;transform:translateY(0)}}`;
               doc.head.appendChild(style);
@@ -2086,7 +2109,7 @@ with tab_import:
                             subscriptions_path(),
                             enabled_subscriptions,
                             cookie,
-                            origin="manual",
+                            origin="web",
                         )
                         if result.status == "busy":
                             st.warning(result.message)

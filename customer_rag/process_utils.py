@@ -33,8 +33,9 @@ def process_is_alive(pid: int) -> bool:
 
 
 def start_worker_process(args: list[str], cwd: Path) -> int:
+    executable = _worker_executable()
     process = subprocess.Popen(
-        [sys.executable, "-m", "customer_rag.job_worker", *args],
+        [str(executable), "-m", "customer_rag.job_worker", *args],
         cwd=cwd,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -43,3 +44,12 @@ def start_worker_process(args: list[str], cwd: Path) -> int:
         creationflags=CREATE_NO_WINDOW | DETACHED_PROCESS,
     )
     return int(process.pid)
+
+
+def _worker_executable() -> Path:
+    executable = Path(sys.executable)
+    if os.name == "nt":
+        pythonw = executable.with_name("pythonw.exe")
+        if pythonw.exists():
+            return pythonw
+    return executable
