@@ -6,6 +6,7 @@ try DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
 SetTitleMatchMode 2
 CoordMode "Mouse", "Screen"
 CoordMode "ToolTip", "Screen"
+OnMessage(0x0201, PreviewWindowMouseDown)
 
 global CONFIG_PATH := A_ScriptDir "\config.ini"
 global SEND_TEXT_PATH := A_ScriptDir "\send-text.txt"
@@ -326,7 +327,7 @@ CheckRagQueryDone() {
     }
 
     if ProcessExist(RAG_QUERY_PID) {
-        fallbackMs := Max(1, ReadFloatConfig("rag", "fallback_seconds", 3.0)) * 1000
+        fallbackMs := Max(1, ReadFloatConfig("rag", "fallback_seconds", 6.0)) * 1000
         if (RAG_QUERY_STARTED_AT && A_TickCount - RAG_QUERY_STARTED_AT >= fallbackMs) {
             try ProcessClose RAG_QUERY_PID
             RAG_QUERY_PID := 0
@@ -432,7 +433,7 @@ ShowSendPreview(text, mouseX := "", mouseY := "", mode := "query") {
     DebugPreviewTest("show_after_close")
 
     text := PreparePreviewSourceText(text)
-    PREVIEW_TARGET_HWND := WinGetID("A")
+    PREVIEW_TARGET_HWND := SafeActiveHwnd()
     PREVIEW_SOURCE_TEXT := text
     PREVIEW_SHOW_TABS := mode = "custom"
     PREVIEW_FORCE_SPLIT := InStr(mode, "query") = 1
@@ -677,6 +678,9 @@ ShouldDefaultCheckPart(text) {
     cleaned := CleanOneLine(text)
     if PREVIEW_FALLBACK_MODE {
         return cleaned = FallbackManualReply()
+    }
+    if InStr(cleaned, "暂时截团") {
+        return true
     }
     if InStr(cleaned, "截团") {
         return false
@@ -1042,7 +1046,11 @@ WaitForSendInterval() {
 FocusSendBox() {
     global PREVIEW_TARGET_HWND
 
-    targetHwnd := PREVIEW_TARGET_HWND ? PREVIEW_TARGET_HWND : WinGetID("A")
+    targetHwnd := PREVIEW_TARGET_HWND ? PREVIEW_TARGET_HWND : SafeActiveHwnd()
+    if !targetHwnd {
+        SendBoxDebug("target_hwnd=missing")
+        return false
+    }
     WinActivate "ahk_id " targetHwnd
     Sleep 80
     ResetSendBoxDebug()
@@ -1107,6 +1115,49 @@ FindWeChatWindow() {
         }
     }
     return 0
+}
+
+PreviewWindowMouseDown(wParam, lParam, msg, hwnd) {
+    global PREVIEW_GUI, PREVIEW_CLOSE_BUTTON
+
+    if !IsObject(PREVIEW_GUI) || !PREVIEW_GUI.Hwnd {
+        return
+    }
+    previewHwnd := PREVIEW_GUI.Hwnd
+    rootHwnd := DllCall("GetAncestor", "ptr", hwnd, "uint", 2, "ptr")
+    if (hwnd != previewHwnd && rootHwnd != previewHwnd) {
+        return
+    }
+    if IsObject(PREVIEW_CLOSE_BUTTON) && PREVIEW_CLOSE_BUTTON.Hwnd && hwnd = PREVIEW_CLOSE_BUTTON.Hwnd {
+        return
+    }
+
+    MouseGetPos &mouseX, &mouseY
+    try WinGetPos &previewX, &previewY, &width,, "ahk_id " previewHwnd
+    catch {
+        return
+    }
+    clientX := mouseX - previewX
+    clientY := mouseY - previewY
+    if (clientY > 44) {
+        return
+    }
+    if clientX > width - 46 {
+        return
+    }
+
+    DllCall("ReleaseCapture")
+    PostMessage 0x00A1, 2,,, "ahk_id " previewHwnd
+    return 0
+}
+
+SafeActiveHwnd() {
+    try {
+        hwnd := WinGetID("A")
+        return hwnd ? hwnd : 0
+    } catch {
+        return 0
+    }
 }
 
 PositionPreviewNearMouse(mouseX := "", mouseY := "") {
@@ -1630,7 +1681,11 @@ CalibrateSendBoxPoint() {
     MouseGetPos &mouseX, &mouseY
     targetHwnd := GetCalibrationWindowAtPoint(mouseX, mouseY)
     if !targetHwnd {
-        targetHwnd := WinGetID("A")
+        targetHwnd := SafeActiveHwnd()
+    }
+    if !targetHwnd {
+        ShowTip("没有找到可校准的目标窗口")
+        return
     }
 
     WinGetPos &winX, &winY, &winW, &winH, "ahk_id " targetHwnd
@@ -1707,7 +1762,7 @@ GetCalibrationWindowAtPoint(mouseX, mouseY) {
         }
     }
 
-    activeHwnd := WinGetID("A")
+    activeHwnd := SafeActiveHwnd()
     return IsWeChatWindow(activeHwnd) ? activeHwnd : 0
 }
 
@@ -1844,12 +1899,21 @@ PreparePreviewSourceText(text) {
         if !InStr(output, fallbackText) {
             output .= (output = "" ? "" : "`n---`n") fallbackText
         }
+    } else if InStr(output, "暂时截团") {
+        temporaryClosedText := TemporaryClosedReply()
+        if !InStr(output, temporaryClosedText) {
+            output := temporaryClosedText (output = "" ? "" : "`n---`n" output)
+        }
     }
     return output
 }
 
 FallbackManualReply() {
     return "没做这款的，看看其他的呢"
+}
+
+TemporaryClosedReply() {
+    return "暂时截团了，先看看款式"
 }
 
 SplitSendText(text) {
@@ -2061,7 +2125,7 @@ restore_clipboard_after_paste=0
 
 [rag]
 enabled=1
-fallback_seconds=3
+fallback_seconds=6
 )"
 }
 

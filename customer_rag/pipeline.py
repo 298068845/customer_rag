@@ -14,7 +14,6 @@ import uuid
 from customer_rag.answering import build_structured_product_answer, is_product_query
 from customer_rag.attributes import NumericCondition, attributes_match, attributes_score, parse_numeric_conditions
 from customer_rag.category_config import add_category_terms
-from customer_rag.category_config import category_aliases
 from customer_rag.category_config import category_brands
 from customer_rag.category_config import category_terms as configured_category_terms
 from customer_rag.corpus import CorpusItem, CorpusStore
@@ -843,12 +842,12 @@ def _keyword_score(
             score += 6.0 if is_code else 2.0
     if brand_terms:
         matched_brands = [term for term in brand_terms if term in searchable_text]
+        if not matched_brands:
+            return 0.0
         if matched_brands:
             score += 24.0
             if any(term in source_text for term in matched_brands):
                 score += 16.0
-        else:
-            score -= 18.0
     if category_terms:
         matched_categories = [term for term in category_terms if term in searchable_text]
         if matched_categories:
@@ -925,11 +924,16 @@ def _known_brand_terms(query: str) -> list[str]:
 def _query_without_brands(query: str, brand_terms: list[str]) -> list[str]:
     terms: list[str] = []
     for brand in brand_terms:
-        remainder = query.replace(brand.lower(), "").strip()
+        remainder = _clean_query_remainder(query.replace(brand.lower(), ""))
         if len(remainder) >= 2:
             terms.append(remainder)
             terms.extend(re.findall(r"[\u4e00-\u9fff]{2,}|[a-z0-9][a-z0-9._-]{2,}", remainder))
     return terms
+
+
+def _clean_query_remainder(value: str) -> str:
+    value = re.sub(r"[的得地有吗么呀呢啊吧嘛？?！!，,。；;：:\s]+", "", value)
+    return value.strip()
 
 
 def _category_terms(query: str) -> list[str]:
@@ -1111,28 +1115,7 @@ def _normalize_path_value(value: str | Path) -> str:
 
 
 def _category_tag_candidates(question: str) -> list[str]:
-    matched: list[str] = []
-    query_lower = question.lower()
-    for category, aliases in category_aliases().items():
-        terms = _clean_tags([category, *aliases, *_compound_category_aliases(category)])
-        if any(_category_term_matches_query(term, query_lower) for term in terms):
-            matched.extend(terms)
-    return _clean_tags(matched)
-
-
-def _compound_category_aliases(category: str) -> list[str]:
-    if not re.search(r"[-－–—丨|/／]", category):
-        return []
-    return [part for part in _clean_tags(re.split(r"\s*[-－–—丨|/／]\s*", category)) if part != category]
-
-
-def _category_term_matches_query(term: str, query_lower: str) -> bool:
-    value = str(term).strip().lower()
-    if not value:
-        return False
-    if value in {"锅"}:
-        return query_lower == value
-    return value in query_lower
+    return configured_category_terms(question)
 
 
 def _needs_full_keyword_fallback(sources: list[RetrievedChunk], top_k: int) -> bool:

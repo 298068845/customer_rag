@@ -82,7 +82,7 @@ def main() -> int:
             tags=parse_tags(args.tags),
         )
         answer = format_wechat_answer(result.answer)
-        if result.fallback:
+        if result.fallback and not result.sources:
             answer = FALLBACK_CONTROL_MARKER + "\n" + answer
 
         args.output_file.parent.mkdir(parents=True, exist_ok=True)

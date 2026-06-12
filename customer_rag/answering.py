@@ -342,6 +342,11 @@ def _matches_product_question(question: str, product_name: str, fields: dict[str
     if brand_terms and not any(term == brand or term in target_text for term in brand_terms):
         return False
     if brand_terms:
+        category_terms = _category_terms(query)
+        if category_terms:
+            category_text = fields.get("品类", "")
+            match_terms = _specific_category_terms(query, category_terms) or category_terms
+            return any(term in product_name or term in fields.get("型号/规格", "") or term in category_text for term in match_terms)
         remainder_terms = _query_without_brands(query, brand_terms)
         if remainder_terms:
             return any(term.lower() in lowered_target for term in remainder_terms)
@@ -349,7 +354,8 @@ def _matches_product_question(question: str, product_name: str, fields: dict[str
     category_terms = _category_terms(query)
     if category_terms:
         category_text = fields.get("品类", "")
-        return any(term in product_name or term in fields.get("型号/规格", "") or term in category_text for term in category_terms)
+        match_terms = _specific_category_terms(query, category_terms) or category_terms
+        return any(term in product_name or term in fields.get("型号/规格", "") or term in category_text for term in match_terms)
 
     keywords = [word.lower() for word in re.findall(r"[\u4e00-\u9fffA-Za-z0-9]+", query) if len(word) >= 2]
     return not keywords or any(word in lowered_target for word in keywords)
@@ -368,15 +374,25 @@ def _query_without_brands(query: str, brand_terms: list[str]) -> list[str]:
     terms: list[str] = []
     lowered = query.lower()
     for brand in brand_terms:
-        remainder = lowered.replace(brand.lower(), "").strip()
+        remainder = _clean_query_remainder(lowered.replace(brand.lower(), ""))
         if len(remainder) >= 2:
             terms.append(remainder)
             terms.extend(re.findall(r"[\u4e00-\u9fff]{2,}|[a-z0-9][a-z0-9._-]{2,}", remainder))
     return list(dict.fromkeys(terms))
 
 
+def _clean_query_remainder(value: str) -> str:
+    value = re.sub(r"[的得地有吗么呀呢啊吧嘛？?！!，,。；;：:\\s]+", "", value)
+    return value.strip()
+
+
 def _category_terms(query: str) -> list[str]:
     return configured_category_terms(query)
+
+
+def _specific_category_terms(query: str, category_terms: list[str]) -> list[str]:
+    normalized = query.lower()
+    return [term for term in category_terms if len(term) >= 2 and term.lower() in normalized]
 
 
 def _source_number(source: RetrievedChunk, sources: list[RetrievedChunk]) -> int:

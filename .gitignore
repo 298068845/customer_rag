@@ -27,6 +27,7 @@ wechatExtension/send-text.txt
 wechatExtension/last-selected.txt
 wechatExtension/rag-bridge.log
 wechatExtension/rag-bridge-test.log
+wechatExtension/rag-brands.txt
 wechatExtension/sendbox-debug.log
 wechatExtension/preview-test-result.ini
 wechatExtension/*-test-result.ini
