@@ -9,6 +9,8 @@ from pathlib import Path
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 DETACHED_PROCESS = 0x00000008 if os.name == "nt" else 0
+STARTF_USESHOWWINDOW = 0x00000001
+SW_HIDE = 0
 
 
 def process_is_alive(pid: int) -> bool:
@@ -33,13 +35,33 @@ def process_is_alive(pid: int) -> bool:
 
 
 def start_worker_process(args: list[str], cwd: Path) -> int:
+    kwargs = {
+        "cwd": cwd,
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = CREATE_NO_WINDOW | DETACHED_PROCESS
+        kwargs["startupinfo"] = _hidden_startupinfo()
     process = subprocess.Popen(
-        [sys.executable, "-m", "customer_rag.job_worker", *args],
-        cwd=cwd,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        close_fds=True,
-        creationflags=CREATE_NO_WINDOW | DETACHED_PROCESS,
+        [_worker_python_executable(), "-m", "customer_rag.job_worker", *args],
+        **kwargs,
     )
     return int(process.pid)
+
+
+def _worker_python_executable() -> str:
+    if os.name != "nt":
+        return sys.executable
+    executable = Path(sys.executable)
+    pythonw = executable.with_name("pythonw.exe")
+    return str(pythonw) if pythonw.exists() else sys.executable
+
+
+def _hidden_startupinfo() -> subprocess.STARTUPINFO:
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = SW_HIDE
+    return startupinfo

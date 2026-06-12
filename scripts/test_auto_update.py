@@ -19,8 +19,9 @@ from customer_rag.auto_update import run_auto_update_check
 from customer_rag.browser_cookies import BrowserCookieResult
 from customer_rag.config import LlmConfig, RagConfig
 from customer_rag.cookie_login import CookieLoginState, _poll_cookie, capture_cookie, load_saved_cookie, open_cookie_login
+from customer_rag import process_utils
 from customer_rag.raw_jobs import read_raw_job_state, start_raw_job
-from customer_rag.subscription_jobs import is_subscription_worker_alive, read_job_state, start_subscription_job
+from customer_rag.subscription_jobs import read_job_state, start_subscription_job
 from customer_rag.task_coordinator import (
     TaskCoordinatorState,
     read_state,
@@ -79,6 +80,28 @@ def test_scheduler_rules(config: RagConfig) -> None:
         start.return_value.status = "running"
         assert run_auto_update_check(config) == "started"
         start.assert_called_once()
+
+
+def test_worker_process_hides_windows_console(config: RagConfig) -> None:
+    python_exe = config.index_dir / "Python" / "python.exe"
+    pythonw_exe = python_exe.with_name("pythonw.exe")
+    python_exe.parent.mkdir(parents=True, exist_ok=True)
+    python_exe.write_text("", encoding="utf-8")
+    pythonw_exe.write_text("", encoding="utf-8")
+
+    with patch.object(process_utils.os, "name", "nt"), patch.object(
+        process_utils.sys, "executable", str(python_exe)
+    ), patch("customer_rag.process_utils.subprocess.Popen") as popen:
+        popen.return_value.pid = 12345
+        pid = process_utils.start_worker_process(["subscription", "job"], config.index_dir)
+
+    assert pid == 12345
+    command = popen.call_args.args[0]
+    kwargs = popen.call_args.kwargs
+    assert command[:3] == [str(pythonw_exe), "-m", "customer_rag.job_worker"]
+    assert kwargs["creationflags"] == process_utils.CREATE_NO_WINDOW | process_utils.DETACHED_PROCESS
+    assert kwargs["startupinfo"].dwFlags & process_utils.STARTF_USESHOWWINDOW
+    assert kwargs["startupinfo"].wShowWindow == process_utils.SW_HIDE
 
 
 def test_incomplete_xlsx_does_not_replace_existing(config: RagConfig) -> None:
@@ -218,7 +241,7 @@ def test_complete_subscription_flow(config: RagConfig) -> None:
     ):
         started = start_subscription_job(config, subscriptions_path, [subscription], "cookie=ok", origin="auto")
         assert started.status == "running"
-        wait_until(lambda: not is_subscription_worker_alive())
+        wait_until(lambda: read_job_state(config).status not in {"running", "waiting_cookie", "rebuilding", "stopping"})
 
     state = read_job_state(config)
     assert state.status == "completed"
@@ -263,7 +286,7 @@ def test_download_failure_requests_cookie(config: RagConfig) -> None:
     ):
         started = start_subscription_job(config, subscriptions_path, [subscription], "bad-cookie", origin="auto")
         assert started.status == "running"
-        wait_until(lambda: not is_subscription_worker_alive())
+        wait_until(lambda: read_job_state(config).status not in {"running", "waiting_cookie", "rebuilding", "stopping"})
     state = read_job_state(config)
     assert state.status == "completed", state
     assert not state.cookie_refresh_required and state.failed == 0
@@ -306,7 +329,7 @@ def test_timeout_does_not_restart_successful_downloads(config: RagConfig) -> Non
     ) as login, patch("customer_rag.pipeline.RagPipeline", FakePipeline):
         started = start_subscription_job(config, subscriptions_path, [good, slow], "cookie=ok", origin="auto")
         assert started.status == "running"
-        wait_until(lambda: not is_subscription_worker_alive())
+        wait_until(lambda: read_job_state(config).status not in {"running", "waiting_cookie", "rebuilding", "stopping"})
 
     state = read_job_state(config)
     assert state.status == "completed", state
@@ -351,6 +374,7 @@ def main() -> None:
         root = Path(tmp)
         tests = [
             test_scheduler_rules,
+            test_worker_process_hides_windows_console,
             test_incomplete_xlsx_does_not_replace_existing,
             test_manual_reschedules_auto,
             test_scheduler_init_is_idempotent,
