@@ -39,6 +39,8 @@ LOCATOR_MODE_LABELS = {
     "uia": "UIA \u5b9a\u4f4d",
     "f8": "F8 \u5b9a\u4f4d",
 }
+SUBSCRIPTION_COMPLETE_NOTIFY_SECTION = "notify"
+SUBSCRIPTION_COMPLETE_NOTIFY_KEY = "subscription_complete"
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -117,6 +119,11 @@ def build_menu() -> pystray.Menu:
             "\u6d4b\u8bd5\u6a21\u5f0f\uff08\u4ec5\u7c98\u8d34\uff0c\u4e0d\u53d1\u9001\uff09",
             toggle_test_mode,
             checked=lambda _: get_test_mode(),
+        ),
+        pystray.MenuItem(
+            "\u8ba2\u9605\u5b8c\u6210\u6c14\u6ce1\u901a\u77e5",
+            toggle_subscription_complete_notification,
+            checked=lambda _: get_subscription_complete_notification(),
         ),
         pystray.MenuItem("重启 RAG 服务", restart_streamlit),
         pystray.Menu.SEPARATOR,
@@ -376,10 +383,11 @@ def monitor_cookie_login_state(icon: pystray.Icon) -> None:
             icon.update_menu()
         job_id = str(payload.get("job_id") or "")
         if payload.get("status") == "completed" and payload.get("origin") == "auto" and job_id and job_id != notified_completed_job:
-            names = "、".join(payload.get("updated_names") or []) or "订阅文件"
-            seconds = max(0, int(payload.get("duration_seconds") or 0))
-            duration = f"{seconds // 60}分{seconds % 60}秒" if seconds >= 60 else f"{seconds}秒"
-            notify(icon, "订阅更新完成", f"{names} 已经订阅更新完毕，本次更新总耗时 {duration}。")
+            if get_subscription_complete_notification():
+                names = "、".join(payload.get("updated_names") or []) or "订阅文件"
+                seconds = max(0, int(payload.get("duration_seconds") or 0))
+                duration = f"{seconds // 60}分{seconds % 60}秒" if seconds >= 60 else f"{seconds}秒"
+                notify(icon, "订阅更新完成", f"{names} 已经订阅更新完毕，本次更新总耗时 {duration}。")
             notified_completed_job = job_id
         was_waiting = waiting
         time.sleep(2)
@@ -472,6 +480,23 @@ def toggle_test_mode(icon: pystray.Icon, _: object = None) -> None:
         else "\u5df2\u5173\u95ed\uff1a\u6062\u590d\u6b63\u5e38\u53d1\u9001"
     )
     notify(icon, "\u6d4b\u8bd5\u6a21\u5f0f", message)
+
+
+def toggle_subscription_complete_notification(icon: pystray.Icon, _: object = None) -> None:
+    enabled = not get_subscription_complete_notification()
+    write_ini_value(
+        WECHAT_CONFIG,
+        SUBSCRIPTION_COMPLETE_NOTIFY_SECTION,
+        SUBSCRIPTION_COMPLETE_NOTIFY_KEY,
+        "1" if enabled else "0",
+    )
+    icon.update_menu()
+    message = (
+        "\u5df2\u5f00\u542f\uff1a\u81ea\u52a8\u8ba2\u9605\u5b8c\u6210\u540e\u53d1\u9001 Windows \u6c14\u6ce1\u901a\u77e5"
+        if enabled
+        else "\u5df2\u5173\u95ed\uff1a\u81ea\u52a8\u8ba2\u9605\u5b8c\u6210\u540e\u4e0d\u518d\u53d1\u9001\u6c14\u6ce1\u901a\u77e5"
+    )
+    notify(icon, "\u8ba2\u9605\u5b8c\u6210\u901a\u77e5", message)
 
 
 def quit_launcher(icon: pystray.Icon, _: object = None) -> None:
@@ -663,6 +688,16 @@ def get_locator_mode() -> str:
 
 def get_test_mode() -> bool:
     value = read_ini_value(WECHAT_CONFIG, "send", "test_mode", "0").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def get_subscription_complete_notification() -> bool:
+    value = read_ini_value(
+        WECHAT_CONFIG,
+        SUBSCRIPTION_COMPLETE_NOTIFY_SECTION,
+        SUBSCRIPTION_COMPLETE_NOTIFY_KEY,
+        "1",
+    ).strip().lower()
     return value in {"1", "true", "yes", "on"}
 
 
