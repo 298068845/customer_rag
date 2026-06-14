@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import pickle
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -9,6 +10,9 @@ from pathlib import Path
 
 from customer_rag.attributes import extract_attributes
 from customer_rag.loaders import LoadedDocument
+
+
+CORPUS_CACHE_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -32,11 +36,16 @@ class CorpusStore:
     def list_items(self) -> list[CorpusItem]:
         if not self.path.exists():
             return []
+        signature = _file_signature(self.path)
+        cached_items = self._load_items_cache(signature)
+        if cached_items is not None:
+            return cached_items
         items: list[CorpusItem] = []
         with self.path.open("r", encoding="utf-8") as fp:
             for line in fp:
                 if line.strip():
                     items.append(_item_from_payload(json.loads(line)))
+        self._write_items_cache(signature, items)
         return items
 
     def add(
@@ -199,6 +208,47 @@ class CorpusStore:
                 fp.write(json.dumps(asdict(item), ensure_ascii=False) + "\n")
         os.replace(tmp_path, self.path)
 
+    def _cache_path(self) -> Path:
+        return self.path.with_name(f"{self.path.stem}.parsed.pkl")
+
+    def _load_items_cache(self, signature: tuple[int, int]) -> list[CorpusItem] | None:
+        cache_path = self._cache_path()
+        if not cache_path.exists():
+            return None
+        try:
+            with cache_path.open("rb") as fp:
+                payload = pickle.load(fp)
+        except (OSError, pickle.PickleError, EOFError, AttributeError, ValueError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("version") != CORPUS_CACHE_VERSION:
+            return None
+        if tuple(payload.get("signature", ())) != signature:
+            return None
+        items = payload.get("items")
+        if not isinstance(items, list) or not all(isinstance(item, CorpusItem) for item in items):
+            return None
+        return list(items)
+
+    def _write_items_cache(self, signature: tuple[int, int], items: list[CorpusItem]) -> None:
+        cache_path = self._cache_path()
+        tmp_path = cache_path.with_name(f"{cache_path.name}.{uuid.uuid4().hex}.tmp")
+        payload = {
+            "version": CORPUS_CACHE_VERSION,
+            "signature": signature,
+            "items": items,
+        }
+        try:
+            with tmp_path.open("wb") as fp:
+                pickle.dump(payload, fp, protocol=pickle.HIGHEST_PROTOCOL)
+            os.replace(tmp_path, cache_path)
+        except OSError:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
     def replace_sources(self, sources: set[str], documents: list[LoadedDocument]) -> tuple[int, int]:
         normalized_sources = {_normalize_source(source) for source in sources}
         current = self.list_items()
@@ -243,6 +293,11 @@ def _item_from_payload(payload: dict) -> CorpusItem:
     payload.setdefault("tags", [])
     payload.setdefault("attributes", {})
     return CorpusItem(**payload)
+
+
+def _file_signature(path: Path) -> tuple[int, int]:
+    stat = path.stat()
+    return (stat.st_mtime_ns, stat.st_size)
 
 
 def _now() -> str:

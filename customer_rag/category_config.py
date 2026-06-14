@@ -8,6 +8,19 @@ import yaml
 
 
 _GENERIC_QUERY_ALIASES = {"锅"}
+_CATEGORY_SEMANTIC_GROUPS = (
+    ("智能门锁", "智能锁", "门锁", "指纹锁"),
+)
+_PLATFORM_TERMS = {
+    "京东",
+    "天猫",
+    "淘宝",
+    "抖音",
+    "拼多多",
+    "小红书",
+    "苏宁",
+    "唯品会",
+}
 
 
 DEFAULT_CATEGORY_ALIASES: dict[str, list[str]] = {
@@ -107,48 +120,56 @@ def add_category_terms(
     aliases = {category: list(alias_values) for category, alias_values in aliases.items()}
     brands = {category: list(brand_values) for category, brand_values in brands.items()}
     category_by_lower = {category.lower(): category for category in aliases}
+    alias_to_category: dict[str, str] = {}
     existing = set(category_by_lower)
     for alias_values in aliases.values():
-        existing.update(alias.lower() for alias in alias_values)
+        for alias in alias_values:
+            existing.add(alias.lower())
+    for category, alias_values in aliases.items():
+        for alias in alias_values:
+            alias_to_category.setdefault(alias.lower(), category)
 
     added = 0
     changed = False
     for term in _clean_terms(terms):
-        key = term.lower()
-        compound_aliases = _compound_aliases(term)
-        existing_category = category_by_lower.get(key)
+        normalized_category, term_aliases = _normalize_category_term(term, aliases)
+        key = normalized_category.lower()
+        existing_category = category_by_lower.get(key) or alias_to_category.get(key)
         if existing_category:
-            if _merge_aliases(aliases, existing_category, compound_aliases, existing, exclude_key=key):
+            if _merge_aliases(aliases, existing_category, term_aliases, existing, exclude_key=existing_category.lower()):
                 changed = True
             continue
         if key in existing:
             continue
-        term_aliases = []
-        for alias in compound_aliases:
+        category_aliases = []
+        for alias in term_aliases:
             alias_key = alias.lower()
             if alias_key != key and alias_key not in existing:
-                term_aliases.append(alias)
+                category_aliases.append(alias)
                 existing.add(alias_key)
-        aliases[term] = term_aliases
-        brands.setdefault(term, [])
-        category_by_lower[key] = term
+                alias_to_category[alias_key] = normalized_category
+        aliases[normalized_category] = category_aliases
+        brands.setdefault(normalized_category, [])
+        category_by_lower[key] = normalized_category
         existing.add(key)
         added += 1
         changed = True
     for category, brand_values in (category_brand_map or {}).items():
-        category_text = str(category).strip()
+        category_text, category_aliases = _normalize_category_term(category, aliases)
         if not category_text:
             continue
         key = category_text.lower()
-        existing_category = category_by_lower.get(key, category_text)
+        existing_category = category_by_lower.get(key) or alias_to_category.get(key) or category_text
         if existing_category not in aliases:
             aliases[existing_category] = []
             category_by_lower[key] = existing_category
             added += 1
             changed = True
+        if _merge_aliases(aliases, existing_category, category_aliases, existing, exclude_key=existing_category.lower()):
+            changed = True
         current = brands.setdefault(existing_category, [])
         current_keys = {value.lower() for value in current}
-        for brand in _clean_terms(brand_values):
+        for brand in _clean_terms([_normalize_brand_term(brand) for brand in brand_values]):
             brand_key = brand.lower()
             if brand_key not in current_keys:
                 current.append(brand)
@@ -170,8 +191,11 @@ def clear_category_cache() -> None:
 def category_terms(query: str) -> list[str]:
     query_lower = query.lower()
     matched: list[str] = []
+    for group in _CATEGORY_SEMANTIC_GROUPS:
+        if any(term.lower() in query_lower for term in group):
+            matched.extend(group)
     for category, aliases in category_aliases().items():
-        terms = [category, *aliases, *_compound_aliases(category)]
+        terms = [category, *aliases, *_compound_aliases(category), *semantic_category_terms(category, aliases)]
         if any(_term_matches_query(term, query_lower) for term in terms):
             matched.extend(terms)
     return _clean_terms(matched)
@@ -182,6 +206,14 @@ def all_category_terms() -> list[str]:
     for category, aliases in category_aliases().items():
         terms.extend([category, *aliases, *_compound_aliases(category)])
     return _clean_terms(terms)
+
+
+def semantic_category_terms(category: str, aliases: list[str]) -> list[str]:
+    configured_terms = {str(term).strip().lower() for term in [category, *aliases] if str(term).strip()}
+    for group in _CATEGORY_SEMANTIC_GROUPS:
+        if configured_terms.intersection(term.lower() for term in group):
+            return list(group)
+    return []
 
 
 def _parse_catalog(payload: Any) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
@@ -211,8 +243,20 @@ def _parse_catalog(payload: Any) -> tuple[dict[str, list[str]], dict[str, list[s
             brand_values = _split_terms(raw_brands)
         elif isinstance(raw_brands, list):
             brand_values = [str(brand) for brand in raw_brands]
-        parsed[category_text] = _clean_terms(aliases)
-        brands[category_text] = _clean_terms(brand_values)
+        normalized_category, inferred_aliases = _normalize_category_term(category_text, parsed)
+        current_aliases = parsed.setdefault(normalized_category, [])
+        for alias in _clean_terms([*aliases, *inferred_aliases]):
+            if alias in _PLATFORM_TERMS:
+                continue
+            if alias.lower() != normalized_category.lower() and alias not in current_aliases:
+                current_aliases.append(alias)
+        current_brands = brands.setdefault(normalized_category, [])
+        current_brand_keys = {brand.lower() for brand in current_brands}
+        for brand in _clean_terms([_normalize_brand_term(brand) for brand in brand_values]):
+            brand_key = brand.lower()
+            if brand_key not in current_brand_keys:
+                current_brands.append(brand)
+                current_brand_keys.add(brand_key)
     if not parsed:
         parsed = DEFAULT_CATEGORY_ALIASES
         brands = {category: [] for category in parsed}
@@ -241,6 +285,57 @@ def _compound_aliases(term: str) -> list[str]:
     return [part for part in _clean_terms(parts) if part != term]
 
 
+def _normalize_category_term(
+    term: str,
+    known_aliases: dict[str, list[str]] | None = None,
+) -> tuple[str, list[str]]:
+    value = str(term or "").strip()
+    if not value:
+        return "", []
+    parts = _compound_aliases(value)
+    if not parts:
+        return value, []
+    known_category = _known_category_from_parts(parts, known_aliases or {})
+    category = known_category or parts[0]
+    aliases = [value, *(part for part in parts if part not in _PLATFORM_TERMS)]
+    return category, [alias for alias in _clean_terms(aliases) if alias.lower() != category.lower()]
+
+
+def _known_category_from_parts(parts: list[str], known_aliases: dict[str, list[str]]) -> str:
+    category_by_lower = {category.lower(): category for category in known_aliases}
+    alias_to_category = {
+        alias.lower(): category
+        for category, aliases in known_aliases.items()
+        for alias in aliases
+    }
+    for part in parts:
+        matched = category_by_lower.get(part.lower())
+        if matched:
+            return matched
+    for part in parts:
+        matched = alias_to_category.get(part.lower())
+        if matched:
+            return matched
+    for part in parts:
+        matched = DEFAULT_CATEGORY_ALIASES.get(part)
+        if matched is not None:
+            return part
+    return ""
+
+
+def _normalize_brand_term(term: str) -> str:
+    value = str(term or "").strip()
+    if not value:
+        return ""
+    parts = [part for part in re.split(r"\s*[-－–—丨|/／·・]\s*", value) if part.strip()]
+    if len(parts) <= 1:
+        return value
+    non_platform_parts = [part for part in parts if part not in _PLATFORM_TERMS]
+    if len(non_platform_parts) == 1 and len(non_platform_parts[0]) >= 2:
+        return non_platform_parts[0]
+    return value
+
+
 def _term_matches_query(term: str, query_lower: str) -> bool:
     value = str(term).strip().lower()
     if not value:
@@ -262,6 +357,8 @@ def _merge_aliases(
     values = aliases.setdefault(category, [])
     value_keys = {value.lower() for value in values}
     for alias in new_aliases:
+        if alias in _PLATFORM_TERMS:
+            continue
         key = alias.lower()
         if key == exclude_key or key in value_keys or key in existing:
             continue

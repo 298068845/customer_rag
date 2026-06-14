@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import pickle
 from dataclasses import dataclass
 from pathlib import Path
 import queue
@@ -27,8 +28,14 @@ from customer_rag.tencent_docs import load_subscriptions, subscription_output_pa
 from customer_rag.vector_store import RetrievedChunk, VectorStore
 
 
-FUZZY_FALLBACK_SECONDS = 3.0
+FUZZY_FALLBACK_SECONDS = 4.0
+STRONG_KEYWORD_MATCH_SCORE = 100.0
 RAW_PARSE_CACHE_VERSION = "v1"
+MODEL_CODE_REMOVE_TRANS = str.maketrans("", "", " \t\r\n._-")
+QUICK_SEARCH_CACHE_VERSION = 1
+FOOTREST_WITH_TERMS = ("\u6709\u811a\u8e0f", "\u5e26\u811a\u8e0f", "\u811a\u8e0f\u6b3e", "\u811a\u8e0f\u7248")
+FOOTREST_WITH_QUERY_TERMS = FOOTREST_WITH_TERMS + ("\u811a\u8e0f",)
+FOOTREST_WITHOUT_TERMS = ("\u65e0\u811a\u8e0f", "\u4e0d\u5e26\u811a\u8e0f", "\u4e0d\u8981\u811a\u8e0f")
 
 
 @dataclass(frozen=True)
@@ -49,6 +56,8 @@ class RagPipeline:
         self._corpus_cache: list[CorpusItem] | None = None
         self._tag_index_cache: dict[str, list[CorpusItem]] = {}
         self._tag_lookup_cache: dict[str, str] = {}
+        self._model_code_index_cache: dict[str, list[CorpusItem]] = {}
+        self._category_item_index_cache: dict[str, list[CorpusItem]] = {}
         self._keyword_cache: dict[
             tuple[str, int, tuple[str, ...], str, float | None, float | None],
             list[RetrievedChunk],
@@ -329,22 +338,94 @@ class RagPipeline:
         tags: list[str] | None = None,
     ) -> RagResult:
         started_at = time.monotonic()
-        deadline = started_at + FUZZY_FALLBACK_SECONDS
         selected_tags = _clean_tags(tags or [])
         warning = None
         precise_lookup = _is_precise_lookup(question)
-        auto_tags = [] if selected_tags or precise_lookup else self._auto_search_tags(question)
+        product_query = is_product_query(question)
+        timeout_seconds = self._search_timeout_seconds(question, precise_lookup=precise_lookup, product_query=product_query)
+        deadline = started_at + timeout_seconds
+        auto_tags = [] if selected_tags or precise_lookup or product_query else self._auto_search_tags(question)
         search_tags = selected_tags or auto_tags
         tag_match = "all" if selected_tags else "any"
+        category_query = _is_category_or_tag_query(question, self._tag_lookup_cache)
+        product_query = product_query or category_query
+        broad_category_query = product_query and not _known_brand_terms(question) and (
+            bool(_category_terms(question)) or category_query
+        )
+        broad_category_brands = _category_brands_for_query(question) if broad_category_query else []
+        keyword_top_k = self.config.top_k * (40 if broad_category_query else 10)
+        max_answer_products = self.config.top_k
 
-        keyword_sources = self.keyword_search(
-            question,
-            self.config.top_k * 10,
-            tags=search_tags,
-            tag_match=tag_match,
-            deadline=deadline,
+        model_code_sources = (
+            self.model_code_search(
+                question,
+                keyword_top_k,
+                tags=search_tags,
+                tag_match=tag_match,
+            )
+            if precise_lookup
+            else []
+        )
+        if precise_lookup and model_code_sources and model_code_sources[0].score >= STRONG_KEYWORD_MATCH_SCORE:
+            confirmed_sources = _dedupe_sources_by_product(model_code_sources)
+            answer = build_structured_product_answer(
+                question,
+                confirmed_sources,
+                system_prompt=system_prompt,
+                require_question_match=True,
+                max_products=max_answer_products,
+            )
+            if answer:
+                return RagResult(answer=answer, sources=confirmed_sources[:max_answer_products])
+            return self._fuzzy_fallback_result(
+                question,
+                confirmed_sources,
+                system_prompt,
+                search_tags,
+                None,
+                deadline,
+            )
+
+        fast_category_sources = (
+            self.category_search(
+                question,
+                keyword_top_k,
+                tags=search_tags,
+                tag_match=tag_match,
+                deadline=deadline,
+            )
+            if broad_category_query
+            else []
+        )
+        if fast_category_sources and not _needs_full_keyword_fallback(fast_category_sources, self.config.top_k):
+            keyword_sources = fast_category_sources
+        else:
+            keyword_sources = self.keyword_search(
+                question,
+                keyword_top_k,
+                tags=search_tags,
+                tag_match=tag_match,
+                deadline=deadline,
+            )
+            keyword_sources = _merge_sources(fast_category_sources, keyword_sources)
+        keyword_sources = _merge_sources(model_code_sources, keyword_sources)
+        strong_keyword_match = bool(
+            keyword_sources and keyword_sources[0].score >= STRONG_KEYWORD_MATCH_SCORE
         )
         if time.monotonic() >= deadline:
+            if strong_keyword_match:
+                timeout_sources = _dedupe_sources_by_product(keyword_sources)
+                if broad_category_query:
+                    timeout_sources = _diversify_sources_by_brand(timeout_sources)
+                answer = build_structured_product_answer(
+                    question,
+                    timeout_sources,
+                    system_prompt=system_prompt,
+                    require_question_match=True,
+                    max_products=max_answer_products,
+                )
+                if answer:
+                    return RagResult(answer=answer, sources=timeout_sources[:max_answer_products])
             return self._fuzzy_fallback_result(question, keyword_sources, system_prompt, search_tags, None, deadline)
         if auto_tags and not keyword_sources:
             keyword_sources = _merge_sources(
@@ -354,7 +435,7 @@ class RagPipeline:
             if time.monotonic() >= deadline:
                 return self._fuzzy_fallback_result(question, keyword_sources, system_prompt, search_tags, None, deadline)
 
-        precise_product_lookup = precise_lookup or is_product_query(question)
+        precise_product_lookup = precise_lookup or product_query or strong_keyword_match
         if precise_product_lookup and keyword_sources:
             sources = keyword_sources[: self.config.top_k]
         else:
@@ -362,7 +443,7 @@ class RagPipeline:
                 search_k = self.config.top_k * 8 if search_tags else self.config.top_k * 4
                 vector_results = _run_with_timeout(
                     lambda: self.store.search(question, search_k),
-                    max(0.2, FUZZY_FALLBACK_SECONDS - (time.monotonic() - started_at)),
+                    max(0.2, timeout_seconds - (time.monotonic() - started_at)),
                 )
                 if vector_results is None:
                     return self._fuzzy_fallback_result(
@@ -377,7 +458,7 @@ class RagPipeline:
                 if auto_tags and not vector_sources and not keyword_sources:
                     fallback_vector_results = _run_with_timeout(
                         lambda: self.store.search(question, self.config.top_k * 4),
-                        max(0.2, FUZZY_FALLBACK_SECONDS - (time.monotonic() - started_at)),
+                        max(0.2, timeout_seconds - (time.monotonic() - started_at)),
                     )
                     if fallback_vector_results is None:
                         return self._fuzzy_fallback_result(
@@ -417,20 +498,29 @@ class RagPipeline:
         )[: self.config.top_k]
 
         answer_sources = sources
-        if is_product_query(question):
+        if precise_product_lookup and keyword_sources:
+            answer_sources = _apply_numeric_conditions(
+                _dedupe_sources_by_product(_merge_sources(sources, keyword_sources)),
+                conditions,
+            )
+        if product_query:
             answer_sources = _apply_numeric_conditions(
                 _dedupe_sources_by_product(_merge_sources(_merge_sources(attribute_sources, keyword_sources), sources)),
                 conditions,
             )
+            if broad_category_query:
+                answer_sources = _filter_sources_by_known_brands(answer_sources, broad_category_brands)
+                answer_sources = _diversify_sources_by_brand(answer_sources)
+                sources = answer_sources[:max_answer_products]
         answer = build_structured_product_answer(
             question,
             answer_sources,
             system_prompt=system_prompt,
             require_question_match=not conditions,
-            max_products=self.config.top_k,
+            max_products=max_answer_products,
         )
         if answer is None:
-            if is_product_query(question):
+            if product_query:
                 return self._fuzzy_fallback_result(
                     question,
                     keyword_sources,
@@ -440,7 +530,7 @@ class RagPipeline:
                     deadline,
                 )
             else:
-                if time.monotonic() - started_at >= FUZZY_FALLBACK_SECONDS:
+                if time.monotonic() - started_at >= timeout_seconds:
                     return self._fuzzy_fallback_result(
                         question,
                         keyword_sources or sources,
@@ -451,7 +541,7 @@ class RagPipeline:
                     )
                 llm_answer = _run_text_with_timeout(
                     lambda: self.llm.answer(question, sources, system_prompt=system_prompt),
-                    max(0.2, FUZZY_FALLBACK_SECONDS - (time.monotonic() - started_at)),
+                    max(0.2, timeout_seconds - (time.monotonic() - started_at)),
                 )
                 if llm_answer is None:
                     return self._fuzzy_fallback_result(
@@ -464,6 +554,15 @@ class RagPipeline:
                     )
                 answer = llm_answer
         return RagResult(answer=strip_thinking(answer), sources=sources, warning=warning)
+
+    def _search_timeout_seconds(self, question: str, *, precise_lookup: bool, product_query: bool) -> float:
+        if precise_lookup or parse_numeric_conditions(question):
+            return max(1.0, float(self.config.precise_search_timeout_seconds))
+        if product_query and not _known_brand_terms(question) and _category_terms(question):
+            return max(12.0, float(self.config.product_search_timeout_seconds))
+        if product_query:
+            return max(1.0, float(self.config.product_search_timeout_seconds))
+        return max(1.0, float(self.config.search_timeout_seconds))
 
     def _fuzzy_fallback_result(
         self,
@@ -484,12 +583,128 @@ class RagPipeline:
             question,
             sources,
             system_prompt=system_prompt,
-            require_question_match=False,
+            require_question_match=bool(_known_brand_terms(question)),
             max_products=self.config.top_k,
         )
         if answer is None:
-            answer = _format_fuzzy_sources(sources)
+            if _known_brand_terms(question) and not _model_code_queries(question):
+                sources = []
+                answer = "资料中未找到相关信息。"
+            else:
+                answer = _format_fuzzy_sources(sources)
         return RagResult(answer=answer, sources=sources, warning=message, fallback=True)
+
+    def model_code_search(
+        self,
+        question: str,
+        top_k: int,
+        tags: list[str] | None = None,
+        *,
+        tag_match: str = "all",
+    ) -> list[RetrievedChunk]:
+        query_codes = _model_code_queries(question)
+        if not query_codes:
+            return []
+        selected_tags = _clean_tags(tags or [])
+        selected_tag_set = set(selected_tags)
+        self._corpus_items()
+
+        scored: dict[str, RetrievedChunk] = {}
+        for query_code in query_codes:
+            for code, items in _model_code_candidates(self._model_code_index_cache, query_code):
+                match_score = _model_code_match_score(query_code, code)
+                if match_score <= 0:
+                    continue
+                for item in items:
+                    if selected_tags and not _tags_match(item.tags, selected_tag_set, tag_match):
+                        continue
+                    current = scored.get(item.id)
+                    score = match_score + _model_code_field_bonus(query_code, item)
+                    if current is not None and current.score >= score:
+                        continue
+                    scored[item.id] = RetrievedChunk(
+                        text=item.text,
+                        source=item.source,
+                        title=item.title,
+                        location=item.location,
+                        score=score,
+                        image_paths=item.image_paths,
+                        tags=item.tags,
+                        attributes=item.attributes,
+                    )
+        results = list(scored.values())
+        results.sort(key=lambda source: source.score, reverse=True)
+        return results[:top_k]
+
+    def category_search(
+        self,
+        question: str,
+        top_k: int,
+        tags: list[str] | None = None,
+        *,
+        tag_match: str = "all",
+        deadline: float | None = None,
+    ) -> list[RetrievedChunk]:
+        if not _has_time_left(deadline):
+            return []
+        selected_tags = _clean_tags(tags or [])
+        selected_tag_set = set(selected_tags)
+        self._corpus_items()
+        category_terms = _category_query_terms(question, self._tag_lookup_cache)
+        if not category_terms:
+            return []
+
+        by_id: dict[str, CorpusItem] = {}
+        for term in category_terms:
+            for key, items in _category_item_candidates(self._category_item_index_cache, term):
+                for item in items:
+                    by_id[item.id] = item
+        if not by_id:
+            return []
+
+        terms = _query_terms(question)
+        normalized_question = question.lower().strip()
+        brand_terms = _known_brand_terms(normalized_question)
+        expanded_category_terms = _category_terms_for_query_expansion(
+            normalized_question,
+            brand_terms,
+            _category_terms(normalized_question) or category_terms,
+        )
+        code_terms = [term for term in terms if _is_model_code(term)]
+
+        results: list[RetrievedChunk] = []
+        for index, item in enumerate(by_id.values()):
+            if index % 64 == 0 and not _has_time_left(deadline):
+                break
+            if selected_tags and not _tags_match(item.tags, selected_tag_set, tag_match):
+                continue
+            score = _keyword_score(
+                normalized_question,
+                terms,
+                brand_terms=brand_terms,
+                category_terms=expanded_category_terms,
+                code_terms=code_terms,
+                title=item.title,
+                location=item.location,
+                source=item.source,
+                text=item.text,
+            )
+            if score <= 0:
+                continue
+            results.append(
+                RetrievedChunk(
+                    text=item.text,
+                    source=item.source,
+                    title=item.title,
+                    location=item.location,
+                    score=score,
+                    image_paths=item.image_paths,
+                    tags=item.tags,
+                    attributes=item.attributes,
+                )
+            )
+        results.sort(key=lambda source: source.score, reverse=True)
+        return results[:top_k]
 
     def keyword_search(
         self,
@@ -520,7 +735,7 @@ class RagPipeline:
         results: list[RetrievedChunk] = []
         normalized_question = question.lower().strip()
         brand_terms = _known_brand_terms(normalized_question)
-        category_terms = _category_terms(normalized_question)
+        category_terms = _category_terms_for_query_expansion(normalized_question, brand_terms, _category_terms(normalized_question))
         code_terms = [term for term in terms if _is_model_code(term)]
         for index, item in enumerate(corpus_items):
             if index % 64 == 0 and not _has_time_left(deadline):
@@ -577,7 +792,7 @@ class RagPipeline:
         normalized_question = question.lower().strip()
         terms = _query_terms(question)
         brand_terms = _known_brand_terms(normalized_question)
-        category_terms = _category_terms(normalized_question)
+        category_terms = _category_terms_for_query_expansion(normalized_question, brand_terms, _category_terms(normalized_question))
         code_terms = [term for term in terms if _is_model_code(term)]
 
         results: list[RetrievedChunk] = []
@@ -633,10 +848,81 @@ class RagPipeline:
         if self._corpus_cache is None or self._corpus_cache_mtime != mtime:
             self._corpus_cache = self.corpus.list_items()
             self._corpus_cache_mtime = mtime
-            self._tag_index_cache = _build_tag_index(self._corpus_cache)
-            self._tag_lookup_cache = {tag.lower(): tag for tag in self._tag_index_cache}
+            signature = _corpus_file_signature(path) if path.exists() else None
+            quick_cache = self._load_quick_search_cache(signature)
+            if quick_cache is None:
+                self._tag_index_cache = _build_tag_index(self._corpus_cache)
+                self._tag_lookup_cache = {tag.lower(): tag for tag in self._tag_index_cache}
+                self._model_code_index_cache = _build_model_code_index(self._corpus_cache)
+                self._category_item_index_cache = _build_category_item_index(self._corpus_cache)
+                self._write_quick_search_cache(signature)
+            else:
+                (
+                    self._tag_index_cache,
+                    self._tag_lookup_cache,
+                    self._model_code_index_cache,
+                    self._category_item_index_cache,
+                ) = quick_cache
             self._keyword_cache.clear()
         return self._corpus_cache
+
+    def _quick_search_cache_path(self) -> Path:
+        return self.config.index_dir / "quick_search_cache.pkl"
+
+    def _load_quick_search_cache(
+        self,
+        signature: tuple[int, int] | None,
+    ) -> tuple[
+        dict[str, list[CorpusItem]],
+        dict[str, str],
+        dict[str, list[CorpusItem]],
+        dict[str, list[CorpusItem]],
+    ] | None:
+        if signature is None:
+            return None
+        path = self._quick_search_cache_path()
+        if not path.exists():
+            return None
+        try:
+            with path.open("rb") as fp:
+                payload = pickle.load(fp)
+        except (OSError, pickle.PickleError, EOFError, AttributeError, ValueError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("version") != QUICK_SEARCH_CACHE_VERSION or tuple(payload.get("signature", ())) != signature:
+            return None
+        tag_index = payload.get("tag_index")
+        tag_lookup = payload.get("tag_lookup")
+        model_code_index = payload.get("model_code_index")
+        category_item_index = payload.get("category_item_index")
+        if not all(isinstance(value, dict) for value in (tag_index, tag_lookup, model_code_index, category_item_index)):
+            return None
+        return tag_index, tag_lookup, model_code_index, category_item_index
+
+    def _write_quick_search_cache(self, signature: tuple[int, int] | None) -> None:
+        if signature is None:
+            return
+        path = self._quick_search_cache_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+        payload = {
+            "version": QUICK_SEARCH_CACHE_VERSION,
+            "signature": signature,
+            "tag_index": self._tag_index_cache,
+            "tag_lookup": self._tag_lookup_cache,
+            "model_code_index": self._model_code_index_cache,
+            "category_item_index": self._category_item_index_cache,
+        }
+        try:
+            with tmp_path.open("wb") as fp:
+                pickle.dump(payload, fp, protocol=pickle.HIGHEST_PROTOCOL)
+            os.replace(tmp_path, path)
+        except OSError:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
 
     def _corpus_items_for_tags(self, tags: list[str], *, match: str = "all") -> list[CorpusItem]:
         if not tags:
@@ -740,15 +1026,194 @@ def _query_terms(question: str) -> list[str]:
     ]
     terms.extend(chinese_chunks)
     terms.extend(ascii_chunks)
+    model_query = _compact_ascii_model_code(normalized)
+    if _is_model_code(model_query) and len(model_query) >= 5:
+        terms.append(model_query)
     brand_terms = _known_brand_terms(question)
     terms.extend(brand_terms)
     terms.extend(_query_without_brands(normalized, brand_terms))
-    terms.extend(_category_terms(question))
+    terms.extend(_category_terms_for_query_expansion(question, brand_terms, _category_terms(question)))
     return list(dict.fromkeys(terms))
+
+
+def _model_code_queries(question: str) -> list[str]:
+    queries: list[str] = []
+    for term in _query_terms(question):
+        compact = _compact_model_code(term)
+        if _is_model_code(compact) and len(compact) >= 3:
+            queries.append(compact)
+    compact_question = _compact_ascii_model_code(question)
+    if _is_model_code(compact_question) and len(compact_question) >= 3:
+        queries.append(compact_question)
+    return list(dict.fromkeys(queries))
+
+
+def _model_code_candidates(index: dict[str, list[CorpusItem]], query_code: str) -> list[tuple[str, list[CorpusItem]]]:
+    exact = index.get(query_code)
+    if exact:
+        return [(query_code, exact)]
+
+    candidates: list[tuple[str, list[CorpusItem]]] = []
+    for code, items in index.items():
+        if query_code in code or code in query_code or code.startswith(query_code) or query_code.startswith(code):
+            candidates.append((code, items))
+    if candidates:
+        candidates.sort(key=lambda entry: (abs(len(entry[0]) - len(query_code)), entry[0]))
+        return candidates[:80]
+
+    if len(query_code) < 5:
+        return []
+    fuzzy: list[tuple[int, str, list[CorpusItem]]] = []
+    max_distance = 1 if len(query_code) < 8 else 2
+    for code, items in index.items():
+        if abs(len(code) - len(query_code)) > max_distance:
+            continue
+        distance = _bounded_levenshtein(query_code, code, max_distance)
+        if distance <= max_distance:
+            fuzzy.append((distance, code, items))
+    fuzzy.sort(key=lambda entry: (entry[0], abs(len(entry[1]) - len(query_code)), entry[1]))
+    return [(code, items) for _, code, items in fuzzy[:40]]
+
+
+def _model_code_match_score(query_code: str, code: str) -> float:
+    if query_code == code:
+        return 180.0
+    if len(query_code) >= 4 and (query_code in code or code in query_code):
+        return 125.0
+    if len(query_code) >= 4 and (code.startswith(query_code) or query_code.startswith(code)):
+        return 110.0
+    distance = _bounded_levenshtein(query_code, code, 2)
+    if distance == 1:
+        return 92.0
+    if distance == 2 and len(query_code) >= 8:
+        return 78.0
+    return 0.0
+
+
+def _model_code_field_bonus(query_code: str, item: CorpusItem) -> float:
+    title = _compact_model_code(item.title)
+    location = _compact_model_code(item.location)
+    text = _compact_model_code(item.text)
+    score = 0.0
+    if query_code in title:
+        score += 30.0
+    if query_code in location:
+        score += 18.0
+    if query_code in text:
+        score += 12.0
+    return score
+
+
+def _build_model_code_index(items: list[CorpusItem]) -> dict[str, list[CorpusItem]]:
+    index: dict[str, list[CorpusItem]] = {}
+    for item in items:
+        text = "\n".join([item.title, item.location, item.source, item.text])
+        for code in _extract_model_codes(text):
+            bucket = index.setdefault(code, [])
+            if not bucket or bucket[-1].id != item.id:
+                bucket.append(item)
+    return index
+
+
+def _extract_model_codes(text: str) -> list[str]:
+    codes: list[str] = []
+    for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9._\-/]{2,}", text):
+        compact = _compact_model_code(token)
+        if _is_model_code(compact) and len(compact) >= 3:
+            codes.append(compact)
+    return list(dict.fromkeys(codes))
+
+
+def _bounded_levenshtein(left: str, right: str, max_distance: int) -> int:
+    if left == right:
+        return 0
+    if abs(len(left) - len(right)) > max_distance:
+        return max_distance + 1
+    previous = list(range(len(right) + 1))
+    for left_index, left_char in enumerate(left, start=1):
+        current = [left_index]
+        row_min = current[0]
+        for right_index, right_char in enumerate(right, start=1):
+            cost = 0 if left_char == right_char else 1
+            value = min(
+                previous[right_index] + 1,
+                current[right_index - 1] + 1,
+                previous[right_index - 1] + cost,
+            )
+            current.append(value)
+            row_min = min(row_min, value)
+        if row_min > max_distance:
+            return max_distance + 1
+        previous = current
+    return previous[-1]
+
+
+def _is_category_or_tag_query(question: str, tag_lookup: dict[str, str]) -> bool:
+    normalized = question.strip().lower()
+    if not normalized:
+        return False
+    if _category_terms(question):
+        return True
+    return normalized in tag_lookup
+
+
+def _category_query_terms(question: str, tag_lookup: dict[str, str]) -> list[str]:
+    normalized = question.strip().lower()
+    terms: list[str] = []
+    terms.extend(_category_terms(question))
+    terms.extend(_category_tag_candidates(question))
+    tag = tag_lookup.get(normalized)
+    if tag:
+        terms.append(tag.lower())
+    if re.fullmatch(r"[\u4e00-\u9fff]{2,}", normalized):
+        terms.append(normalized)
+    return list(dict.fromkeys(term for term in terms if term))
+
+
+def _category_item_candidates(index: dict[str, list[CorpusItem]], term: str) -> list[tuple[str, list[CorpusItem]]]:
+    normalized = term.strip().lower()
+    if not normalized:
+        return []
+    exact = index.get(normalized)
+    if exact:
+        return [(normalized, exact)]
+    candidates: list[tuple[str, list[CorpusItem]]] = []
+    for key, items in index.items():
+        if normalized in key or key in normalized:
+            candidates.append((key, items))
+    candidates.sort(key=lambda entry: (0 if entry[0].startswith(normalized) else 1, len(entry[0]), entry[0]))
+    return candidates[:80]
+
+
+def _build_category_item_index(items: list[CorpusItem]) -> dict[str, list[CorpusItem]]:
+    index: dict[str, list[CorpusItem]] = {}
+    for item in items:
+        terms = [tag.lower() for tag in item.tags if tag]
+        terms.extend(_extract_category_fields(item.text))
+        for term in dict.fromkeys(term.strip().lower() for term in terms if term.strip()):
+            bucket = index.setdefault(term, [])
+            if not bucket or bucket[-1].id != item.id:
+                bucket.append(item)
+    return index
+
+
+def _extract_category_fields(text: str) -> list[str]:
+    values: list[str] = []
+    for match in re.finditer(r"(?:^|[；\n])\s*品类\s*[:：]\s*([^；\n]+)", text):
+        value = match.group(1).strip()
+        if value:
+            values.append(value)
+            values.extend(_compound_category_aliases(value))
+    return values
 
 
 def _has_time_left(deadline: float | None) -> bool:
     return deadline is None or time.monotonic() < deadline
+
+
+def _corpus_file_signature(path: Path) -> tuple[int, int]:
+    stat = path.stat()
+    return (stat.st_mtime_ns, stat.st_size)
 
 
 def _run_with_timeout(callable_fn: Callable[[], list[RetrievedChunk]], timeout_seconds: float) -> list[RetrievedChunk] | None:
@@ -813,42 +1278,50 @@ def _keyword_score(
     file_name = Path(source).name.lower()
     product_field_text = _product_field_text(body_text)
     searchable_text = f"{title_text}\n{location_text}\n{source_text}\n{body_text}"
+    source_brand = _extract_search_field(body_text, "品牌")
     score = 0.0
     if question:
-        if question in title_text:
+        if _search_term_in_text(question, title_text):
             score += 40.0
-        if question in product_field_text:
+        if _search_term_in_text(question, product_field_text):
             score += 70.0
-        if question in body_text:
+        if _search_term_in_text(question, body_text):
             score += 30.0
-        if question in file_name:
+        if _search_term_in_text(question, file_name):
             score += 18.0
-        if question in source_text:
+        if _search_term_in_text(question, source_text):
             score += 18.0
-        if question in location_text:
+        if _search_term_in_text(question, location_text):
             score += 12.0
     for term in terms:
         is_code = _is_model_code(term)
-        if term in title_text:
+        if _search_term_in_text(term, title_text):
             score += 24.0 if is_code else 8.0
-        if term in product_field_text:
+        if _search_term_in_text(term, product_field_text):
             score += 36.0 if is_code else 24.0
-        if term in body_text:
+        if _search_term_in_text(term, body_text):
             score += 20.0 if is_code else 3.0 + min(body_text.count(term), 5) * 0.3
-        if term in file_name:
+        if _search_term_in_text(term, file_name):
             score += 10.0 if is_code else 6.0
-        if term in source_text:
+        if _search_term_in_text(term, source_text):
             score += 14.0 if is_code else 8.0
-        if term in location_text:
+        if _search_term_in_text(term, location_text):
             score += 6.0 if is_code else 2.0
     if brand_terms:
-        matched_brands = [term for term in brand_terms if term in searchable_text]
+        matched_brands = [
+            term
+            for term in brand_terms
+            if term == source_brand or (not term.isdigit() and term in searchable_text)
+        ]
         if matched_brands:
             score += 24.0
+            if any(term == source_brand for term in matched_brands):
+                score += 80.0
             if any(term in source_text for term in matched_brands):
                 score += 16.0
         else:
             score -= 18.0
+    category_terms = _specific_category_terms_for_query(question, category_terms)
     if category_terms:
         matched_categories = [term for term in category_terms if term in searchable_text]
         if matched_categories:
@@ -860,8 +1333,17 @@ def _keyword_score(
         has_category = any(term in searchable_text for term in category_terms)
         if has_brand and has_category:
             score += 30.0
-    if code_terms and all(term in searchable_text for term in code_terms):
+    if code_terms and all(_search_term_in_text(term, searchable_text) for term in code_terms):
         score += 35.0
+    footrest_preference = _footrest_preference(question)
+    if footrest_preference:
+        footrest_state = _footrest_text_state(searchable_text)
+        if footrest_state == footrest_preference:
+            score += 90.0
+        elif footrest_state:
+            score -= 120.0
+        else:
+            score -= 70.0
     for char in question:
         if "\u4e00" <= char <= "\u9fff" and char in title_text:
             score += 0.08
@@ -890,6 +1372,62 @@ def _product_field_text(text: str) -> str:
     return "\n".join(values)
 
 
+def _specific_category_terms_for_query(query: str, category_terms: list[str]) -> list[str]:
+    if "电动" in query:
+        electric_terms = [term for term in category_terms if "电动" in term]
+        if electric_terms:
+            return electric_terms
+    normalized_query = query.strip()
+    filtered_terms = [term for term in category_terms if len(term) > 1 or term == normalized_query]
+    return filtered_terms or category_terms
+
+
+def _category_terms_for_query_expansion(query: str, brand_terms: list[str], category_terms: list[str]) -> list[str]:
+    if brand_terms:
+        direct_terms = [term for term in category_terms if term and term in query]
+        return direct_terms or []
+    return _specific_category_terms_for_query(query, category_terms)
+
+
+def _extract_search_field(text: str, field: str) -> str:
+    match = re.search(rf"(?:^|[；\n])\s*{re.escape(field)}\s*[:：]\s*([^；\n]+)", text)
+    return match.group(1).strip().lower() if match else ""
+
+
+def _search_term_in_text(term: str, text: str) -> bool:
+    if term.isdigit():
+        return bool(re.search(rf"(?<!\d){re.escape(term)}(?!\d)", text))
+    if _is_model_code(term):
+        compact_term = _compact_model_code(term)
+        if compact_term and compact_term in _compact_model_code(text):
+            return True
+    return term in text
+
+
+def _compact_ascii_model_code(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _compact_model_code(value: str) -> str:
+    return value.lower().translate(MODEL_CODE_REMOVE_TRANS)
+
+
+def _footrest_preference(query: str) -> str:
+    if any(term in query for term in FOOTREST_WITHOUT_TERMS):
+        return "without"
+    if any(term in query for term in FOOTREST_WITH_QUERY_TERMS):
+        return "with"
+    return ""
+
+
+def _footrest_text_state(text: str) -> str:
+    if any(term in text for term in FOOTREST_WITHOUT_TERMS):
+        return "without"
+    if any(term in text for term in FOOTREST_WITH_TERMS):
+        return "with"
+    return ""
+
+
 def _looks_like_sparse_id_mapping(text: str) -> bool:
     has_id = bool(re.search(r"商品\s*id|skuid|sku\s*id", text))
     has_link = "短链接" in text or "商品链接" in text or "链接" in text
@@ -914,6 +1452,7 @@ def _known_brand_terms(query: str) -> list[str]:
         "雅兰",
         "菠萝斑马",
         "OOU",
+        "352",
     ]
     for brands in category_brands().values():
         known_brands.extend(brands)
@@ -934,6 +1473,23 @@ def _query_without_brands(query: str, brand_terms: list[str]) -> list[str]:
 
 def _category_terms(query: str) -> list[str]:
     return [term.lower() for term in configured_category_terms(query)]
+
+
+def _category_brands_for_query(query: str) -> list[str]:
+    matched_terms = set(_category_terms(query))
+    if not matched_terms:
+        return []
+    aliases_by_category = category_aliases()
+    brands_by_category = category_brands()
+    brands: list[str] = []
+    for category, aliases in aliases_by_category.items():
+        terms = {category.lower(), *(alias.lower() for alias in aliases)}
+        if not terms.intersection(matched_terms):
+            continue
+        for brand in brands_by_category.get(category, []):
+            if brand and brand not in brands:
+                brands.append(brand)
+    return brands
 
 
 def _merge_sources(primary: list[RetrievedChunk], secondary: list[RetrievedChunk]) -> list[RetrievedChunk]:
@@ -962,6 +1518,51 @@ def _dedupe_sources_by_product(sources: list[RetrievedChunk]) -> list[RetrievedC
         positions[key] = len(deduped)
         deduped.append(source)
     return deduped
+
+
+def _diversify_sources_by_brand(sources: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    grouped: dict[str, list[RetrievedChunk]] = {}
+    brand_order: list[str] = []
+    for source in sources:
+        brand = _extract_search_field(source.text.lower(), "品牌") or "__unknown__"
+        if brand not in grouped:
+            grouped[brand] = []
+            brand_order.append(brand)
+        grouped[brand].append(source)
+
+    diversified: list[RetrievedChunk] = []
+    index = 0
+    while len(diversified) < len(sources):
+        added = False
+        for brand in brand_order:
+            brand_sources = grouped[brand]
+            if index < len(brand_sources):
+                diversified.append(brand_sources[index])
+                added = True
+        if not added:
+            break
+        index += 1
+    return diversified
+
+
+def _filter_sources_by_known_brands(sources: list[RetrievedChunk], brands: list[str]) -> list[RetrievedChunk]:
+    if not brands:
+        return sources
+    brand_keys = {brand.lower() for brand in brands if brand}
+    matched = [source for source in sources if _source_brand_key(source, brand_keys)]
+    return matched or sources
+
+
+def _source_brand_key(source: RetrievedChunk, brand_keys: set[str]) -> str:
+    text = source.text.lower()
+    brand = _extract_search_field(text, "品牌")
+    if brand in brand_keys:
+        return brand
+    product = _extract_search_field(text, "产品信息")
+    for brand_key in brand_keys:
+        if product.startswith(brand_key) or product.startswith(f"【{brand_key}"):
+            return brand_key
+    return ""
 
 
 def _filter_weak_sources(sources: list[RetrievedChunk]) -> list[RetrievedChunk]:

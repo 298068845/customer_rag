@@ -3,16 +3,27 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import zipfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from customer_rag.category_config import category_aliases, category_brands
+from customer_rag.category_config import category_aliases, category_brands, semantic_category_terms
+from customer_rag.loaders import brand_tags_from_text, category_tags_from_text
 
 
 LinkType = Literal["fixed", "knowledge", "image"]
+
+FIXED_TALK_TITLES = ["领券链接", "常用话术", "对比图", "售前话术", "售后话术", "活动规则", "自定义"]
+
+
+_INDEX_CORPUS_PATH = Path("data/index/corpus.jsonl")
+_DEFAULT_BRAND_REPLY_RULES_PATH = Path(__file__).with_name("default_brand_reply_rules.json")
+_INDEX_CATALOG_MTIME: float | None = None
+_INDEX_CATEGORY_BRANDS: dict[str, list[str]] = {}
 
 
 @dataclass(frozen=True)
@@ -51,6 +62,20 @@ class AssetItem:
 
 
 @dataclass(frozen=True)
+class FixedReplyRule:
+    id: str
+    keywords: list[str]
+    asset_ids: list[str]
+
+
+@dataclass(frozen=True)
+class FixedTalkEntry:
+    title: str
+    triggers: list[str] = field(default_factory=lambda: ["{keyword}"])
+    reply_rules: list[FixedReplyRule] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class TalkMatch:
     answer: str
     link: TalkLink | None
@@ -76,6 +101,7 @@ class BrandReplyRule:
     keyword_type: KeywordType
     keyword: str
     reply_terms: list[str]
+    supplemental_reply: str = ""
 
 
 @dataclass(frozen=True)
@@ -99,6 +125,7 @@ class RealtimeTalkConfig:
     today_template: str = "@小助理 {date_m_d}清单"
     brand_triggers: list[str] = field(default_factory=lambda: ["有{keyword}吗", "{keyword}还有卖吗", "有没有{keyword}", "{keyword}清单", "{keyword}什么时候播"])
     brand_reply_rules: list[BrandReplyRule] = field(default_factory=list)
+    brand_reply_rules_initialized: bool = False
     brand_alias_rules: list[BrandAliasRule] = field(default_factory=list)
     open_group_triggers: list[str] = field(default_factory=lambda: ["{brand}什么时候开团", "{brand}什么时候播", "{brand}还有卖吗", "{brand}下次是什么时候"])
     sale_status_rules: list[BrandSaleStatusRule] = field(default_factory=list)
@@ -111,6 +138,7 @@ class TalkRagStore:
         self.links_path = self.root / "links.json"
         self.knowledge_path = self.root / "knowledge.json"
         self.assets_path = self.root / "assets.json"
+        self.fixed_path = self.root / "fixed.json"
         self.realtime_path = self.root / "realtime.json"
         self.asset_dir = self.root / "assets"
 
@@ -123,6 +151,8 @@ class TalkRagStore:
             self.save_knowledge(default_knowledge())
         if not self.assets_path.exists():
             self.save_assets([])
+        if not self.fixed_path.exists():
+            self.save_fixed_entries(default_fixed_entries())
         if not self.realtime_path.exists():
             self.save_realtime_config(default_realtime_config())
 
@@ -149,6 +179,20 @@ class TalkRagStore:
     def save_assets(self, items: list[AssetItem]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         _write_json_list(self.assets_path, [asdict(item) for item in items])
+
+    def load_fixed_entries(self) -> list[FixedTalkEntry]:
+        self.ensure_seed_data()
+        payloads = _read_json_list(self.fixed_path)
+        entries_by_title = {
+            str(payload.get("title", "")): fixed_entry_from_payload(payload)
+            for payload in payloads
+            if isinstance(payload, dict)
+        }
+        return [entries_by_title.get(title, FixedTalkEntry(title=title)) for title in FIXED_TALK_TITLES]
+
+    def save_fixed_entries(self, entries: list[FixedTalkEntry]) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        _write_json_list(self.fixed_path, [asdict(entry) for entry in entries])
 
     def load_realtime_config(self) -> RealtimeTalkConfig:
         self.ensure_seed_data()
@@ -200,21 +244,169 @@ class TalkRagStore:
             if parent.exists() and parent.is_dir() and parent.parent == self.asset_dir:
                 shutil.rmtree(parent, ignore_errors=True)
 
+    def export_config_zip(self, include_realtime: bool = True, fixed_titles: list[str] | None = None) -> bytes:
+        self.ensure_seed_data()
+        selected_fixed_titles = _selected_fixed_titles(fixed_titles)
+        selected_assets = _assets_for_fixed_titles(
+            self.load_assets(),
+            [entry for entry in self.load_fixed_entries() if entry.title in selected_fixed_titles],
+            selected_fixed_titles,
+        )
+        payload = BytesIO()
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(
+                "manifest.json",
+                json.dumps(
+                    {
+                        "kind": "talk_rag_config",
+                        "version": 1,
+                        "exported_at": now_text(),
+                        "include_realtime": include_realtime,
+                        "fixed_titles": selected_fixed_titles,
+                        "files": _exported_config_files(include_realtime, selected_fixed_titles),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+            )
+            if include_realtime and self.realtime_path.exists():
+                archive.writestr("realtime.json", self.realtime_path.read_text(encoding="utf-8"))
+            if selected_fixed_titles:
+                archive.writestr(
+                    "fixed.json",
+                    json.dumps(
+                        [
+                            asdict(entry)
+                            for entry in self.load_fixed_entries()
+                            if entry.title in selected_fixed_titles
+                        ],
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                )
+                archive.writestr(
+                    "assets.json",
+                    json.dumps([asdict(asset) for asset in selected_assets], ensure_ascii=False, indent=2),
+                )
+
+            for asset in selected_assets:
+                for index, path_text in enumerate(asset.paths):
+                    path = Path(path_text)
+                    if not path.is_file():
+                        continue
+                    archive.write(path, f"assets/{asset.id}/{index}_{path.name}")
+        return payload.getvalue()
+
+    def import_config_zip(
+        self,
+        data: bytes,
+        include_realtime: bool = True,
+        fixed_titles: list[str] | None = None,
+    ) -> dict[str, int]:
+        self.ensure_seed_data()
+        selected_fixed_titles = _selected_fixed_titles(fixed_titles)
+        try:
+            archive = zipfile.ZipFile(BytesIO(data))
+        except zipfile.BadZipFile as exc:
+            raise ValueError("请上传有效的 ZIP 配置包。") from exc
+
+        with archive:
+            names = set(archive.namelist())
+            if include_realtime and "realtime.json" not in names:
+                raise ValueError("ZIP 中没有找到实时话术配置。")
+            if selected_fixed_titles and "fixed.json" not in names:
+                raise ValueError("ZIP 中没有找到固定话术配置。")
+            if not include_realtime and not selected_fixed_titles:
+                raise ValueError("请至少选择一个导入板块。")
+            if "realtime.json" not in names and "fixed.json" not in names and "assets.json" not in names:
+                raise ValueError("ZIP 中没有找到话术配置文件。")
+
+            imported_realtime = False
+            realtime_payload = _read_zip_json_object(archive, "realtime.json") if include_realtime else None
+            if include_realtime and realtime_payload is not None:
+                self.save_realtime_config(realtime_config_from_payload(realtime_payload))
+                imported_realtime = True
+
+            imported_fixed_titles: list[str] = []
+            imported_assets_count = 0
+            fixed_payload = _read_zip_json_list(archive, "fixed.json")
+            if selected_fixed_titles and fixed_payload is not None:
+                entries_by_title = {
+                    entry.title: entry
+                    for entry in (
+                        fixed_entry_from_payload(item)
+                        for item in fixed_payload
+                        if isinstance(item, dict)
+                    )
+                    if entry.title
+                }
+                imported_fixed_titles = [title for title in selected_fixed_titles if title in entries_by_title]
+                current_entries = self.load_fixed_entries()
+                self.save_fixed_entries([
+                    entries_by_title[entry.title]
+                    if entry.title in imported_fixed_titles
+                    else entry
+                    for entry in current_entries
+                ])
+
+            assets_payload = _read_zip_json_list(archive, "assets.json")
+            if imported_fixed_titles and assets_payload is not None:
+                current_assets = self.load_assets()
+                kept_assets = [
+                    asset for asset in current_assets
+                    if not any(title in asset.categories for title in imported_fixed_titles)
+                ]
+                for asset in current_assets:
+                    if asset not in kept_assets:
+                        self.delete_asset_files(asset)
+                imported_assets: list[AssetItem] = []
+                for item in assets_payload:
+                    if not isinstance(item, dict):
+                        continue
+                    if not any(title in clean_tags(item.get("categories", [])) for title in imported_fixed_titles):
+                        continue
+                    asset = _asset_from_import_payload(item, archive, self.asset_dir)
+                    imported_assets.append(asset)
+                self.save_assets([*kept_assets, *imported_assets])
+                imported_assets_count = len(imported_assets)
+
+        return {
+            "imported_realtime": int(imported_realtime),
+            "imported_fixed_entries": len(imported_fixed_titles),
+            "imported_assets": imported_assets_count,
+            "fixed_entries": len(self.load_fixed_entries()),
+            "assets": len(self.load_assets()),
+            "realtime_brand_rules": len(self.load_realtime_config().brand_reply_rules),
+        }
+
 
 class TalkRagEngine:
     def __init__(self, store: TalkRagStore | None = None):
         self.store = store or TalkRagStore()
 
-    def ask(self, question: str) -> TalkMatch:
-        realtime_match = match_realtime_talk(question, self.store.load_realtime_config())
-        if realtime_match:
-            return realtime_match
+    def ask(self, question: str, entry_title: str = "实时话术") -> TalkMatch:
+        if entry_title == "实时话术":
+            realtime_match = match_realtime_talk(question, self.store.load_realtime_config())
+            if realtime_match:
+                return realtime_match
+        elif entry_title in FIXED_TALK_TITLES:
+            fixed_match = match_fixed_talk(
+                question,
+                entry_title,
+                self.store.load_fixed_entries(),
+                self.store.load_assets(),
+            )
+            if fixed_match:
+                return fixed_match
         return TalkMatch(
-            answer="暂时没有命中合适的实时话术。",
+            answer="没有做这个的，看看别的渠道",
             link=None,
-            chain=["未命中实时话术", "返回兜底话术"],
+            chain=[f"未命中话术入口：{entry_title}", "返回兜底话术"],
             score=0,
         )
+
+    def ask_shortcuts(self, question: str) -> list[TalkMatch]:
+        return [self.ask(question, title) for title in ["实时话术", *FIXED_TALK_TITLES]]
 
     def ask_legacy(self, question: str) -> TalkMatch:
         links = [link for link in self.store.load_links() if link.enabled]
@@ -264,6 +456,26 @@ def default_links() -> list[TalkLink]:
     ]
 
 
+def default_fixed_entries() -> list[FixedTalkEntry]:
+    return [FixedTalkEntry(title=title) for title in FIXED_TALK_TITLES]
+
+
+def fixed_entry_from_payload(payload: dict) -> FixedTalkEntry:
+    return FixedTalkEntry(
+        title=str(payload.get("title", "")).strip(),
+        triggers=clean_terms(payload.get("triggers", [])) or ["{keyword}"],
+        reply_rules=[
+            FixedReplyRule(
+                id=str(item.get("id") or new_id()),
+                keywords=clean_terms(item.get("keywords", [])),
+                asset_ids=clean_terms(item.get("asset_ids", [])),
+            )
+            for item in payload.get("reply_rules", [])
+            if isinstance(item, dict)
+        ],
+    )
+
+
 def default_knowledge() -> list[KnowledgeItem]:
     return [
         KnowledgeItem(
@@ -277,7 +489,22 @@ def default_knowledge() -> list[KnowledgeItem]:
 
 
 def default_realtime_config() -> RealtimeTalkConfig:
-    return RealtimeTalkConfig(open_group_knowledge=_default_open_group_knowledge_from_items(default_knowledge()))
+    brand_reply_rules = _load_default_brand_reply_rules()
+    return RealtimeTalkConfig(
+        brand_reply_rules=brand_reply_rules,
+        brand_reply_rules_initialized=bool(brand_reply_rules),
+        open_group_knowledge=_default_open_group_knowledge_from_items(default_knowledge()),
+    )
+
+
+def _load_default_brand_reply_rules() -> list[BrandReplyRule]:
+    try:
+        payload = json.loads(_DEFAULT_BRAND_REPLY_RULES_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    return realtime_config_from_payload({"brand_reply_rules": payload}).brand_reply_rules
 
 
 def realtime_config_from_payload(payload: dict) -> RealtimeTalkConfig:
@@ -291,10 +518,14 @@ def realtime_config_from_payload(payload: dict) -> RealtimeTalkConfig:
                 keyword_type=_keyword_type(str(item.get("keyword_type", "品牌"))),
                 keyword=str(item.get("keyword", "")).strip(),
                 reply_terms=clean_terms(item.get("reply_terms", [])),
+                supplemental_reply=str(item.get("supplemental_reply", "") or "").strip(),
             )
             for item in payload.get("brand_reply_rules", [])
             if isinstance(item, dict)
         ],
+        brand_reply_rules_initialized=bool(
+            payload.get("brand_reply_rules_initialized", bool(payload.get("brand_reply_rules")))
+        ),
         brand_alias_rules=[
             BrandAliasRule(
                 id=str(item.get("id") or new_id()),
@@ -332,6 +563,8 @@ def match_realtime_talk(question: str, config: RealtimeTalkConfig) -> TalkMatch 
         )
 
     open_group_brand = extract_brand_from_question(question, config)
+    if open_group_brand and not render_brand_reply(open_group_brand, config):
+        open_group_brand = ""
     if open_group_brand and any(trigger_matches_question(trigger, question, "brand") for trigger in config.open_group_triggers):
         status_rule = find_sale_status_rule(open_group_brand, config)
         brand = status_rule.brand if status_rule else open_group_brand
@@ -370,6 +603,60 @@ def match_realtime_talk(question: str, config: RealtimeTalkConfig) -> TalkMatch 
     return None
 
 
+def match_fixed_talk(
+    question: str,
+    entry_title: str,
+    entries: list[FixedTalkEntry],
+    assets: list[AssetItem],
+) -> TalkMatch | None:
+    entry = next((item for item in entries if item.title == entry_title), None)
+    if entry is None or not normalize_text(question):
+        return None
+    assets_by_id = {item.id: item for item in assets}
+    for rule in entry.reply_rules:
+        matched_keyword = next(
+            (keyword for keyword in rule.keywords if normalize_text(keyword) in normalize_text(question)),
+            "",
+        )
+        if not matched_keyword:
+            continue
+        if entry.triggers and not any(
+            trigger_matches_question(trigger, question, "keyword") for trigger in entry.triggers
+        ):
+            continue
+        matched_assets = [assets_by_id[asset_id] for asset_id in rule.asset_ids if asset_id in assets_by_id]
+        answer = render_fixed_assets(matched_assets)
+        if not answer:
+            continue
+        return TalkMatch(
+            answer=answer,
+            link=None,
+            chain=[
+                f"命中固定话术：{entry.title}",
+                f"匹配关键词：{matched_keyword}",
+                "回复素材：" + "、".join(item.title for item in matched_assets),
+            ],
+            score=90,
+            assets=matched_assets,
+        )
+    return None
+
+
+def render_fixed_assets(assets: list[AssetItem]) -> str:
+    parts: list[str] = []
+    for asset in assets:
+        lines: list[str] = []
+        has_paths = any(path for path in asset.paths)
+        if has_paths:
+            lines.append(f"素材：{asset.title}")
+        if asset.description.strip():
+            lines.append(asset.description.strip())
+        lines.extend(f"image: {path}" for path in asset.paths if path)
+        if lines:
+            parts.append("\n".join(lines))
+    return "\n---\n".join(parts)
+
+
 def trigger_matches_question(trigger: str, question: str, variable_name: str) -> bool:
     trigger_text = normalize_text(trigger)
     question_text = normalize_text(question)
@@ -383,10 +670,16 @@ def trigger_matches_question(trigger: str, question: str, variable_name: str) ->
 
 
 def render_keyword_reply(question: str, config: RealtimeTalkConfig) -> str:
-    category = extract_category_from_question(question)
-    if category:
-        brands = category_brands().get(category, [])
-        return "\n".join(f"@小助理 {brand}清单" for brand in brands)
+    aliases, brands_by_category = _talk_category_catalog()
+    categories = extract_categories_from_question(question, aliases)
+    if categories:
+        brands = unique_terms(
+            brand
+            for category in categories
+            for brand in brands_by_category.get(category, [])
+        )
+        replies = [render_brand_reply(brand, config) for brand in brands]
+        return deduplicate_reply_parts(replies)
     brand = extract_brand_from_question(question, config)
     if brand:
         return render_brand_reply(brand, config)
@@ -395,7 +688,30 @@ def render_keyword_reply(question: str, config: RealtimeTalkConfig) -> str:
 
 def render_brand_reply(brand: str, config: RealtimeTalkConfig) -> str:
     normalized_brand = normalize_brand(brand, config)
-    return f"@小助理 {normalized_brand}清单" if normalized_brand else ""
+    normalized_key = normalize_text(normalized_brand)
+    for rule in config.brand_reply_rules:
+        if rule.keyword_type != "品牌" or normalize_text(rule.keyword) != normalized_key:
+            continue
+        reply = "\n".join(clean_terms(rule.reply_terms))
+        if not reply:
+            return ""
+        supplemental_reply = rule.supplemental_reply.strip()
+        return f"{reply}\n---\n{supplemental_reply}" if supplemental_reply else reply
+    return ""
+
+
+def deduplicate_reply_parts(replies: list[str]) -> str:
+    unique_parts: list[str] = []
+    seen: set[str] = set()
+    for reply in replies:
+        for part in re.split(r"\n\s*-{3,}\s*\n", reply.strip()):
+            cleaned = part.strip()
+            key = normalize_text(cleaned)
+            if not cleaned or key in seen:
+                continue
+            seen.add(key)
+            unique_parts.append(cleaned)
+    return "\n---\n".join(unique_parts)
 
 
 def match_open_group_schedule_text(
@@ -442,20 +758,77 @@ def extract_brand_from_question(question: str, config: RealtimeTalkConfig) -> st
         value = normalize_text(candidate)
         if value and value in normalized_question:
             return normalize_brand(candidate, config)
-    for candidate in extract_question_brand_candidates(question):
-        normalized = normalize_brand(candidate, config)
-        if normalized:
-            return normalized
     return ""
 
 
-def extract_category_from_question(question: str) -> str:
+def extract_category_from_question(question: str, aliases_by_category: dict[str, list[str]] | None = None) -> str:
+    categories = extract_categories_from_question(question, aliases_by_category)
+    return categories[0] if categories else ""
+
+
+def extract_categories_from_question(question: str, aliases_by_category: dict[str, list[str]] | None = None) -> list[str]:
     normalized_question = normalize_text(question)
-    for category, aliases in category_aliases().items():
-        terms = [category, *aliases]
-        if any(normalize_text(term) in normalized_question for term in terms if term):
-            return category
-    return ""
+    aliases_by_category = aliases_by_category or _talk_category_catalog()[0]
+    matched: list[str] = []
+    for category, aliases in aliases_by_category.items():
+        terms = [category, *aliases, *semantic_category_terms(category, aliases)]
+        if any(_category_term_matches_question(term, normalized_question) for term in terms if term):
+            matched.append(category)
+    return matched
+
+
+def _category_term_matches_question(term: str, normalized_question: str) -> bool:
+    normalized_term = normalize_text(term)
+    if not normalized_term:
+        return False
+    if len(normalized_term) == 1:
+        return normalized_question == normalized_term
+    return normalized_term in normalized_question
+
+
+def _talk_category_catalog() -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    aliases = {category: list(values) for category, values in category_aliases().items()}
+    brands = {category: list(values) for category, values in category_brands().items()}
+    for category, indexed_brands in _indexed_category_brands().items():
+        aliases.setdefault(category, [])
+        current_brands = brands.setdefault(category, [])
+        for brand in indexed_brands:
+            if brand not in current_brands:
+                current_brands.append(brand)
+    return aliases, brands
+
+
+def _indexed_category_brands() -> dict[str, list[str]]:
+    global _INDEX_CATALOG_MTIME, _INDEX_CATEGORY_BRANDS
+    try:
+        mtime = _INDEX_CORPUS_PATH.stat().st_mtime
+    except OSError:
+        mtime = None
+    if _INDEX_CATALOG_MTIME == mtime:
+        return _INDEX_CATEGORY_BRANDS
+
+    catalog: dict[str, list[str]] = {}
+    if mtime is not None:
+        try:
+            with _INDEX_CORPUS_PATH.open(encoding="utf-8") as corpus:
+                for line in corpus:
+                    try:
+                        payload = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    text = str(payload.get("text", ""))
+                    categories = category_tags_from_text(text)
+                    brands = brand_tags_from_text(text)
+                    for category in categories:
+                        values = catalog.setdefault(category, [])
+                        for brand in brands:
+                            if brand not in values:
+                                values.append(brand)
+        except OSError:
+            catalog = {}
+    _INDEX_CATALOG_MTIME = mtime
+    _INDEX_CATEGORY_BRANDS = catalog
+    return catalog
 
 
 def keyword_matches_question(keyword: str, question: str, config: RealtimeTalkConfig) -> bool:
@@ -479,8 +852,13 @@ def normalize_brand(brand: str, config: RealtimeTalkConfig) -> str:
 
 def all_known_brands(config: RealtimeTalkConfig) -> list[str]:
     values: list[str] = []
-    for brand_values in category_brands().values():
+    for brand_values in _talk_category_catalog()[1].values():
         values.extend(brand_values)
+    for rule in config.brand_reply_rules:
+        if rule.keyword_type == "品牌":
+            values.append(rule.keyword)
+    for rule in config.brand_alias_rules:
+        values.extend([rule.brand, *rule.aliases])
     for rule in config.sale_status_rules:
         values.extend([rule.brand, *rule.aliases])
     return unique_terms([value for value in values if value])
@@ -815,6 +1193,87 @@ def now_text() -> str:
 
 def new_id() -> str:
     return uuid4().hex
+
+
+def _selected_fixed_titles(fixed_titles: list[str] | None) -> list[str]:
+    if fixed_titles is None:
+        return list(FIXED_TALK_TITLES)
+    selected = [str(title).strip() for title in fixed_titles]
+    return [title for title in FIXED_TALK_TITLES if title in selected]
+
+
+def _exported_config_files(include_realtime: bool, fixed_titles: list[str]) -> list[str]:
+    files: list[str] = []
+    if include_realtime:
+        files.append("realtime.json")
+    if fixed_titles:
+        files.extend(["fixed.json", "assets.json"])
+    return files
+
+
+def _assets_for_fixed_titles(
+    assets: list[AssetItem],
+    entries: list[FixedTalkEntry],
+    fixed_titles: list[str],
+) -> list[AssetItem]:
+    referenced_ids = {
+        asset_id
+        for entry in entries
+        for rule in entry.reply_rules
+        for asset_id in rule.asset_ids
+    }
+    return [
+        asset
+        for asset in assets
+        if asset.id in referenced_ids or any(title in asset.categories for title in fixed_titles)
+    ]
+
+
+def _read_zip_json_object(archive: zipfile.ZipFile, name: str) -> dict | None:
+    if name not in archive.namelist():
+        return None
+    try:
+        payload = json.loads(archive.read(name).decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"ZIP 中的 {name} 不是有效 JSON。") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"ZIP 中的 {name} 格式不正确。")
+    return payload
+
+
+def _read_zip_json_list(archive: zipfile.ZipFile, name: str) -> list[dict] | None:
+    if name not in archive.namelist():
+        return None
+    try:
+        payload = json.loads(archive.read(name).decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"ZIP 中的 {name} 不是有效 JSON。") from exc
+    if not isinstance(payload, list):
+        raise ValueError(f"ZIP 中的 {name} 格式不正确。")
+    return payload
+
+
+def _asset_from_import_payload(payload: dict, archive: zipfile.ZipFile, asset_dir: Path) -> AssetItem:
+    asset_id = str(payload.get("id") or new_id())
+    target_dir = asset_dir / asset_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[str] = []
+    prefix = f"assets/{asset_id}/"
+    for member in sorted(name for name in archive.namelist() if name.startswith(prefix) and not name.endswith("/")):
+        filename = Path(member).name
+        if not filename:
+            continue
+        target = target_dir / filename
+        target.write_bytes(archive.read(member))
+        paths.append(str(target))
+    return AssetItem(
+        id=asset_id,
+        title=str(payload.get("title", "") or "未命名素材").strip(),
+        paths=paths,
+        categories=clean_tags(payload.get("categories", [])),
+        description=str(payload.get("description", "") or "").strip(),
+        updated_at=str(payload.get("updated_at", "") or now_text()),
+    )
 
 
 def _read_json_list(path: Path) -> list[dict]:
