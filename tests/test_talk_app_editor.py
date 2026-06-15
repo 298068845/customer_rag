@@ -6,6 +6,8 @@ from talk_app import (
     attach_asset_ids_to_rows,
     asset_list_dataframe,
     assets_for_title,
+    combined_reply_rules_dataframe,
+    rows_to_combined_reply_rules,
     fixed_reply_rules_dataframe,
     normalize_selected_asset_titles,
     prefer_rows_with_reply_assets,
@@ -163,6 +165,23 @@ class TalkAppEditorTests(unittest.TestCase):
         self.assertEqual(str(dataframe["删除"].dtype), "bool")
         self.assertEqual(dataframe["删除"].tolist(), [False, False])
         self.assertEqual(dataframe["回复内容"].tolist(), [["恒洁素材"], []])
+
+    def test_combined_reply_rules_converts_mapping_keywords_and_reply_titles(self) -> None:
+        rules = rows_to_combined_reply_rules(
+            [{"映射词": "1", "关键词": "九牧，智能马桶", "回复内容": ["实时话术", "常用话术", "不存在"]}]
+        )
+
+        self.assertEqual(len(rules), 1)
+        self.assertEqual(rules[0].mapping_term, "1")
+        self.assertEqual(rules[0].keywords, ["九牧", "智能马桶"])
+        self.assertEqual(rules[0].reply_titles, ["实时话术", "常用话术"])
+
+    def test_combined_reply_rules_dataframe_uses_multiselect_shape(self) -> None:
+        dataframe = combined_reply_rules_dataframe([{"映射词": "1", "关键词": "九牧", "回复内容": ["实时话术"]}, {}])
+
+        self.assertEqual(str(dataframe["删除"].dtype), "bool")
+        self.assertEqual(dataframe["删除"].tolist(), [False, False])
+        self.assertEqual(dataframe["回复内容"].tolist(), [["实时话术"], []])
 
     def test_asset_list_dataframe_uses_checkbox_compatible_bool_column(self) -> None:
         dataframe = asset_list_dataframe([{"素材名称": "恒洁素材"}, {"删除": True, "素材名称": "九牧素材"}])

@@ -42,3 +42,17 @@ def test_model_code_search_allows_small_typo_without_strong_match(tmp_path: Path
     assert results
     assert results[0].title == "Product ABC-123"
     assert results[0].score < STRONG_KEYWORD_MATCH_SCORE
+
+
+def test_standalone_model_code_lookup_returns_fuzzy_match_as_fallback(tmp_path: Path) -> None:
+    pipeline = RagPipeline(make_config(tmp_path))
+    pipeline.add_corpus(
+        title="Product ABC-123",
+        text="Brand: Test; Model: ABC-123; Benefit: sample",
+    )
+
+    result = pipeline.ask("ABC-124")
+
+    assert result.fallback
+    assert result.sources
+    assert result.sources[0].title == "Product ABC-123"

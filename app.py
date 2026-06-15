@@ -97,6 +97,7 @@ st.markdown(
     .st-key-subscription_start button,
     .st-key-subscription_add button,
     .st-key-subscription_save button,
+    .st-key-subscription_export button,
     .st-key-login_tencent_docs button,
     .st-key-upload_import button,
     .st-key-import_rebuild_raw_v2 button,
@@ -126,9 +127,15 @@ st.markdown(
         background: #2fa66a !important;
         border-color: #218654 !important;
     }
+    .st-key-subscription_export button {
+        background: #ffffff !important;
+        border-color: #cfd7e3 !important;
+        color: #2f3340 !important;
+    }
     .st-key-subscription_start button:hover,
     .st-key-subscription_add button:hover,
     .st-key-subscription_save button:hover,
+    .st-key-subscription_export button:hover,
     .st-key-login_tencent_docs button:hover,
     .st-key-upload_import button:hover,
     .st-key-import_rebuild_raw_v2 button:hover,
@@ -227,6 +234,7 @@ st.markdown(
         .st-key-subscription_start button,
         .st-key-subscription_add button,
         .st-key-subscription_save button,
+        .st-key-subscription_export button,
         .st-key-login_tencent_docs button,
         .st-key-upload_import button {
             font-size: 0.9rem !important;
@@ -773,7 +781,7 @@ def render_subscription_header(api_url: str) -> None:
             }}
             function setParentButtonsDisabled(disabled) {{
               try {{
-                const labels=new Set(["开始后台更新","后台更新中...","增加订阅","保存订阅"]);
+                const labels=new Set(["开始后台更新","后台更新中...","增加订阅","保存订阅","导出订阅"]);
                 window.parent.document.querySelectorAll('button').forEach((button)=>{{
                   if(labels.has((button.innerText||"").trim())) button.disabled=disabled;
                 }});
@@ -849,13 +857,16 @@ def render_subscription_editor(api_url: str, subscriptions: list[TencentDocSubsc
           table {{width:100%;min-width:860px;border-collapse:collapse;font-size:14px;table-layout:fixed}}
           th,td {{border-bottom:1px solid #edf0f4;border-right:1px solid #edf0f4;padding:8px 10px;text-align:left;white-space:nowrap}}
           th {{position:sticky;top:0;z-index:2;background:#f7f8fb;color:#7b8493;font-weight:650}}
-          th:first-child,td:first-child {{width:54px;text-align:center;padding:0}}
-          th:nth-child(2),td:nth-child(2) {{width:290px}}
-          th:nth-child(3),td:nth-child(3) {{width:96px}}
-          th:nth-child(4),td:nth-child(4) {{width:92px}}
-          th:nth-child(5),td:nth-child(5) {{width:300px}}
-          th:nth-child(6),td:nth-child(6) {{width:120px;border-right:0}}
+          th:first-child,td:first-child {{width:78px;text-align:center;padding:0}}
+          th:first-child label {{display:inline-flex;align-items:center;justify-content:center;gap:6px;width:100%;height:100%;cursor:pointer}}
+          th:nth-child(2),td:nth-child(2) {{width:54px;text-align:center;padding:0}}
+          th:nth-child(3),td:nth-child(3) {{width:236px}}
+          th:nth-child(4),td:nth-child(4) {{width:96px}}
+          th:nth-child(5),td:nth-child(5) {{width:92px}}
+          th:nth-child(6),td:nth-child(6) {{width:300px}}
+          th:nth-child(7),td:nth-child(7) {{width:120px;border-right:0}}
           input[type="checkbox"] {{width:18px;height:18px;accent-color:#4b7fda;vertical-align:middle;cursor:pointer}}
+          input[data-field="delete"] {{accent-color:#d55450}}
           input[type="text"] {{width:100%;box-sizing:border-box;border:0;background:transparent;color:#252b36;font:inherit;outline:none}}
           input[type="text"]:focus {{background:#fff;border:1px solid #8db8ff;border-radius:5px;padding:5px 6px;margin:-6px -7px}}
           .muted {{color:#6b7280;overflow:hidden;text-overflow:ellipsis}}
@@ -867,7 +878,8 @@ def render_subscription_editor(api_url: str, subscriptions: list[TencentDocSubsc
           <table>
             <thead>
               <tr>
-                <th title="全选"><input type="checkbox" data-role="select-all" aria-label="全选"></th>
+                <th title="删除全选"><label><input type="checkbox" data-role="delete-select-all" aria-label="删除全选"><span>删除</span></label></th>
+                <th title="启用全选"><input type="checkbox" data-role="select-all" aria-label="启用全选"></th>
                 <th>名称</th><th>最后修改</th><th>状态</th><th>腾讯文档地址</th><th>Tag</th>
               </tr>
             </thead>
@@ -881,8 +893,10 @@ def render_subscription_editor(api_url: str, subscriptions: list[TencentDocSubsc
             const root = document.getElementById("subscription-editor");
             const tbody = root.querySelector("tbody");
             const selectAll = root.querySelector('[data-role="select-all"]');
+            const deleteSelectAll = root.querySelector('[data-role="delete-select-all"]');
             let rows = {initial_rows};
             let timers = new Map();
+            let deleteSelected = new Set();
 
             function esc(value) {{ return String(value ?? ""); }}
             function attr(value) {{
@@ -912,6 +926,11 @@ def render_subscription_editor(api_url: str, subscriptions: list[TencentDocSubsc
               selectAll.checked = boxes.length > 0 && checked === boxes.length;
               selectAll.indeterminate = checked > 0 && checked < boxes.length;
               selectAll.disabled = disabled || boxes.length === 0;
+              const deleteBoxes = Array.from(tbody.querySelectorAll('input[data-field="delete"]'));
+              const deleteChecked = deleteBoxes.filter((box) => box.checked).length;
+              deleteSelectAll.checked = deleteBoxes.length > 0 && deleteChecked === deleteBoxes.length;
+              deleteSelectAll.indeterminate = deleteChecked > 0 && deleteChecked < deleteBoxes.length;
+              deleteSelectAll.disabled = disabled || deleteBoxes.length === 0;
             }}
             function rowPayload(tr) {{
               return {{
@@ -951,6 +970,7 @@ def render_subscription_editor(api_url: str, subscriptions: list[TencentDocSubsc
               const tr = document.createElement("tr");
               tr.dataset.url = esc(item.url);
               tr.innerHTML = `
+                <td><input type="checkbox" data-field="delete" ${{deleteSelected.has(esc(item.url)) ? "checked" : ""}} ${{disabled ? "disabled" : ""}}></td>
                 <td><input type="checkbox" data-field="enabled" ${{item.enabled ? "checked" : ""}} ${{disabled ? "disabled" : ""}}></td>
                 <td><input type="text" data-field="name" value="${{attr(item.name)}}" ${{disabled ? "disabled" : ""}}></td>
                 <td class="muted" data-field="last_modified">${{esc(item.last_modified)}}</td>
@@ -958,6 +978,20 @@ def render_subscription_editor(api_url: str, subscriptions: list[TencentDocSubsc
                 <td><input type="text" data-field="url" value="${{attr(item.url)}}" ${{disabled ? "disabled" : ""}}></td>
                 <td><input type="text" data-field="tags" value="${{attr(tagText(item.tags))}}" ${{disabled ? "disabled" : ""}}></td>
               `;
+              const deleteBox = tr.querySelector('[data-field="delete"]');
+              deleteBox.addEventListener("change", async () => {{
+                if (deleteBox.checked) deleteSelected.add(tr.dataset.url);
+                else deleteSelected.delete(tr.dataset.url);
+                updateHeader();
+                try {{
+                  await fetchJson("/subscriptions/set-delete-selected", {{url: tr.dataset.url, selected: deleteBox.checked ? "1" : "0"}});
+                }} catch(error) {{
+                  deleteBox.checked = !deleteBox.checked;
+                  if (deleteBox.checked) deleteSelected.add(tr.dataset.url);
+                  else deleteSelected.delete(tr.dataset.url);
+                  updateHeader();
+                }}
+              }});
               const enabled = tr.querySelector('[data-field="enabled"]');
               enabled.addEventListener("change", async () => {{
                 updateHeader();
@@ -978,6 +1012,14 @@ def render_subscription_editor(api_url: str, subscriptions: list[TencentDocSubsc
             function renderInitial() {{
               tbody.replaceChildren(...rows.map(renderRow));
               updateHeader();
+            }}
+            async function refreshDeleteSelection() {{
+              try {{
+                const payload = await fetchJson("/subscriptions/delete-selection");
+                deleteSelected = new Set((payload.urls || []).map(esc));
+              }} catch(error) {{
+                deleteSelected = new Set();
+              }}
             }}
             async function refreshStatus() {{
               try {{
@@ -1004,9 +1046,25 @@ def render_subscription_editor(api_url: str, subscriptions: list[TencentDocSubsc
               tbody.querySelectorAll('input[data-field="enabled"]').forEach((box) => box.checked = checked);
               try {{
                 await fetchJson("/subscriptions/select-all", {{enabled: checked ? "1" : "0"}});
-              }} catch(error) {{}}
+                }} catch(error) {{}}
             }});
-            renderInitial();
+            deleteSelectAll.addEventListener("change", async () => {{
+              if (disabled) return;
+              const checked = deleteSelectAll.checked;
+              deleteSelectAll.indeterminate = false;
+              tbody.querySelectorAll('input[data-field="delete"]').forEach((box) => {{
+                box.checked = checked;
+                const tr = box.closest("tr");
+                if (!tr) return;
+                if (checked) deleteSelected.add(tr.dataset.url);
+                else deleteSelected.delete(tr.dataset.url);
+              }});
+              try {{
+                await fetchJson("/subscriptions/select-delete-all", {{selected: checked ? "1" : "0"}});
+              }} catch(error) {{}}
+              updateHeader();
+            }});
+            refreshDeleteSelection().finally(renderInitial);
             window.setInterval(refreshStatus, 1500);
           }})();
         </script>
@@ -1629,6 +1687,50 @@ def subscriptions_path() -> Path:
     return cfg.index_dir / "tencent_doc_subscriptions.json"
 
 
+def subscription_delete_selection_path() -> Path:
+    return cfg.index_dir / "subscription_delete_selection.json"
+
+
+def load_subscription_delete_selection() -> set[str]:
+    path = subscription_delete_selection_path()
+    if not path.exists():
+        return set()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (json.JSONDecodeError, OSError):
+        return set()
+    if not isinstance(payload, list):
+        return set()
+    return {str(url).strip() for url in payload if str(url).strip()}
+
+
+def save_subscription_delete_selection(urls: set[str]) -> None:
+    path = subscription_delete_selection_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(sorted(urls), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def delete_selected_subscriptions() -> int:
+    selected_urls = load_subscription_delete_selection()
+    if not selected_urls:
+        return 0
+    current = load_subscriptions(subscriptions_path())
+    kept = [subscription for subscription in current if subscription.url not in selected_urls]
+    removed = len(current) - len(kept)
+    if removed:
+        save_subscriptions(subscriptions_path(), kept)
+    save_subscription_delete_selection(set())
+    return removed
+
+
+def export_subscriptions_text(subscriptions: list[TencentDocSubscription]) -> str:
+    lines: list[str] = []
+    for subscription in subscriptions:
+        lines.append(subscription.name)
+        lines.append(subscription.url)
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
 def load_system_prompt() -> str:
     path = prompt_settings_path()
     if not path.exists():
@@ -1670,7 +1772,7 @@ def subscription_rows_to_items(rows: list[dict]) -> list[TencentDocSubscription]
                 name=name,
                 url=url,
                 tags=parse_tags(str(row.get("Tag", ""))),
-                enabled=bool(row.get("启用", True)),
+                enabled=bool(row.get("启用", row.get("", True))),
                 last_status=str(row.get("状态", "") or ""),
                 last_modified=display_datetime(row.get("最后修改", "")),
             )
@@ -1698,7 +1800,7 @@ def parse_batch_subscription_text(text: str, default_tags: str = "") -> tuple[li
             index += 1
             continue
         else:
-            name = line.strip("【】[] ")
+            name = line.strip()
             index += 1
             if index < len(lines):
                 url = lines[index].strip()
@@ -1772,15 +1874,17 @@ def batch_add_subscription_dialog() -> None:
         if not rows:
             st.warning("没有识别到可增加的订阅。")
             return
-        existing_rows = list(st.session_state.get("import_subscription_rows", []))
-        existing_urls = {str(row.get("腾讯文档地址", "")).strip() for row in existing_rows}
+        existing_subscriptions = load_subscriptions(subscriptions_path())
+        existing_urls = {subscription.url for subscription in existing_subscriptions}
         new_rows = [row for row in rows if row["腾讯文档地址"] not in existing_urls]
         skipped = len(rows) - len(new_rows)
-        st.session_state["import_subscription_rows"] = new_rows + existing_rows
-        st.session_state["import_subscription_editor_version"] = (
-            int(st.session_state.get("import_subscription_editor_version", 0)) + 1
+        new_subscriptions = subscription_rows_to_items(new_rows)
+        save_subscriptions(
+            subscriptions_path(),
+            new_subscriptions + existing_subscriptions,
         )
         queue_ui_notice("success", f"已增加 {len(new_rows)} 个订阅" + (f"，跳过重复 {skipped} 个" if skipped else ""))
+        st.rerun()
 
 
 @st.dialog("本机性能设置", width="large")
@@ -2208,7 +2312,8 @@ with tab_import:
     with left:
         render_subscription_header(LOCAL_TASK_API_URL)
         st.markdown('<div class="import-action-style"></div>', unsafe_allow_html=True)
-        start_col, add_col, save_col = st.columns([1.1, 0.9, 0.9], gap="small")
+        subscriptions = load_subscriptions(subscriptions_path())
+        start_col, add_col, save_col, export_col = st.columns([1, 1, 1, 1], gap="small")
         start_label = "后台更新中..." if job_running else "开始后台更新"
         start_clicked = start_col.button(
             start_label,
@@ -2218,8 +2323,16 @@ with tab_import:
         )
         add_clicked = add_col.button("增加订阅", use_container_width=True, disabled=task_busy, key="subscription_add")
         save_clicked = save_col.button("保存订阅", use_container_width=True, disabled=task_busy, key="subscription_save")
+        export_col.download_button(
+            "导出订阅",
+            data=export_subscriptions_text(subscriptions),
+            file_name="tencent_doc_subscriptions.txt",
+            mime="text/plain",
+            use_container_width=True,
+            disabled=task_busy,
+            key="subscription_export",
+        )
 
-        subscriptions = load_subscriptions(subscriptions_path())
         if add_clicked:
             batch_add_subscription_dialog()
 
@@ -2263,7 +2376,12 @@ with tab_import:
                 for error in subscription_errors:
                     st.warning(error)
             else:
-                st.success("订阅已保存。")
+                removed = delete_selected_subscriptions()
+                if removed:
+                    queue_ui_notice("success", f"订阅已保存，并删除 {removed} 个订阅。")
+                    st.rerun()
+                else:
+                    st.success("订阅已保存。")
 
         render_subscription_task_panel(LOCAL_TASK_API_URL)
 

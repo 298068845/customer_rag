@@ -5,11 +5,15 @@ from pathlib import Path
 from customer_rag.talk_rag import (
     AssetItem,
     BrandReplyRule,
+    COMBINED_TALK_TITLE,
+    CombinedReplyRule,
+    CombinedTalkConfig,
     FixedReplyRule,
     FixedTalkEntry,
     RealtimeTalkConfig,
     TalkRagEngine,
     TalkRagStore,
+    match_combined_talk,
     match_fixed_talk,
 )
 
@@ -63,6 +67,58 @@ class FixedTalkTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.answer, "美的专属话术\n---\n通用兜底话术")
 
+    def test_combined_talk_expands_mapping_term_to_fixed_keywords(self) -> None:
+        config = CombinedTalkConfig(
+            triggers=["检索{keyword}"],
+            reply_rules=[
+                CombinedReplyRule(
+                    id="combo",
+                    mapping_term="1",
+                    keywords=["九牧", "智能马桶"],
+                    reply_titles=["常用话术"],
+                )
+            ],
+        )
+        entries = [
+            FixedTalkEntry(
+                title="常用话术",
+                reply_rules=[FixedReplyRule(id="rule", keywords=["智能马桶"], asset_ids=["copy"])],
+            )
+        ]
+        assets = [AssetItem(id="copy", title="智能马桶话术", paths=[], categories=[], description="智能马桶推荐话术")]
+
+        result = match_combined_talk("检索1", config, RealtimeTalkConfig(), entries, assets)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.answer, "智能马桶推荐话术")
+        self.assertIn("映射词：1", result.chain)
+
+    def test_engine_combined_talk_entry_uses_saved_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = TalkRagStore(Path(temp_dir) / "talk_rag")
+            store.ensure_seed_data()
+            store.save_assets([AssetItem(id="copy", title="九牧话术", paths=[], categories=[], description="九牧固定回复")])
+            store.save_fixed_entries(
+                [
+                    FixedTalkEntry(
+                        title="常用话术",
+                        reply_rules=[FixedReplyRule(id="rule", keywords=["九牧"], asset_ids=["copy"])],
+                    )
+                ]
+            )
+            store.save_combined_config(
+                CombinedTalkConfig(
+                    triggers=["检索{keyword}"],
+                    reply_rules=[
+                        CombinedReplyRule(id="combo", mapping_term="1", keywords=["九牧"], reply_titles=["常用话术"])
+                    ],
+                )
+            )
+
+            result = TalkRagEngine(store).ask("检索1", COMBINED_TALK_TITLE)
+
+            self.assertEqual(result.answer, "九牧固定回复")
+
     def test_engine_exposes_all_eight_shortcuts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store = TalkRagStore(Path(temp_dir) / "talk_rag")
@@ -71,7 +127,7 @@ class FixedTalkTests(unittest.TestCase):
             results = engine.ask_shortcuts("今日清单是什么")
 
             self.assertEqual(len(results), 8)
-            self.assertIn("清单", results[0].answer)
+            self.assertIn("清单", results[1].answer)
 
     def test_store_exports_and_imports_config_zip_with_assets(self) -> None:
         with tempfile.TemporaryDirectory() as source_dir, tempfile.TemporaryDirectory() as target_dir:

@@ -142,6 +142,18 @@ class _TaskApiHandler(BaseHTTPRequestHandler):
             save_subscriptions(path, subscriptions)
             self._send_json({"ok": True, "updated": len(subscriptions)})
             return
+        if parsed.path == "/subscriptions/set-delete-selected":
+            url = query.get("url", [""])[0].strip()
+            selected = query.get("selected", ["0"])[0] in {"1", "true", "yes"}
+            self._send_json(self._update_subscription_delete_selection(config, url, selected))
+            return
+        if parsed.path == "/subscriptions/select-delete-all":
+            selected = query.get("selected", ["0"])[0] in {"1", "true", "yes"}
+            self._send_json(self._update_all_subscription_delete_selection(config, selected))
+            return
+        if parsed.path == "/subscriptions/delete-selection":
+            self._send_json({"urls": sorted(_load_subscription_delete_selection(config))})
+            return
         if parsed.path == "/subscriptions/update":
             self._send_json(self._update_subscription(config, query))
             return
@@ -182,6 +194,25 @@ class _TaskApiHandler(BaseHTTPRequestHandler):
         if changed:
             save_subscriptions(path, updated)
         return {"ok": changed}
+
+    def _update_subscription_delete_selection(self, config, url: str, selected: bool) -> dict:
+        if not url:
+            return {"ok": False}
+        urls = _load_subscription_delete_selection(config)
+        if selected:
+            urls.add(url)
+        else:
+            urls.discard(url)
+        _save_subscription_delete_selection(config, urls)
+        return {"ok": True, "selected": sorted(urls)}
+
+    def _update_all_subscription_delete_selection(self, config, selected: bool) -> dict:
+        if selected:
+            urls = {item.url for item in load_subscriptions(config.index_dir / "tencent_doc_subscriptions.json")}
+        else:
+            urls = set()
+        _save_subscription_delete_selection(config, urls)
+        return {"ok": True, "selected": sorted(urls)}
 
     def _update_subscription(self, config, query: dict[str, list[str]]) -> dict:
         original_url = query.get("url", [""])[0].strip()
@@ -229,3 +260,26 @@ class _TaskApiHandler(BaseHTTPRequestHandler):
 
 def _parse_tags(value: str) -> list[str]:
     return [tag.strip() for tag in value.replace("，", ",").split(",") if tag.strip()]
+
+
+def _subscription_delete_selection_path(config):
+    return config.index_dir / "subscription_delete_selection.json"
+
+
+def _load_subscription_delete_selection(config) -> set[str]:
+    path = _subscription_delete_selection_path(config)
+    if not path.exists():
+        return set()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (json.JSONDecodeError, OSError):
+        return set()
+    if not isinstance(payload, list):
+        return set()
+    return {str(url).strip() for url in payload if str(url).strip()}
+
+
+def _save_subscription_delete_selection(config, urls: set[str]) -> None:
+    path = _subscription_delete_selection_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(sorted(urls), ensure_ascii=False, indent=2), encoding="utf-8")

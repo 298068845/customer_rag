@@ -534,21 +534,21 @@ ShowSendPreview(text, mouseX := "", mouseY := "", mode := "query") {
     if PREVIEW_SHOW_SHORTCUTS {
         PREVIEW_GUI.SetFont("s9 bold", "Microsoft YaHei")
         key1 := PREVIEW_GUI.AddText("xm y+14 w26 h28 Center 0x200 +0x100", "1")
-        label1 := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "实时话术")
+        label1 := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "组合话术")
         key2 := PREVIEW_GUI.AddText("x+5 yp w26 h28 Center 0x200 +0x100", "2")
-        label2 := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "领券链接")
+        label2 := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "实时话术")
         key3 := PREVIEW_GUI.AddText("x+5 yp w26 h28 Center 0x200 +0x100", "3")
-        label3 := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "常用话术")
+        label3 := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "领券链接")
         key4 := PREVIEW_GUI.AddText("x+5 yp w26 h28 Center 0x200 +0x100", "4")
-        label4 := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "对比图")
+        label4 := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "常用话术")
         keyQ := PREVIEW_GUI.AddText("xm y+5 w26 h28 Center 0x200 +0x100", "Q")
-        labelQ := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "售前话术")
+        labelQ := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "对比图")
         keyW := PREVIEW_GUI.AddText("x+5 yp w26 h28 Center 0x200 +0x100", "W")
-        labelW := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "售后话术")
+        labelW := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "售前话术")
         keyE := PREVIEW_GUI.AddText("x+5 yp w26 h28 Center 0x200 +0x100", "E")
-        labelE := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "活动规则")
+        labelE := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "售后话术")
         keyR := PREVIEW_GUI.AddText("x+5 yp w26 h28 Center 0x200 +0x100", "R")
-        labelR := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "自定义")
+        labelR := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "活动规则")
         PREVIEW_SHORTCUTS := [
             [key1, label1], [key2, label2], [key3, label3], [key4, label4],
             [keyQ, labelQ], [keyW, labelW], [keyE, labelE], [keyR, labelR]
@@ -761,6 +761,7 @@ UpdatePreviewText() {
     if (!PREVIEW_SHOW_SHORTCUTS && PREVIEW_TAB_DEFAULT_CHECKED && checkedCount = 0) {
         PREVIEW_LIST.Insert(1, "Check", MakeListPreview(fallbackText), fallbackText)
     }
+    PREVIEW_LIST.ModifyCol(1, CalculatePreviewColumnWidth())
 }
 
 PreviewListCustomDraw(control, lParam) {
@@ -2143,7 +2144,7 @@ BuildTalkShortcutTexts(realtimeText) {
             return parts
         }
     }
-    return [realtimeText, "", "", "", "", "", "", ""]
+    return ["", realtimeText, "", "", "", "", "", ""]
 }
 
 ReadQueryBrands() {
@@ -2339,10 +2340,26 @@ MakeListPreview(text) {
     if (preview = "") {
         preview := CleanOneLine(text)
     }
-    if StrLen(preview) > 42 {
-        preview := SubStr(preview, 1, 42) "..."
-    }
     return preview
+}
+
+CalculatePreviewColumnWidth() {
+    global PREVIEW_LIST
+
+    width := 452
+    if !IsObject(PREVIEW_LIST) {
+        return width
+    }
+
+    rowCount := PREVIEW_LIST.GetCount()
+    Loop rowCount {
+        preview := PREVIEW_LIST.GetText(A_Index, 1)
+        candidate := 40 + (StrLen(preview) * 8)
+        if candidate > width {
+            width := candidate
+        }
+    }
+    return Min(width, 2400)
 }
 
 JoinParts(parts) {
@@ -2538,6 +2555,10 @@ RunTalkPreviewSelfTest() {
     }
     ShowSendPreview(JoinParts(sampleParts), 360, 240, "talk_shortcuts")
     Sleep 250
+    if !IsObject(PREVIEW_GUI) {
+        FileAppend "[result]`npreview_created=0`n", resultPath, "UTF-8"
+        return
+    }
     WinGetPos &x, &y, &w, &h, "ahk_id " PREVIEW_GUI.Hwnd
     shortcutCount := IsObject(PREVIEW_SHORTCUTS) ? PREVIEW_SHORTCUTS.Length : 0
     realtimeChecked := CountCheckedRows()

@@ -31,7 +31,7 @@ DEFAULT_PROMPT_SUFFIX = """
 """
 
 FALLBACK_CONTROL_MARKER = "__RAG_FUZZY_FALLBACK__"
-QUERY_CACHE_VERSION = 3
+QUERY_CACHE_VERSION = 6
 QUERY_CACHE_TTL_SECONDS = 0
 
 
@@ -117,7 +117,7 @@ def main() -> int:
             tags=parsed_tags,
         )
         answer = format_wechat_answer(result.answer)
-        if result.fallback and not result.sources:
+        if result.fallback:
             answer = FALLBACK_CONTROL_MARKER + "\n" + answer
 
         args.output_file.parent.mkdir(parents=True, exist_ok=True)

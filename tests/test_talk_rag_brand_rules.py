@@ -4,7 +4,11 @@ from unittest.mock import patch
 from customer_rag.category_config import category_terms
 from customer_rag.talk_rag import (
     BrandReplyRule,
+    COMBINED_TALK_TITLE,
+    FIXED_TALK_TITLES,
+    REALTIME_TALK_TITLE,
     RealtimeTalkConfig,
+    TALK_SHORTCUT_TITLES,
     TalkRagEngine,
     default_realtime_config,
     deduplicate_reply_parts,
@@ -17,11 +21,14 @@ from customer_rag.talk_rag import (
 
 
 class BrandReplyRuleTests(unittest.TestCase):
+    def test_talk_shortcut_titles_start_with_combined_then_realtime(self) -> None:
+        self.assertEqual(TALK_SHORTCUT_TITLES, [COMBINED_TALK_TITLE, REALTIME_TALK_TITLE, *FIXED_TALK_TITLES])
+
     def test_current_reply_rules_are_built_in_defaults(self) -> None:
         config = default_realtime_config()
 
         self.assertTrue(config.brand_reply_rules_initialized)
-        self.assertEqual(len(config.brand_reply_rules), 164)
+        self.assertEqual(len(config.brand_reply_rules), 148)
         self.assertTrue(any(rule.keyword == "CCF地毯" and rule.reply_terms for rule in config.brand_reply_rules))
 
     @patch("customer_rag.category_config.category_aliases", return_value={})

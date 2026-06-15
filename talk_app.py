@@ -15,11 +15,17 @@ import customer_rag.talk_rag as talk_rag_module
 talk_rag_module = importlib.reload(talk_rag_module)
 
 from customer_rag.talk_rag import (
+    COMBINED_REPLY_OPTIONS,
+    COMBINED_TALK_TITLE,
     FIXED_TALK_TITLES,
+    TALK_SHORTCUT_TITLES,
     BrandReplyRule,
     BrandSaleStatusRule,
+    CombinedReplyRule,
+    CombinedTalkConfig,
     FixedReplyRule,
     FixedTalkEntry,
+    REALTIME_TALK_TITLE,
     RealtimeTalkConfig,
     SaleStatus,
     TalkRagEngine,
@@ -37,9 +43,15 @@ STORE.ensure_seed_data()
 
 SALE_STATUSES: list[SaleStatus] = ["售卖中", "暂时截团", "永久截团"]
 DELETE_COLUMN_WIDTH = 78
+FIXED_TRIGGER_EDITOR_HEIGHT = 276
+FIXED_REPLY_RULES_EDITOR_HEIGHT = 260
+ASSET_LIST_EDITOR_HEIGHT = 336
+COMBINED_TRIGGER_EDITOR_HEIGHT = 316
+COMBINED_REPLY_RULES_EDITOR_HEIGHT = 300
 TALK_ENTRY_OPTIONS = [
-    "实时话术",
+    REALTIME_TALK_TITLE,
     *FIXED_TALK_TITLES,
+    COMBINED_TALK_TITLE,
 ]
 
 
@@ -192,30 +204,36 @@ def main() -> None:
     with action_col:
         render_config_transfer()
 
-    tab_test, tab_realtime, tab_fixed = st.tabs(["对话测试", "实时话术", "固定话术"])
+    tab_test, tab_realtime, tab_fixed, tab_combined = st.tabs(["对话测试", "实时话术", "固定话术", "组合话术"])
     with tab_test:
         render_match_test()
     with tab_realtime:
         render_realtime_talk()
     with tab_fixed:
         render_fixed_talk()
+    with tab_combined:
+        render_combined_talk()
 
 
 def render_config_transfer() -> None:
     st.markdown("<div class='compact-transfer-title'>配置导入导出</div>", unsafe_allow_html=True)
-    include_realtime, selected_fixed_titles = render_config_transfer_scope()
+    include_realtime, selected_fixed_titles, include_combined = render_config_transfer_scope()
     
     export_name = f"talk-rag-config-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
     action_cols = st.columns([0.3, 0.3, 0.4], gap="small", vertical_alignment="center")
     with action_cols[0]:
         st.download_button(
             "导出配置 ZIP",
-            data=STORE.export_config_zip(include_realtime=include_realtime, fixed_titles=selected_fixed_titles),
+            data=STORE.export_config_zip(
+                include_realtime=include_realtime,
+                fixed_titles=selected_fixed_titles,
+                include_combined=include_combined,
+            ),
             file_name=export_name,
             mime="application/zip",
             use_container_width=True,
             help="导出实时话术、固定话术、品牌回复、开团日期、素材文案/图片和回复规则。",
-            disabled=not include_realtime and not selected_fixed_titles,
+            disabled=not include_realtime and not selected_fixed_titles and not include_combined,
         )
     with action_cols[1]:
         uploaded_zip = st.file_uploader(
@@ -230,13 +248,14 @@ def render_config_transfer() -> None:
             "确认导入并覆盖所选板块",
             type="primary",
             use_container_width=True,
-            disabled=not include_realtime and not selected_fixed_titles,
+            disabled=not include_realtime and not selected_fixed_titles and not include_combined,
         ):
             try:
                 summary = STORE.import_config_zip(
                     uploaded_zip.getvalue(),
                     include_realtime=include_realtime,
                     fixed_titles=selected_fixed_titles,
+                    include_combined=include_combined,
                 )
             except ValueError as exc:
                 st.error(str(exc))
@@ -244,28 +263,32 @@ def render_config_transfer() -> None:
                 clear_talk_config_editor_cache()
                 st.success(
                     f"导入完成：实时话术 {'已覆盖' if summary['imported_realtime'] else '未覆盖'}，"
+                    f"组合话术 {'已覆盖' if summary['imported_combined'] else '未覆盖'}，"
                     f"固定话术覆盖 {summary['imported_fixed_entries']} 个模块，"
                     f"素材导入 {summary['imported_assets']} 个。"
                 )
                 st.rerun()
 
 
-def render_config_transfer_scope() -> tuple[bool, list[str]]:
+def render_config_transfer_scope() -> tuple[bool, list[str], bool]:
     st.markdown("<div class='compact-transfer-note'>勾选导入/导出范围，默认全部板块。</div>", unsafe_allow_html=True)
-    options = ["实时话术", *FIXED_TALK_TITLES]
+    options = TALK_SHORTCUT_TITLES
     selected_fixed_titles: list[str] = []
     include_realtime = False
+    include_combined = False
     option_cols = st.columns(4, gap="small")
     for index, title in enumerate(options):
         with option_cols[index % 4]:
             checked = st.checkbox(title, value=True, key=f"config_transfer_scope_{title}")
-        if title == "实时话术":
+        if title == REALTIME_TALK_TITLE:
             include_realtime = checked
+        elif title == COMBINED_TALK_TITLE:
+            include_combined = checked
         elif checked:
             selected_fixed_titles.append(title)
-    if not include_realtime and not selected_fixed_titles:
+    if not include_realtime and not selected_fixed_titles and not include_combined:
         st.warning("请至少勾选一个板块。")
-    return include_realtime, selected_fixed_titles
+    return include_realtime, selected_fixed_titles, include_combined
 
 
 def render_match_test() -> None:
@@ -422,7 +445,7 @@ def render_fixed_talk() -> None:
         triggers_text = st.text_area(
             "触发词 / 同义问法",
             value="\n".join(entry.triggers),
-            height=260,
+            height=FIXED_TRIGGER_EDITOR_HEIGHT,
             label_visibility="collapsed",
             key=f"fixed_triggers_{selected_title}",
             help="每行一个问法，可使用 {keyword} 作为关键词占位符。",
@@ -446,7 +469,7 @@ def render_fixed_talk() -> None:
                 fixed_reply_rules_dataframe(st.session_state[editor_rows_key]),
                 hide_index=True,
                 use_container_width=True,
-                height=260,
+                height=FIXED_REPLY_RULES_EDITOR_HEIGHT,
                 num_rows="add",
                 column_config={
                     "删除": st.column_config.CheckboxColumn("删除", width=DELETE_COLUMN_WIDTH, help="勾选后保存会删除该行。"),
@@ -504,7 +527,7 @@ def render_fixed_talk() -> None:
                 asset_list_dataframe(st.session_state[asset_rows_key]),
                 hide_index=True,
                 use_container_width=True,
-                height=184,
+                height=ASSET_LIST_EDITOR_HEIGHT,
                 column_config={
                     "删除": st.column_config.CheckboxColumn("删除", width=DELETE_COLUMN_WIDTH, help="勾选后保存会删除素材。"),
                     "素材名称": st.column_config.TextColumn("素材名称", width=440, disabled=True),
@@ -543,7 +566,12 @@ def render_fixed_talk() -> None:
             disabled=bool(current_copy),
             key=files_key,
         )
-        asset_copy = st.text_area("文案", height=140, disabled=bool(uploaded_files), key=copy_key)
+        asset_copy = st.text_area(
+            "文案",
+            height=140,
+            disabled=bool(uploaded_files),
+            key=copy_key,
+        )
         if uploaded_files:
             st.caption("已上传图片，文案输入已禁用。")
         elif asset_copy.strip():
@@ -563,8 +591,94 @@ def render_fixed_talk() -> None:
                 st.rerun()
 
 
+def render_combined_talk() -> None:
+    config = STORE.load_combined_config()
+    st.subheader("组合话术规则")
+    trigger_col, reply_col = st.columns([0.38, 0.62], gap="large", vertical_alignment="top")
+    with trigger_col:
+        st.markdown("##### 触发词 / 同义问法")
+        triggers_text = st.text_area(
+            "触发词 / 同义问法",
+            value="\n".join(config.triggers),
+            height=COMBINED_TRIGGER_EDITOR_HEIGHT,
+            label_visibility="collapsed",
+            key="combined_triggers",
+            help="每行一个问法，可使用 {keyword} 作为映射词占位符。例如：检索{keyword}",
+        )
+        if st.button("保存组合话术触发词", type="primary", use_container_width=True, key="save_combined_triggers"):
+            STORE.save_combined_config(replace(config, triggers=clean_terms(triggers_text)))
+            st.success("组合话术触发词已保存。")
+
+    with reply_col:
+        st.markdown("##### 回复内容规则")
+        editor_rows_key = "combined_rules_rows"
+        if editor_rows_key not in st.session_state:
+            st.session_state[editor_rows_key] = combined_reply_rules_to_rows(config.reply_rules)
+        editor_version_key = "combined_rules_editor_version"
+        editor_key = f"combined_rules_{st.session_state.get(editor_version_key, 0)}"
+        with st.form("combined_rules_form", clear_on_submit=False, border=False):
+            current_editor_rows = st.data_editor(
+                combined_reply_rules_dataframe(st.session_state[editor_rows_key]),
+                hide_index=True,
+                use_container_width=True,
+                height=COMBINED_REPLY_RULES_EDITOR_HEIGHT,
+                num_rows="add",
+                column_config={
+                    "删除": st.column_config.CheckboxColumn("删除", width=DELETE_COLUMN_WIDTH, help="勾选后保存会删除该行。"),
+                    "映射词": st.column_config.TextColumn("映射词", width=120, help="用户实际检索的短词，例如 1。", required=True),
+                    "关键词": st.column_config.TextColumn("关键词", width=240, help="可输入多个，用逗号分隔。", required=True),
+                    "回复内容": st.column_config.MultiselectColumn(
+                        "回复内容（从固定话术选择）",
+                        width=520,
+                        options=COMBINED_REPLY_OPTIONS,
+                        help="可多选：实时话术和 6 个固定话术模块。",
+                    ),
+                },
+                key=editor_key,
+            )
+            visible_rows = dataframe_object_records(current_editor_rows)
+            install_commit_before_submit_guard("保存组合话术回复内容规则")
+            save_combined_rules = st.form_submit_button(
+                "保存组合话术回复内容规则",
+                type="primary",
+                use_container_width=True,
+            )
+        if save_combined_rules:
+            save_combined_reply_rules_editor(editor_rows_key, editor_key, editor_version_key, visible_rows)
+        combined_rules_error = st.session_state.pop("combined_reply_rules_error", "")
+        if combined_rules_error:
+            st.error(combined_rules_error)
+        elif save_combined_rules or st.session_state.pop("combined_reply_rules_saved", False):
+            st.toast("组合话术回复内容规则已保存。", icon="✅")
+
+
 def save_fixed_entry(entry: FixedTalkEntry, entries: list[FixedTalkEntry]) -> None:
     STORE.save_fixed_entries([entry if item.title == entry.title else item for item in entries])
+
+
+def save_combined_reply_rules_editor(
+    editor_rows_key: str,
+    editor_key: str,
+    editor_version_key: str,
+    visible_rows: list[dict[str, object]],
+) -> None:
+    st.session_state.pop("combined_reply_rules_saved", None)
+    st.session_state.pop("combined_reply_rules_error", None)
+    sync_data_editor_rows(editor_rows_key, editor_key)
+    synced_rows = list(st.session_state.get(editor_rows_key, []))
+    rows = prefer_combined_rows(visible_rows, synced_rows)
+    rows = [row for row in rows if not truthy_value(row.get("删除", False))]
+    validation_errors = validate_combined_reply_rows(rows)
+    if validation_errors:
+        st.session_state["combined_reply_rules_error"] = "\n".join(validation_errors)
+        return
+
+    config = STORE.load_combined_config()
+    rules = rows_to_combined_reply_rules(rows)
+    STORE.save_combined_config(replace(config, reply_rules=rules))
+    st.session_state[editor_rows_key] = combined_reply_rules_to_rows(rules)
+    st.session_state[editor_version_key] = st.session_state.get(editor_version_key, 0) + 1
+    st.session_state["combined_reply_rules_saved"] = True
 
 
 def sync_data_editor_rows(rows_key: str, editor_key: str) -> None:
@@ -667,6 +781,37 @@ def fixed_reply_rules_to_rows(
     ]
 
 
+def combined_reply_rules_to_rows(rules: list[CombinedReplyRule]) -> list[dict[str, object]]:
+    return [
+        {
+            "删除": False,
+            "映射词": rule.mapping_term,
+            "关键词": "，".join(rule.keywords),
+            "回复内容": [title for title in rule.reply_titles if title in COMBINED_REPLY_OPTIONS],
+        }
+        for rule in rules
+    ]
+
+
+def combined_reply_rules_dataframe(rows: list[dict[str, object]]) -> pd.DataFrame:
+    records: list[dict[str, object]] = []
+    for row in rows:
+        records.append(
+            {
+                "删除": truthy_value(row.get("删除", False)),
+                "映射词": str(row.get("映射词", "") or ""),
+                "关键词": str(row.get("关键词", "") or ""),
+                "回复内容": normalize_option_like_list(row.get("回复内容", [])),
+            }
+        )
+    dataframe = pd.DataFrame(records, columns=["删除", "映射词", "关键词", "回复内容"])
+    dataframe["删除"] = dataframe["删除"].astype(bool)
+    dataframe["映射词"] = dataframe["映射词"].astype("string")
+    dataframe["关键词"] = dataframe["关键词"].astype("string")
+    dataframe["回复内容"] = dataframe["回复内容"].astype(object)
+    return dataframe
+
+
 def fixed_reply_rules_dataframe(rows: list[dict[str, object]], include_reply_content: bool = True) -> pd.DataFrame:
     records: list[dict[str, object]] = []
     for row in rows:
@@ -734,11 +879,40 @@ def prefer_rows_with_reply_assets(
     return rows
 
 
+def prefer_combined_rows(
+    visible_rows: list[dict[str, object]],
+    synced_rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    if not visible_rows:
+        return synced_rows
+    if not synced_rows:
+        return visible_rows
+    rows: list[dict[str, object]] = []
+    max_len = max(len(visible_rows), len(synced_rows))
+    for index in range(max_len):
+        visible = visible_rows[index] if index < len(visible_rows) else {}
+        synced = synced_rows[index] if index < len(synced_rows) else {}
+        row = dict(synced or visible)
+        for key in ("映射词", "关键词"):
+            if str(visible.get(key, "")).strip():
+                row[key] = visible.get(key, "")
+        if has_reply_assets(visible) and not has_reply_assets(row):
+            row["回复内容"] = visible.get("回复内容", [])
+        if "删除" in visible:
+            row["删除"] = visible.get("删除", False)
+        rows.append(row)
+    return rows
+
+
 def has_reply_assets(row: dict[str, object]) -> bool:
     value = row.get("回复内容", [])
     if isinstance(value, (list, tuple, set)):
         return any(str(item).strip() for item in value)
     return bool(str(value or "").strip())
+
+
+def normalize_text_for_editor(value: str) -> str:
+    return "".join(str(value or "").strip().lower().split())
 
 
 def assets_for_title(assets: list, title: str) -> list:
@@ -781,6 +955,46 @@ def rows_to_fixed_reply_rules(
         if keywords:
             rules.append(FixedReplyRule(id=new_id(), keywords=keywords, asset_ids=asset_ids))
     return rules
+
+
+def rows_to_combined_reply_rules(rows: list[dict[str, object]]) -> list[CombinedReplyRule]:
+    rules: list[CombinedReplyRule] = []
+    for row in rows:
+        mapping_term = str(row.get("映射词", "") or "").strip()
+        keywords = clean_terms(str(row.get("关键词", "")))
+        reply_titles = normalize_option_values(row.get("回复内容", []), COMBINED_REPLY_OPTIONS)
+        if mapping_term and keywords:
+            rules.append(
+                CombinedReplyRule(
+                    id=new_id(),
+                    mapping_term=mapping_term,
+                    keywords=keywords,
+                    reply_titles=reply_titles,
+                )
+            )
+    return rules
+
+
+def validate_combined_reply_rows(rows: list[dict[str, object]]) -> list[str]:
+    errors: list[str] = []
+    seen_mapping_terms: set[str] = set()
+    for index, row in enumerate(rows, start=1):
+        mapping_term = str(row.get("映射词", "") or "").strip()
+        keywords = clean_terms(str(row.get("关键词", "")))
+        reply_titles = normalize_option_values(row.get("回复内容", []), COMBINED_REPLY_OPTIONS)
+        if not mapping_term and not keywords and not has_reply_assets(row):
+            continue
+        if not mapping_term:
+            errors.append(f"第 {index} 行缺少映射词。")
+        elif normalize_text_for_editor(mapping_term) in seen_mapping_terms:
+            errors.append(f"第 {index} 行映射词“{mapping_term}”重复。")
+        else:
+            seen_mapping_terms.add(normalize_text_for_editor(mapping_term))
+        if not keywords:
+            errors.append(f"第 {index} 行缺少关键词。")
+        if has_reply_assets(row) and not reply_titles:
+            errors.append(f"第 {index} 行回复内容没有匹配到可选模块。")
+    return errors
 
 
 def validate_fixed_reply_asset_bindings(
@@ -1009,6 +1223,7 @@ def clear_talk_config_editor_cache() -> None:
     st.session_state.pop("brand_reply_rules_editor_rows", None)
     st.session_state.pop("brand_reply_rules_editor", None)
     st.session_state.pop("sale_status_rules_editor", None)
+    st.session_state.pop("combined_rules_rows", None)
     for title in FIXED_TALK_TITLES:
         st.session_state.pop(f"fixed_rules_rows_{title}", None)
         st.session_state.pop(f"asset_list_editor_rows_{title}", None)

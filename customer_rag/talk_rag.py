@@ -17,7 +17,11 @@ from customer_rag.loaders import brand_tags_from_text, category_tags_from_text
 
 LinkType = Literal["fixed", "knowledge", "image"]
 
-FIXED_TALK_TITLES = ["领券链接", "常用话术", "对比图", "售前话术", "售后话术", "活动规则", "自定义"]
+REALTIME_TALK_TITLE = "实时话术"
+COMBINED_TALK_TITLE = "组合话术"
+FIXED_TALK_TITLES = ["领券链接", "常用话术", "对比图", "售前话术", "售后话术", "活动规则"]
+TALK_SHORTCUT_TITLES = [COMBINED_TALK_TITLE, REALTIME_TALK_TITLE, *FIXED_TALK_TITLES]
+COMBINED_REPLY_OPTIONS = [REALTIME_TALK_TITLE, *FIXED_TALK_TITLES]
 
 
 _INDEX_CORPUS_PATH = Path("data/index/corpus.jsonl")
@@ -73,6 +77,20 @@ class FixedTalkEntry:
     title: str
     triggers: list[str] = field(default_factory=lambda: ["{keyword}"])
     reply_rules: list[FixedReplyRule] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class CombinedReplyRule:
+    id: str
+    mapping_term: str
+    keywords: list[str]
+    reply_titles: list[str]
+
+
+@dataclass(frozen=True)
+class CombinedTalkConfig:
+    triggers: list[str] = field(default_factory=lambda: ["检索{keyword}", "{keyword}"])
+    reply_rules: list[CombinedReplyRule] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -139,6 +157,7 @@ class TalkRagStore:
         self.knowledge_path = self.root / "knowledge.json"
         self.assets_path = self.root / "assets.json"
         self.fixed_path = self.root / "fixed.json"
+        self.combined_path = self.root / "combined.json"
         self.realtime_path = self.root / "realtime.json"
         self.asset_dir = self.root / "assets"
 
@@ -153,6 +172,8 @@ class TalkRagStore:
             self.save_assets([])
         if not self.fixed_path.exists():
             self.save_fixed_entries(default_fixed_entries())
+        if not self.combined_path.exists():
+            self.save_combined_config(default_combined_config())
         if not self.realtime_path.exists():
             self.save_realtime_config(default_realtime_config())
 
@@ -192,7 +213,19 @@ class TalkRagStore:
 
     def save_fixed_entries(self, entries: list[FixedTalkEntry]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
-        _write_json_list(self.fixed_path, [asdict(entry) for entry in entries])
+        _write_json_list(self.fixed_path, [asdict(entry) for entry in entries if entry.title in FIXED_TALK_TITLES])
+
+    def load_combined_config(self) -> CombinedTalkConfig:
+        self.ensure_seed_data()
+        try:
+            payload = json.loads(self.combined_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return default_combined_config()
+        return combined_config_from_payload(payload if isinstance(payload, dict) else {})
+
+    def save_combined_config(self, config: CombinedTalkConfig) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.combined_path.write_text(json.dumps(asdict(config), ensure_ascii=False, indent=2), encoding="utf-8")
 
     def load_realtime_config(self) -> RealtimeTalkConfig:
         self.ensure_seed_data()
@@ -244,7 +277,12 @@ class TalkRagStore:
             if parent.exists() and parent.is_dir() and parent.parent == self.asset_dir:
                 shutil.rmtree(parent, ignore_errors=True)
 
-    def export_config_zip(self, include_realtime: bool = True, fixed_titles: list[str] | None = None) -> bytes:
+    def export_config_zip(
+        self,
+        include_realtime: bool = True,
+        fixed_titles: list[str] | None = None,
+        include_combined: bool = True,
+    ) -> bytes:
         self.ensure_seed_data()
         selected_fixed_titles = _selected_fixed_titles(fixed_titles)
         selected_assets = _assets_for_fixed_titles(
@@ -262,8 +300,9 @@ class TalkRagStore:
                         "version": 1,
                         "exported_at": now_text(),
                         "include_realtime": include_realtime,
+                        "include_combined": include_combined,
                         "fixed_titles": selected_fixed_titles,
-                        "files": _exported_config_files(include_realtime, selected_fixed_titles),
+                        "files": _exported_config_files(include_realtime, selected_fixed_titles, include_combined),
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -271,6 +310,8 @@ class TalkRagStore:
             )
             if include_realtime and self.realtime_path.exists():
                 archive.writestr("realtime.json", self.realtime_path.read_text(encoding="utf-8"))
+            if include_combined and self.combined_path.exists():
+                archive.writestr("combined.json", self.combined_path.read_text(encoding="utf-8"))
             if selected_fixed_titles:
                 archive.writestr(
                     "fixed.json",
@@ -302,6 +343,7 @@ class TalkRagStore:
         data: bytes,
         include_realtime: bool = True,
         fixed_titles: list[str] | None = None,
+        include_combined: bool = True,
     ) -> dict[str, int]:
         self.ensure_seed_data()
         selected_fixed_titles = _selected_fixed_titles(fixed_titles)
@@ -316,16 +358,26 @@ class TalkRagStore:
                 raise ValueError("ZIP 中没有找到实时话术配置。")
             if selected_fixed_titles and "fixed.json" not in names:
                 raise ValueError("ZIP 中没有找到固定话术配置。")
-            if not include_realtime and not selected_fixed_titles:
+            if not include_realtime and not selected_fixed_titles and not include_combined:
                 raise ValueError("请至少选择一个导入板块。")
-            if "realtime.json" not in names and "fixed.json" not in names and "assets.json" not in names:
+            if (
+                "realtime.json" not in names
+                and "combined.json" not in names
+                and "fixed.json" not in names
+                and "assets.json" not in names
+            ):
                 raise ValueError("ZIP 中没有找到话术配置文件。")
 
             imported_realtime = False
+            imported_combined = False
             realtime_payload = _read_zip_json_object(archive, "realtime.json") if include_realtime else None
             if include_realtime and realtime_payload is not None:
                 self.save_realtime_config(realtime_config_from_payload(realtime_payload))
                 imported_realtime = True
+            combined_payload = _read_zip_json_object(archive, "combined.json") if include_combined else None
+            if include_combined and combined_payload is not None:
+                self.save_combined_config(combined_config_from_payload(combined_payload))
+                imported_combined = True
 
             imported_fixed_titles: list[str] = []
             imported_assets_count = 0
@@ -372,6 +424,7 @@ class TalkRagStore:
 
         return {
             "imported_realtime": int(imported_realtime),
+            "imported_combined": int(imported_combined),
             "imported_fixed_entries": len(imported_fixed_titles),
             "imported_assets": imported_assets_count,
             "fixed_entries": len(self.load_fixed_entries()),
@@ -384,11 +437,21 @@ class TalkRagEngine:
     def __init__(self, store: TalkRagStore | None = None):
         self.store = store or TalkRagStore()
 
-    def ask(self, question: str, entry_title: str = "实时话术") -> TalkMatch:
-        if entry_title == "实时话术":
+    def ask(self, question: str, entry_title: str = REALTIME_TALK_TITLE) -> TalkMatch:
+        if entry_title == REALTIME_TALK_TITLE:
             realtime_match = match_realtime_talk(question, self.store.load_realtime_config())
             if realtime_match:
                 return realtime_match
+        elif entry_title == COMBINED_TALK_TITLE:
+            combined_match = match_combined_talk(
+                question,
+                self.store.load_combined_config(),
+                self.store.load_realtime_config(),
+                self.store.load_fixed_entries(),
+                self.store.load_assets(),
+            )
+            if combined_match:
+                return combined_match
         elif entry_title in FIXED_TALK_TITLES:
             fixed_match = match_fixed_talk(
                 question,
@@ -406,7 +469,7 @@ class TalkRagEngine:
         )
 
     def ask_shortcuts(self, question: str) -> list[TalkMatch]:
-        return [self.ask(question, title) for title in ["实时话术", *FIXED_TALK_TITLES]]
+        return [self.ask(question, title) for title in TALK_SHORTCUT_TITLES]
 
     def ask_legacy(self, question: str) -> TalkMatch:
         links = [link for link in self.store.load_links() if link.enabled]
@@ -460,6 +523,10 @@ def default_fixed_entries() -> list[FixedTalkEntry]:
     return [FixedTalkEntry(title=title) for title in FIXED_TALK_TITLES]
 
 
+def default_combined_config() -> CombinedTalkConfig:
+    return CombinedTalkConfig()
+
+
 def fixed_entry_from_payload(payload: dict) -> FixedTalkEntry:
     return FixedTalkEntry(
         title=str(payload.get("title", "")).strip(),
@@ -469,6 +536,26 @@ def fixed_entry_from_payload(payload: dict) -> FixedTalkEntry:
                 id=str(item.get("id") or new_id()),
                 keywords=clean_terms(item.get("keywords", [])),
                 asset_ids=clean_terms(item.get("asset_ids", [])),
+            )
+            for item in payload.get("reply_rules", [])
+            if isinstance(item, dict)
+        ],
+    )
+
+
+def combined_config_from_payload(payload: dict) -> CombinedTalkConfig:
+    return CombinedTalkConfig(
+        triggers=clean_terms(payload.get("triggers", [])) or CombinedTalkConfig().triggers,
+        reply_rules=[
+            CombinedReplyRule(
+                id=str(item.get("id") or new_id()),
+                mapping_term=str(item.get("mapping_term", "") or item.get("mapping_word", "")).strip(),
+                keywords=clean_terms(item.get("keywords", [])),
+                reply_titles=[
+                    title
+                    for title in clean_terms(item.get("reply_titles", []))
+                    if title in COMBINED_REPLY_OPTIONS
+                ],
             )
             for item in payload.get("reply_rules", [])
             if isinstance(item, dict)
@@ -642,6 +729,116 @@ def match_fixed_talk(
             assets=matched_assets,
         )
     return None
+
+
+def match_combined_talk(
+    question: str,
+    config: CombinedTalkConfig,
+    realtime_config: RealtimeTalkConfig,
+    entries: list[FixedTalkEntry],
+    assets: list[AssetItem],
+) -> TalkMatch | None:
+    normalized_question = normalize_text(question)
+    if not normalized_question:
+        return None
+    for rule in config.reply_rules:
+        mapping_term = rule.mapping_term.strip()
+        if not mapping_term or normalize_text(mapping_term) not in normalized_question:
+            continue
+        if config.triggers and not any(
+            trigger_matches_question(trigger, question, "keyword") for trigger in config.triggers
+        ):
+            continue
+
+        parts: list[str] = []
+        matched_assets: list[AssetItem] = []
+        matched_titles: list[str] = []
+        for title in rule.reply_titles:
+            if title == REALTIME_TALK_TITLE:
+                realtime_answer = render_combined_realtime_reply(rule.keywords, realtime_config)
+                if realtime_answer:
+                    parts.append(realtime_answer)
+                    matched_titles.append(title)
+                continue
+            if title in FIXED_TALK_TITLES:
+                fixed_assets = select_fixed_assets_by_keywords(rule.keywords, title, entries, assets)
+                fixed_answer = render_fixed_assets(fixed_assets)
+                if fixed_answer:
+                    parts.append(fixed_answer)
+                    matched_assets.extend(fixed_assets)
+                    matched_titles.append(title)
+
+        answer = "\n---\n".join(part for part in parts if part.strip())
+        if not answer:
+            continue
+        return TalkMatch(
+            answer=answer,
+            link=None,
+            chain=[
+                "命中组合话术",
+                f"映射词：{mapping_term}",
+                "展开关键词：" + "、".join(rule.keywords),
+                "回复内容：" + "、".join(matched_titles),
+            ],
+            score=92,
+            assets=unique_assets(matched_assets),
+        )
+    return None
+
+
+def render_combined_realtime_reply(keywords: list[str], config: RealtimeTalkConfig) -> str:
+    replies: list[str] = []
+    seen: set[str] = set()
+    for keyword in keywords:
+        reply = render_keyword_reply(keyword, config)
+        if not reply:
+            match = match_realtime_talk(keyword, config)
+            reply = match.answer if match else ""
+        normalized = normalize_text(reply)
+        if reply and normalized not in seen:
+            replies.append(reply)
+            seen.add(normalized)
+    return "\n---\n".join(replies)
+
+
+def select_fixed_assets_by_keywords(
+    keywords: list[str],
+    entry_title: str,
+    entries: list[FixedTalkEntry],
+    assets: list[AssetItem],
+) -> list[AssetItem]:
+    entry = next((item for item in entries if item.title == entry_title), None)
+    if entry is None:
+        return []
+    assets_by_id = {item.id: item for item in assets}
+    selected_assets: list[AssetItem] = []
+    selected_asset_ids: set[str] = set()
+    normalized_keywords = [normalize_text(keyword) for keyword in keywords if normalize_text(keyword)]
+    for fixed_rule in entry.reply_rules:
+        rule_keywords = [normalize_text(keyword) for keyword in fixed_rule.keywords if normalize_text(keyword)]
+        if not any(
+            left in right or right in left
+            for left in normalized_keywords
+            for right in rule_keywords
+        ):
+            continue
+        for asset_id in fixed_rule.asset_ids:
+            asset = assets_by_id.get(asset_id)
+            if asset and asset.id not in selected_asset_ids:
+                selected_assets.append(asset)
+                selected_asset_ids.add(asset.id)
+    return selected_assets
+
+
+def unique_assets(assets: list[AssetItem]) -> list[AssetItem]:
+    values: list[AssetItem] = []
+    seen: set[str] = set()
+    for asset in assets:
+        if asset.id in seen:
+            continue
+        values.append(asset)
+        seen.add(asset.id)
+    return values
 
 
 def render_all_fixed_talk(entry: FixedTalkEntry, assets: list[AssetItem]) -> TalkMatch | None:
@@ -1234,10 +1431,12 @@ def _selected_fixed_titles(fixed_titles: list[str] | None) -> list[str]:
     return [title for title in FIXED_TALK_TITLES if title in selected]
 
 
-def _exported_config_files(include_realtime: bool, fixed_titles: list[str]) -> list[str]:
+def _exported_config_files(include_realtime: bool, fixed_titles: list[str], include_combined: bool = True) -> list[str]:
     files: list[str] = []
     if include_realtime:
         files.append("realtime.json")
+    if include_combined:
+        files.append("combined.json")
     if fixed_titles:
         files.extend(["fixed.json", "assets.json"])
     return files

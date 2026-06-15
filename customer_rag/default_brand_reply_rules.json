@@ -192,15 +192,6 @@
     "supplemental_reply": ""
   },
   {
-    "id": "afa5745aaa354d7fbbf975e248c2c065",
-    "keyword_type": "品牌",
-    "keyword": "京东",
-    "reply_terms": [
-      "@小助理 京东清单"
-    ],
-    "supplemental_reply": ""
-  },
-  {
     "id": "6edf5a84a7fb442d94f7acd95c6a6bed",
     "keyword_type": "品牌",
     "keyword": "仟象映画",
@@ -213,16 +204,6 @@
     "id": "bd2a889938ff48cf85e364ec6477c8d8",
     "keyword_type": "品牌",
     "keyword": "佳丽斯家纺",
-    "reply_terms": [
-      "【窗帘&家纺&地毯&装饰画&迷住专属清单-26年618】",
-      "https://docs.qq.com/sheet/DVmFhSGtVRm1naG5k"
-    ],
-    "supplemental_reply": ""
-  },
-  {
-    "id": "a7c7505665704021bb7366e2f5089f2a",
-    "keyword_type": "品牌",
-    "keyword": "佳丽斯家纺货盘⬇️",
     "reply_terms": [
       "【窗帘&家纺&地毯&装饰画&迷住专属清单-26年618】",
       "https://docs.qq.com/sheet/DVmFhSGtVRm1naG5k"
@@ -373,24 +354,8 @@
     "keyword_type": "品牌",
     "keyword": "喜临门",
     "reply_terms": [
-      "@小助理 喜临门清单"
-    ],
-    "supplemental_reply": ""
-  },
-  {
-    "id": "4738dd1e49bb4b0a9e5f62803127adb9",
-    "keyword_type": "品牌",
-    "keyword": "喜临门-京东",
-    "reply_terms": [
-      "@小助理 喜临门-京东清单"
-    ],
-    "supplemental_reply": ""
-  },
-  {
-    "id": "77079757b4244ca99143454136699bf8",
-    "keyword_type": "品牌",
-    "keyword": "喜临门-天猫",
-    "reply_terms": [
+      "@小助理 喜临门清单",
+      "@小助理 喜临门-京东清单",
       "@小助理 喜临门-天猫清单"
     ],
     "supplemental_reply": ""
@@ -425,28 +390,9 @@
     "supplemental_reply": ""
   },
   {
-    "id": "32fd7611cbae403eb18e4e0025320673",
-    "keyword_type": "品牌",
-    "keyword": "大自然地板",
-    "reply_terms": [
-      "【腾讯文档】大自然&林芃&舒达&麻大师&金可儿迷住专属清单-26年618",
-      "https://docs.qq.com/sheet/DVk5UT3RKQ3J2RkVt?tab=BB08J2"
-    ],
-    "supplemental_reply": ""
-  },
-  {
-    "id": "2f2b38f89b314b619bb7c0c8a22501d1",
-    "keyword_type": "品牌",
-    "keyword": "天猫",
-    "reply_terms": [
-      "@小助理 天猫清单"
-    ],
-    "supplemental_reply": ""
-  },
-  {
     "id": "3152074f2b504f7a8fea442a291f3a0d",
     "keyword_type": "品牌",
-    "keyword": "天猫-松下",
+    "keyword": "松下",
     "reply_terms": [
       "【西门子&博世&松下&日立&林内&能率&迷住专属清单-26年618】",
       "https://docs.qq.com/sheet/DVkhFam5QaUNhQUxz"
@@ -570,15 +516,7 @@
     "keyword_type": "品牌",
     "keyword": "尚拉维",
     "reply_terms": [
-      "@小助理 尚拉维清单"
-    ],
-    "supplemental_reply": ""
-  },
-  {
-    "id": "b2010d8ced654429aae52127ae4ec8dc",
-    "keyword_type": "品牌",
-    "keyword": "尚拉维活动",
-    "reply_terms": [
+      "@小助理 尚拉维清单",
       "@小助理 尚拉维活动清单"
     ],
     "supplemental_reply": ""
@@ -645,18 +583,10 @@
     "keyword_type": "品牌",
     "keyword": "悍高",
     "reply_terms": [
-      "@小助理 卫浴清单"
-    ],
-    "supplemental_reply": "悍高全店商品享迷住大套购\n全店链接：https://u.jd.com/HDkuT3J\n全店品类：拉篮、水槽、龙头、浴室柜、铰链、导轨、门锁等"
-  },
-  {
-    "id": "1fffd93c1b5f4b82b9f54a275c879065",
-    "keyword_type": "品牌",
-    "keyword": "悍高（HIGOLD",
-    "reply_terms": [
+      "@小助理 卫浴清单",
       "@小助理 悍高（HIGOLD清单"
     ],
-    "supplemental_reply": ""
+    "supplemental_reply": "悍高全店商品享迷住大套购\n全店链接：https://u.jd.com/HDkuT3J\n全店品类：拉篮、水槽、龙头、浴室柜、铰链、导轨、门锁等"
   },
   {
     "id": "586f660d3db941ed9853441c834a7296",
@@ -679,17 +609,9 @@
   {
     "id": "58de231eda524d608dc32ad9c8cd7035",
     "keyword_type": "品牌",
-    "keyword": "支吾·京东",
+    "keyword": "支吾",
     "reply_terms": [
-      "@小助理 支吾·京东清单"
-    ],
-    "supplemental_reply": ""
-  },
-  {
-    "id": "dbd7db765c7f4dd0aae2f2b620151d7d",
-    "keyword_type": "品牌",
-    "keyword": "支吾·天猫",
-    "reply_terms": [
+      "@小助理 支吾·京东清单",
       "@小助理 支吾·天猫清单"
     ],
     "supplemental_reply": ""
@@ -728,16 +650,6 @@
     "keyword": "木佳伊地板",
     "reply_terms": [
       "@小助理 木佳伊地板清单"
-    ],
-    "supplemental_reply": ""
-  },
-  {
-    "id": "f8d2716130f54f27bdc7a75c80329f08",
-    "keyword_type": "品牌",
-    "keyword": "松下",
-    "reply_terms": [
-      "【西门子&博世&松下&日立&林内&能率&迷住专属清单-26年618】",
-      "https://docs.qq.com/sheet/DVkhFam5QaUNhQUxz"
     ],
     "supplemental_reply": ""
   },
@@ -905,15 +817,7 @@
     "keyword_type": "品牌",
     "keyword": "浪鲸",
     "reply_terms": [
-      "@小助理 浪鲸清单"
-    ],
-    "supplemental_reply": ""
-  },
-  {
-    "id": "8405d902fb2240cfb8a0fa00f6a4943c",
-    "keyword_type": "品牌",
-    "keyword": "浪鲸（ssww",
-    "reply_terms": [
+      "@小助理 浪鲸清单",
       "@小助理 浪鲸（ssww清单"
     ],
     "supplemental_reply": ""
@@ -928,37 +832,11 @@
     "supplemental_reply": ""
   },
   {
-    "id": "3ab0e1ceb15d4f2dad79d5e2fdd0dda9",
-    "keyword_type": "品牌",
-    "keyword": "海信大薄荷系列",
-    "reply_terms": [
-      "@小助理 海信清单"
-    ],
-    "supplemental_reply": ""
-  },
-  {
-    "id": "5b745174bdd54458929efecd0500344f",
-    "keyword_type": "品牌",
-    "keyword": "海信璀璨系列",
-    "reply_terms": [
-      "@小助理 海信清单"
-    ],
-    "supplemental_reply": ""
-  },
-  {
     "id": "5e44039e41464bc1a6dfc7eb77b18b2f",
     "keyword_type": "品牌",
     "keyword": "海尔",
     "reply_terms": [
-      "@小助理 海尔清单"
-    ],
-    "supplemental_reply": ""
-  },
-  {
-    "id": "55e7799fb2f64589835154b9f0dcd8e5",
-    "keyword_type": "品牌",
-    "keyword": "海尔全屋",
-    "reply_terms": [
+      "@小助理 海尔清单",
       "@小助理 海尔全屋清单"
     ],
     "supplemental_reply": ""
@@ -1006,9 +884,10 @@
     "keyword_type": "品牌",
     "keyword": "源氏木语",
     "reply_terms": [
-      "@小助理 源氏木语清单"
+      "616最新清单！！！！【源氏木语天猫&迷住专属清单-26年618】",
+      "https://docs.qq.com/sheet/DVm1EVGduUEdhSU1M"
     ],
-    "supplemental_reply": ""
+    "supplemental_reply": "【腾讯文档】源氏木语京东&迷住专属清单-26年618.616\nhttps://docs.qq.com/sheet/DVmtWd0pEbGZMakNw?tab=BB08J2\n京东不需要领券，用plus直接下单就是清单价"
   },
   {
     "id": "6e11f7fa2f114fc4ba88017864d68d18",
@@ -1120,15 +999,7 @@
     "keyword_type": "品牌",
     "keyword": "箭牌",
     "reply_terms": [
-      "@小助理 卫浴清单"
-    ],
-    "supplemental_reply": ""
-  },
-  {
-    "id": "edf2cd552eca43b0af68fa10108dba28",
-    "keyword_type": "品牌",
-    "keyword": "箭牌-POP",
-    "reply_terms": [
+      "@小助理 卫浴清单",
       "@小助理 箭牌-POP清单"
     ],
     "supplemental_reply": ""
@@ -1193,15 +1064,7 @@
     "keyword_type": "品牌",
     "keyword": "美的",
     "reply_terms": [
-      "@小助理 美的清单"
-    ],
-    "supplemental_reply": ""
-  },
-  {
-    "id": "a567654c82824c848fd9c95321a306b5",
-    "keyword_type": "品牌",
-    "keyword": "美的燃气热水器M9R系列",
-    "reply_terms": [
+      "@小助理 美的清单",
       "@小助理 美的燃气热水器M9R系列清单"
     ],
     "supplemental_reply": ""
@@ -1238,17 +1101,9 @@
   {
     "id": "49a9755f1a3c4989894f1226ff9de0ea",
     "keyword_type": "品牌",
-    "keyword": "舒达·京东",
+    "keyword": "舒达",
     "reply_terms": [
-      "@小助理 舒达·京东清单"
-    ],
-    "supplemental_reply": ""
-  },
-  {
-    "id": "7a23ef4cbb434182b1eee48e4be85abb",
-    "keyword_type": "品牌",
-    "keyword": "舒达·天猫",
-    "reply_terms": [
+      "@小助理 舒达·京东清单",
       "@小助理 舒达·天猫清单"
     ],
     "supplemental_reply": ""
@@ -1276,15 +1131,7 @@
     "keyword_type": "品牌",
     "keyword": "莫兰迪",
     "reply_terms": [
-      "@小助理 莫兰迪清单"
-    ],
-    "supplemental_reply": ""
-  },
-  {
-    "id": "d32e084304174dfa990c08f7f0552f12",
-    "keyword_type": "品牌",
-    "keyword": "莫兰迪活动",
-    "reply_terms": [
+      "@小助理 莫兰迪清单",
       "@小助理 莫兰迪活动清单"
     ],
     "supplemental_reply": ""
@@ -1365,16 +1212,6 @@
     "supplemental_reply": ""
   },
   {
-    "id": "39afd2702e1b4a6394363f77d78b855e",
-    "keyword_type": "品牌",
-    "keyword": "赛波斯地毯货盘⬇️",
-    "reply_terms": [
-      "【窗帘&家纺&地毯&装饰画&迷住专属清单-26年618】",
-      "https://docs.qq.com/sheet/DVmFhSGtVRm1naG5k"
-    ],
-    "supplemental_reply": ""
-  },
-  {
     "id": "b483edd4b814482792eb9210936c7332",
     "keyword_type": "品牌",
     "keyword": "追觅",
@@ -1445,15 +1282,7 @@
     "keyword_type": "品牌",
     "keyword": "雷鸟",
     "reply_terms": [
-      "@小助理 雷鸟清单"
-    ],
-    "supplemental_reply": ""
-  },
-  {
-    "id": "92cd707c74f241bba621bddf4de536a0",
-    "keyword_type": "品牌",
-    "keyword": "雷鸟-天猫",
-    "reply_terms": [
+      "@小助理 雷鸟清单",
       "@小助理 雷鸟-天猫清单"
     ],
     "supplemental_reply": ""
@@ -1528,6 +1357,42 @@
     "keyword": "黑白调",
     "reply_terms": [
       "@小助理 工学桌椅清单"
+    ],
+    "supplemental_reply": ""
+  },
+  {
+    "id": "fc8b8264bb5847b79b53e46d74889a2a",
+    "keyword_type": "品牌",
+    "keyword": "ASKO",
+    "reply_terms": [
+      "@小助理 ASKO清单"
+    ],
+    "supplemental_reply": ""
+  },
+  {
+    "id": "7a08c6bf821a4e98bdf732f6fe2b4d47",
+    "keyword_type": "品牌",
+    "keyword": "容声",
+    "reply_terms": [
+      "@小助理 容声清单"
+    ],
+    "supplemental_reply": ""
+  },
+  {
+    "id": "4359bcd239ff47f2be68e0f20caacb3a",
+    "keyword_type": "品牌",
+    "keyword": "古洛尼",
+    "reply_terms": [
+      "@小助理 古洛尼清单"
+    ],
+    "supplemental_reply": ""
+  },
+  {
+    "id": "88e07963447e4cb8979ddc949d9fc1bc",
+    "keyword_type": "品牌",
+    "keyword": "科龙",
+    "reply_terms": [
+      "@小助理 科龙清单"
     ],
     "supplemental_reply": ""
   }

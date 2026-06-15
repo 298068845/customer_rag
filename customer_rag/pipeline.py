@@ -375,6 +375,20 @@ class RagPipeline:
         )
         if precise_lookup and not model_code_sources and _is_standalone_model_code_lookup(question):
             return RagResult(answer=_format_fuzzy_sources([]), sources=[], fallback=True)
+        if (
+            precise_lookup
+            and model_code_sources
+            and _is_standalone_model_code_lookup(question)
+            and model_code_sources[0].score < STRONG_KEYWORD_MATCH_SCORE
+        ):
+            return self._fuzzy_fallback_result(
+                question,
+                model_code_sources,
+                system_prompt,
+                search_tags,
+                None,
+                deadline,
+            )
         if precise_lookup and model_code_sources and model_code_sources[0].score >= STRONG_KEYWORD_MATCH_SCORE:
             confirmed_sources = _dedupe_sources_by_product(model_code_sources)
             answer = build_structured_product_answer(
@@ -619,6 +633,7 @@ class RagPipeline:
         tags: list[str] | None = None,
         *,
         tag_match: str = "all",
+        allow_fuzzy: bool = True,
     ) -> list[RetrievedChunk]:
         query_codes = _model_code_queries(question)
         if not query_codes:
@@ -629,7 +644,7 @@ class RagPipeline:
 
         scored: dict[str, RetrievedChunk] = {}
         for query_code in query_codes:
-            for code, items in _model_code_candidates(self._model_code_index_cache, query_code):
+            for code, items in _model_code_candidates(self._model_code_index_cache, query_code, allow_fuzzy=allow_fuzzy):
                 match_score = _model_code_match_score(query_code, code)
                 if match_score <= 0:
                     continue
@@ -1078,7 +1093,12 @@ def _model_code_queries(question: str) -> list[str]:
     return list(dict.fromkeys(queries))
 
 
-def _model_code_candidates(index: dict[str, list[CorpusItem]], query_code: str) -> list[tuple[str, list[CorpusItem]]]:
+def _model_code_candidates(
+    index: dict[str, list[CorpusItem]],
+    query_code: str,
+    *,
+    allow_fuzzy: bool = True,
+) -> list[tuple[str, list[CorpusItem]]]:
     exact = index.get(query_code)
     if exact:
         return [(query_code, exact)]
@@ -1091,7 +1111,7 @@ def _model_code_candidates(index: dict[str, list[CorpusItem]], query_code: str) 
         candidates.sort(key=lambda entry: (abs(len(entry[0]) - len(query_code)), entry[0]))
         return candidates[:80]
 
-    if len(query_code) < 5:
+    if not allow_fuzzy or len(query_code) < 5:
         return []
     fuzzy: list[tuple[int, str, list[CorpusItem]]] = []
     max_distance = 1 if len(query_code) < 8 else 2
