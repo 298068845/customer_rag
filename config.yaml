@@ -7,6 +7,9 @@ chunk_size: 700
 chunk_overlap: 120
 embedding_batch_size: 32
 top_k: 5
+search_timeout_seconds: 4
+product_search_timeout_seconds: 6
+precise_search_timeout_seconds: 8
 
 llm:
   backend: llama_cpp_server

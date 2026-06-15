@@ -36,6 +36,9 @@ class RagConfig:
     chunk_overlap: int = 120
     embedding_batch_size: int = 32
     top_k: int = 5
+    search_timeout_seconds: float = 4.0
+    product_search_timeout_seconds: float = 6.0
+    precise_search_timeout_seconds: float = 8.0
     llm: LlmConfig = LlmConfig()
 
 
@@ -55,6 +58,9 @@ def load_config(path: str | Path = "config.yaml") -> RagConfig:
         chunk_overlap=int(data.get("chunk_overlap", 120)),
         embedding_batch_size=int(data.get("embedding_batch_size", 32)),
         top_k=int(data.get("top_k", 5)),
+        search_timeout_seconds=float(data.get("search_timeout_seconds", 4.0)),
+        product_search_timeout_seconds=float(data.get("product_search_timeout_seconds", 6.0)),
+        precise_search_timeout_seconds=float(data.get("precise_search_timeout_seconds", 8.0)),
         llm=LlmConfig(
             backend=str(llm_data.get("backend", "auto")),
             n_ctx=int(llm_data.get("n_ctx", 2048)),

@@ -759,7 +759,7 @@ def render_subscription_header(api_url: str) -> None:
             function pad(value) {{ return String(value).padStart(2,"0"); }}
             function updateCountdown() {{
               if(!autoEnabled) {{ schedule.textContent="定时获取未开启"; return; }}
-              if(!nextAutoAt) {{ schedule.textContent="下次自动更新：等待调度"; return; }}
+              if(!nextAutoAt) {{ schedule.textContent="当前任务完成后开始下一轮倒计时"; return; }}
               const due=new Date(nextAutoAt);
               if(Number.isNaN(due.getTime())) {{ schedule.textContent=`下次自动更新：${{nextAutoAt}}`; return; }}
               const diff=Math.max(0, due.getTime()-Date.now());
@@ -838,6 +838,184 @@ def render_subscription_header(api_url: str) -> None:
     )
 
 
+def render_subscription_editor(api_url: str, subscriptions: list[TencentDocSubscription], disabled: bool) -> None:
+    initial_rows = json.dumps([asdict(subscription) for subscription in subscriptions], ensure_ascii=False)
+    disabled_text = "true" if disabled else "false"
+    components.html(
+        f"""
+        <style>
+          body {{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#2f3440}}
+          .sub-table-wrap {{height:360px;overflow:auto;border:1px solid #e2e5ea;border-radius:8px;background:#fff}}
+          table {{width:100%;min-width:860px;border-collapse:collapse;font-size:14px;table-layout:fixed}}
+          th,td {{border-bottom:1px solid #edf0f4;border-right:1px solid #edf0f4;padding:8px 10px;text-align:left;white-space:nowrap}}
+          th {{position:sticky;top:0;z-index:2;background:#f7f8fb;color:#7b8493;font-weight:650}}
+          th:first-child,td:first-child {{width:54px;text-align:center;padding:0}}
+          th:nth-child(2),td:nth-child(2) {{width:290px}}
+          th:nth-child(3),td:nth-child(3) {{width:96px}}
+          th:nth-child(4),td:nth-child(4) {{width:92px}}
+          th:nth-child(5),td:nth-child(5) {{width:300px}}
+          th:nth-child(6),td:nth-child(6) {{width:120px;border-right:0}}
+          input[type="checkbox"] {{width:18px;height:18px;accent-color:#4b7fda;vertical-align:middle;cursor:pointer}}
+          input[type="text"] {{width:100%;box-sizing:border-box;border:0;background:transparent;color:#252b36;font:inherit;outline:none}}
+          input[type="text"]:focus {{background:#fff;border:1px solid #8db8ff;border-radius:5px;padding:5px 6px;margin:-6px -7px}}
+          .muted {{color:#6b7280;overflow:hidden;text-overflow:ellipsis}}
+          .saving {{box-shadow:inset 3px 0 #8db8ff}}
+          .error {{box-shadow:inset 3px 0 #e04b4b}}
+          .disabled {{opacity:.68;pointer-events:none}}
+        </style>
+        <div class="sub-table-wrap {'disabled' if disabled else ''}" id="subscription-editor">
+          <table>
+            <thead>
+              <tr>
+                <th title="全选"><input type="checkbox" data-role="select-all" aria-label="全选"></th>
+                <th>名称</th><th>最后修改</th><th>状态</th><th>腾讯文档地址</th><th>Tag</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <script>
+          (() => {{
+            const api = "{api_url}";
+            const disabled = {disabled_text};
+            const root = document.getElementById("subscription-editor");
+            const tbody = root.querySelector("tbody");
+            const selectAll = root.querySelector('[data-role="select-all"]');
+            let rows = {initial_rows};
+            let timers = new Map();
+
+            function esc(value) {{ return String(value ?? ""); }}
+            function attr(value) {{
+              return esc(value)
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;")
+                .replaceAll('"', "&quot;")
+                .replaceAll("'", "&#39;");
+            }}
+            function displayStatus(item) {{
+              const raw = esc(item.last_status);
+              if (raw.includes("更新中")) return "更新中";
+              if (raw.includes("失败")) return "失败";
+              if (raw.includes("待解析")) return "已下载待解析";
+              if (raw.includes("跳过")) return "已同步";
+              if (raw.includes("成功") || raw.includes("已同步")) return "已同步";
+              if (item.last_modified) return "待同步";
+              return raw || "待同步";
+            }}
+            function tagText(tags) {{
+              return Array.isArray(tags) ? tags.join(", ") : esc(tags);
+            }}
+            function updateHeader() {{
+              const boxes = Array.from(tbody.querySelectorAll('input[data-field="enabled"]'));
+              const checked = boxes.filter((box) => box.checked).length;
+              selectAll.checked = boxes.length > 0 && checked === boxes.length;
+              selectAll.indeterminate = checked > 0 && checked < boxes.length;
+              selectAll.disabled = disabled || boxes.length === 0;
+            }}
+            function rowPayload(tr) {{
+              return {{
+                url: tr.dataset.url,
+                next_url: tr.querySelector('[data-field="url"]').value.trim(),
+                name: tr.querySelector('[data-field="name"]').value.trim(),
+                tags: tr.querySelector('[data-field="tags"]').value.trim(),
+                enabled: tr.querySelector('[data-field="enabled"]').checked ? "1" : "0",
+              }};
+            }}
+            async function fetchJson(path, params) {{
+              const qs = new URLSearchParams(params || {{}});
+              const response = await fetch(`${{api}}${{path}}?${{qs}}`, {{cache:"no-store"}});
+              return await response.json();
+            }}
+            function mark(tr, className) {{
+              tr.classList.remove("saving", "error");
+              if (className) tr.classList.add(className);
+            }}
+            async function saveRow(tr) {{
+              if (disabled) return;
+              mark(tr, "saving");
+              const payload = rowPayload(tr);
+              const result = await fetchJson("/subscriptions/update", payload);
+              if (result.ok) {{
+                tr.dataset.url = payload.next_url;
+                mark(tr, "");
+              }} else {{
+                mark(tr, "error");
+              }}
+            }}
+            function scheduleSave(tr) {{
+              window.clearTimeout(timers.get(tr));
+              timers.set(tr, window.setTimeout(() => saveRow(tr).catch(() => mark(tr, "error")), 350));
+            }}
+            function renderRow(item) {{
+              const tr = document.createElement("tr");
+              tr.dataset.url = esc(item.url);
+              tr.innerHTML = `
+                <td><input type="checkbox" data-field="enabled" ${{item.enabled ? "checked" : ""}} ${{disabled ? "disabled" : ""}}></td>
+                <td><input type="text" data-field="name" value="${{attr(item.name)}}" ${{disabled ? "disabled" : ""}}></td>
+                <td class="muted" data-field="last_modified">${{esc(item.last_modified)}}</td>
+                <td class="muted" data-field="status">${{displayStatus(item)}}</td>
+                <td><input type="text" data-field="url" value="${{attr(item.url)}}" ${{disabled ? "disabled" : ""}}></td>
+                <td><input type="text" data-field="tags" value="${{attr(tagText(item.tags))}}" ${{disabled ? "disabled" : ""}}></td>
+              `;
+              const enabled = tr.querySelector('[data-field="enabled"]');
+              enabled.addEventListener("change", async () => {{
+                updateHeader();
+                mark(tr, "saving");
+                try {{
+                  const result = await fetchJson("/subscriptions/set-enabled", {{url: tr.dataset.url, enabled: enabled.checked ? "1" : "0"}});
+                  mark(tr, result.ok ? "" : "error");
+                }} catch(error) {{
+                  mark(tr, "error");
+                }}
+              }});
+              tr.querySelectorAll('input[type="text"]').forEach((input) => {{
+                input.addEventListener("input", () => scheduleSave(tr));
+                input.addEventListener("change", () => saveRow(tr).catch(() => mark(tr, "error")));
+              }});
+              return tr;
+            }}
+            function renderInitial() {{
+              tbody.replaceChildren(...rows.map(renderRow));
+              updateHeader();
+            }}
+            async function refreshStatus() {{
+              try {{
+                const payload = await fetchJson("/subscriptions/list");
+                const latest = new Map((payload.subscriptions || []).map((item) => [esc(item.url), item]));
+                const existing = new Set();
+                tbody.querySelectorAll("tr").forEach((tr) => {{
+                  const item = latest.get(tr.dataset.url);
+                  if (!item) return;
+                  existing.add(tr.dataset.url);
+                  tr.querySelector('[data-field="last_modified"]').textContent = esc(item.last_modified);
+                  tr.querySelector('[data-field="status"]').textContent = displayStatus(item);
+                }});
+                (payload.subscriptions || []).forEach((item) => {{
+                  if (!existing.has(esc(item.url))) tbody.appendChild(renderRow(item));
+                }});
+                updateHeader();
+              }} catch(error) {{}}
+            }}
+            selectAll.addEventListener("change", async () => {{
+              if (disabled) return;
+              const checked = selectAll.checked;
+              selectAll.indeterminate = false;
+              tbody.querySelectorAll('input[data-field="enabled"]').forEach((box) => box.checked = checked);
+              try {{
+                await fetchJson("/subscriptions/select-all", {{enabled: checked ? "1" : "0"}});
+              }} catch(error) {{}}
+            }});
+            renderInitial();
+            window.setInterval(refreshStatus, 1500);
+          }})();
+        </script>
+        """,
+        height=370,
+        scrolling=False,
+    )
+
+
 def render_subscription_task_panel(api_url: str) -> None:
     component_id = "subscription-task"
     components.html(
@@ -908,7 +1086,15 @@ def render_subscription_task_panel(api_url: str) -> None:
             color: #4e5665;
             font-size: 12px;
             line-height: 1.55;
+          }}
+          .sub-log-line {{
             white-space: pre-wrap;
+            overflow-wrap: anywhere;
+          }}
+          .sub-log-line + .sub-log-line {{
+            margin-top: 6px;
+            padding-top: 6px;
+            border-top: 1px dashed #e2e7ee;
           }}
           .subscription-toast {{
             position: fixed;
@@ -980,11 +1166,14 @@ def render_subscription_task_panel(api_url: str) -> None:
                 ? Math.max(0, Math.min(100, Number(state.percent)))
                 : (total ? Math.min(100, Math.round(current / total * 100)) : 0);
               bar.style.width = `${{percent}}%`;
-              const message = state.message === "订阅更新完成"
-                ? "下载完成。请在下方点击重新解析文件完成后再重构索引。"
-                : String(state.message || "").includes("解析完成后提交")
-                  ? "当前没有待解析订阅文件。订阅修改时间只会在重建向量索引完成后提交。"
-                : (state.message || state.current_name || "");
+              const updatedNames = Array.isArray(state.updated_names) ? state.updated_names : [];
+              const message = state.status === "completed" && updatedNames.length
+                ? `订阅更新完成：${{updatedNames.length}} 个`
+                : state.message === "订阅更新完成"
+                  ? "下载完成。请在下方点击重新解析文件完成后再重构索引。"
+                  : String(state.message || "").includes("解析完成后提交")
+                    ? "当前没有待解析订阅文件。订阅修改时间只会在重建向量索引完成后提交。"
+                    : (state.message || state.current_name || "");
               statusLine.textContent = `状态：${{labels[state.status] || state.status}} · ${{message}}`;
               detailLine.textContent = `进度：${{current}} / ${{total}} · 下载 ${{state.downloaded || 0}} 个，跳过 ${{state.skipped || 0}} 个，失败 ${{state.failed || 0}} 个`;
               const logs = Array.isArray(state.logs) ? state.logs : [];
@@ -992,7 +1181,12 @@ def render_subscription_task_panel(api_url: str) -> None:
               const nearBottom = logsBox.scrollHeight - logsBox.scrollTop - logsBox.clientHeight < 24;
               if (nextLogsText !== lastLogsText) {{
                 const previousScrollTop = logsBox.scrollTop;
-                logsBox.textContent = nextLogsText;
+                logsBox.replaceChildren(...(logs.length ? logs : ["暂无详细日志"]).map((log) => {{
+                  const line = document.createElement("div");
+                  line.className = "sub-log-line";
+                  line.textContent = log;
+                  return line;
+                }}));
                 if (userPinnedToBottom && nearBottom) {{
                   logsBox.scrollTop = logsBox.scrollHeight;
                 }} else {{
@@ -1002,7 +1196,7 @@ def render_subscription_task_panel(api_url: str) -> None:
               }}
               stopButton.style.display = runningStatuses.has(state.status) ? "inline-flex" : "none";
               stopButton.disabled = state.status === "stopping";
-              if (state.status === "completed" && Array.isArray(state.updated_names) && state.updated_names.length) {{
+              if (state.status === "completed") {{
                 showCompletionToast(state);
               }}
               if (state.cookie_refresh_required) {{
@@ -1010,25 +1204,32 @@ def render_subscription_task_panel(api_url: str) -> None:
               }}
             }}
             function formatDuration(seconds) {{
-              const total = Math.max(0, Number(seconds || 0));
+              const total = Math.max(0, Math.round(Number(seconds || 0)));
+              const hours = Math.floor(total / 3600);
               const minutes = Math.floor(total / 60);
               const remain = total % 60;
+              if (hours) return `${{hours}}小时${{minutes % 60}}分${{remain}}秒`;
               return minutes ? `${{minutes}}分${{remain}}秒` : `${{remain}}秒`;
             }}
             function showCompletionToast(state) {{
               const storageKey = "customer-rag-subscription-toast-job";
-              try {{
-                if (window.localStorage.getItem(storageKey) === state.job_id) return;
-                window.localStorage.setItem(storageKey, state.job_id);
-              }} catch (error) {{}}
               let doc = document;
               try {{ if (window.parent && window.parent.document) doc = window.parent.document; }} catch (error) {{}}
+              try {{
+                const storage = doc.defaultView.localStorage;
+                if (storage.getItem(storageKey) === state.job_id) return;
+                storage.setItem(storageKey, state.job_id);
+              }} catch (error) {{}}
               const oldToast = doc.getElementById("customer-rag-subscription-toast");
               if (oldToast) oldToast.remove();
               const toast = doc.createElement("div");
               toast.id = "customer-rag-subscription-toast";
               toast.className = "subscription-toast";
-              toast.textContent = `${{state.updated_names.join("、")}} 已经订阅更新完毕，本次更新总耗时 ${{formatDuration(state.duration_seconds)}}`;
+              const updatedNames = Array.isArray(state.updated_names) ? state.updated_names : [];
+              const resultText = updatedNames.length
+                ? `${{updatedNames.length}} 个订阅已更新完毕`
+                : "订阅检查完成，无需更新";
+              toast.textContent = `${{resultText}}，本次任务耗时 ${{formatDuration(state.duration_seconds)}}`;
               const style = doc.createElement("style");
               style.textContent = `.subscription-toast{{position:fixed;right:24px;bottom:24px;z-index:999999;max-width:460px;padding:14px 18px;border:1px solid #9bd4aa;border-radius:10px;background:#f0fff4;color:#216e39;box-shadow:0 10px 30px rgba(31,41,55,.18);font:600 14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;opacity:0;transform:translateY(12px);transition:opacity .2s ease,transform .2s ease}}.subscription-toast.visible{{opacity:1;transform:translateY(0)}}`;
               doc.head.appendChild(style);
@@ -2003,18 +2204,6 @@ with tab_import:
             for subscription in subscriptions
         ]
 
-    def subscription_table_height(row_count: int) -> int:
-        return min(360, 54 + max(4, min(row_count, 8)) * 40)
-
-    def render_subscription_dataframe(rows: list[dict]) -> None:
-        st.dataframe(
-            pd.DataFrame(rows),
-            hide_index=True,
-            use_container_width=True,
-            height=subscription_table_height(len(rows)),
-            column_order=["", "名称", "最后修改", "状态", "腾讯文档地址", "Tag"],
-        )
-
     left, right = st.columns([0.55, 0.45], gap="large")
     with left:
         render_subscription_header(LOCAL_TASK_API_URL)
@@ -2031,47 +2220,19 @@ with tab_import:
         save_clicked = save_col.button("保存订阅", use_container_width=True, disabled=task_busy, key="subscription_save")
 
         subscriptions = load_subscriptions(subscriptions_path())
-        base_subscription_rows = subscription_rows_from_items(subscriptions)
-        if "import_subscription_rows" not in st.session_state:
-            st.session_state["import_subscription_rows"] = base_subscription_rows
-        if "import_subscription_editor_version" not in st.session_state:
-            st.session_state["import_subscription_editor_version"] = 0
-        subscription_rows = list(st.session_state["import_subscription_rows"])
         if add_clicked:
             batch_add_subscription_dialog()
 
-        if task_busy:
-            render_subscription_dataframe(base_subscription_rows)
-            edited_subscription_records = base_subscription_rows
-        else:
-            edited_subscriptions = st.data_editor(
-                pd.DataFrame(subscription_rows),
-                key=f"tencent_doc_subscriptions_v2_{st.session_state['import_subscription_editor_version']}",
-                hide_index=True,
-                use_container_width=True,
-                height=subscription_table_height(len(subscription_rows)),
-                num_rows="fixed",
-                disabled=["最后修改", "状态"],
-                column_order=["", "名称", "最后修改", "状态", "腾讯文档地址", "Tag"],
-                column_config={
-                    "": st.column_config.CheckboxColumn("", width="small"),
-                    "名称": st.column_config.TextColumn("名称", width="medium"),
-                    "最后修改": st.column_config.TextColumn("最后修改", width="small"),
-                    "状态": st.column_config.TextColumn("状态", width="small"),
-                    "腾讯文档地址": st.column_config.TextColumn("腾讯文档地址", width="large"),
-                    "Tag": st.column_config.TextColumn("Tag", width="small"),
-                },
-            )
-            edited_subscription_records = edited_subscriptions.to_dict("records")
-        st.session_state["import_subscription_rows"] = edited_subscription_records
-        current_subscriptions, subscription_errors = edited_subscription_items(edited_subscription_records)
+        render_subscription_editor(LOCAL_TASK_API_URL, subscriptions, task_busy)
 
         if start_clicked:
+            current_subscriptions = load_subscriptions(subscriptions_path())
+            current_rows = subscription_rows_from_items(current_subscriptions)
+            _, subscription_errors = edited_subscription_items(current_rows)
             if subscription_errors:
                 for error in subscription_errors:
                     st.warning(error)
             else:
-                save_subscriptions(subscriptions_path(), current_subscriptions)
                 enabled_subscriptions = [subscription for subscription in current_subscriptions if subscription.enabled]
                 if not enabled_subscriptions:
                     st.info("请先启用至少一个订阅。")
@@ -2086,7 +2247,7 @@ with tab_import:
                             subscriptions_path(),
                             enabled_subscriptions,
                             cookie,
-                            origin="manual",
+                            origin="web",
                         )
                         if result.status == "busy":
                             st.warning(result.message)
@@ -2095,11 +2256,13 @@ with tab_import:
                             job_running = True
 
         if save_clicked:
+            current_subscriptions = load_subscriptions(subscriptions_path())
+            current_rows = subscription_rows_from_items(current_subscriptions)
+            _, subscription_errors = edited_subscription_items(current_rows)
             if subscription_errors:
                 for error in subscription_errors:
                     st.warning(error)
             else:
-                save_subscriptions(subscriptions_path(), current_subscriptions)
                 st.success("订阅已保存。")
 
         render_subscription_task_panel(LOCAL_TASK_API_URL)
