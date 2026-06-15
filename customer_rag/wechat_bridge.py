@@ -31,7 +31,7 @@ DEFAULT_PROMPT_SUFFIX = """
 """
 
 FALLBACK_CONTROL_MARKER = "__RAG_FUZZY_FALLBACK__"
-QUERY_CACHE_VERSION = 1
+QUERY_CACHE_VERSION = 3
 QUERY_CACHE_TTL_SECONDS = 0
 
 
@@ -64,7 +64,7 @@ def main() -> int:
         if not args.question_file or not args.output_file:
             raise ValueError("question-file and output-file are required")
         question = args.question_file.read_text(encoding="utf-8-sig").strip()
-        if not question:
+        if not question and not args.talk_only:
             raise ValueError("question file is empty")
 
         if args.talk_only:

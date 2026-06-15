@@ -45,6 +45,24 @@ class FixedTalkTests(unittest.TestCase):
         self.assertIsNone(match_fixed_talk("床垫", "领券链接", entries, assets))
         self.assertIsNotNone(match_fixed_talk("床垫", "对比图", entries, assets))
 
+    def test_empty_query_returns_all_fixed_entry_replies(self) -> None:
+        entries = [
+            FixedTalkEntry(
+                title="常用话术",
+                reply_rules=[FixedReplyRule(id="rule", keywords=["美的"], asset_ids=["copy"])],
+            )
+        ]
+        assets = [
+            AssetItem(id="copy", title="品牌文案", paths=[], categories=[], description="美的专属话术"),
+            AssetItem(id="general", title="通用文案", paths=[], categories=["常用话术"], description="通用兜底话术"),
+            AssetItem(id="other", title="售后文案", paths=[], categories=["售后话术"], description="售后回复"),
+        ]
+
+        result = match_fixed_talk("", "常用话术", entries, assets)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.answer, "美的专属话术\n---\n通用兜底话术")
+
     def test_engine_exposes_all_eight_shortcuts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store = TalkRagStore(Path(temp_dir) / "talk_rag")

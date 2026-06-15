@@ -15,7 +15,9 @@ import uuid
 from customer_rag.answering import build_structured_product_answer, is_product_query
 from customer_rag.attributes import NumericCondition, attributes_match, attributes_score, parse_numeric_conditions
 from customer_rag.category_config import add_category_terms
+from customer_rag.category_config import category_aliases
 from customer_rag.category_config import category_brands
+from customer_rag.category_config import _compound_aliases as _compound_category_aliases
 from customer_rag.category_config import category_terms as configured_category_terms
 from customer_rag.corpus import CorpusItem, CorpusStore
 from customer_rag.config import RagConfig
@@ -32,6 +34,7 @@ STRONG_KEYWORD_MATCH_SCORE = 100.0
 RAW_PARSE_CACHE_VERSION = "v1"
 MODEL_CODE_REMOVE_TRANS = str.maketrans("", "", " \t\r\n._-")
 QUICK_SEARCH_CACHE_VERSION = 1
+NO_MATCH_ANSWER = "\u6ca1\u6709\u505a\u8fd9\u6b3e\u5462\uff0c\u770b\u770b\u5176\u4ed6"
 FOOTREST_WITH_TERMS = ("\u6709\u811a\u8e0f", "\u5e26\u811a\u8e0f", "\u811a\u8e0f\u6b3e", "\u811a\u8e0f\u7248")
 FOOTREST_WITH_QUERY_TERMS = FOOTREST_WITH_TERMS + ("\u811a\u8e0f",)
 FOOTREST_WITHOUT_TERMS = ("\u65e0\u811a\u8e0f", "\u4e0d\u5e26\u811a\u8e0f", "\u4e0d\u8981\u811a\u8e0f")
@@ -344,7 +347,12 @@ class RagPipeline:
         timeout_seconds = self._search_timeout_seconds(question, precise_lookup=precise_lookup, product_query=product_query)
         deadline = started_at + timeout_seconds
         auto_tags = [] if selected_tags or precise_lookup or product_query else self._auto_search_tags(question)
-        search_tags = selected_tags or auto_tags
+        brand_search_tags = (
+            []
+            if selected_tags or auto_tags or not (precise_lookup or product_query)
+            else self._brand_search_tags(question)
+        )
+        search_tags = selected_tags or auto_tags or brand_search_tags
         tag_match = "all" if selected_tags else "any"
         category_query = _is_category_or_tag_query(question, self._tag_lookup_cache)
         product_query = product_query or category_query
@@ -365,6 +373,8 @@ class RagPipeline:
             if precise_lookup
             else []
         )
+        if precise_lookup and not model_code_sources and _is_standalone_model_code_lookup(question):
+            return RagResult(answer=_format_fuzzy_sources([]), sources=[], fallback=True)
         if precise_lookup and model_code_sources and model_code_sources[0].score >= STRONG_KEYWORD_MATCH_SCORE:
             confirmed_sources = _dedupe_sources_by_product(model_code_sources)
             answer = build_structured_product_answer(
@@ -586,11 +596,20 @@ class RagPipeline:
             max_products=self.config.top_k,
         )
         if answer is None:
-            if _known_brand_terms(question) and not _model_code_queries(question):
+            if _model_code_queries(question):
                 sources = []
-                answer = "资料中未找到相关信息。"
+                answer = NO_MATCH_ANSWER
             else:
-                answer = _format_fuzzy_sources(sources)
+                relaxed_answer = _format_relaxed_product_candidates(question, sources, system_prompt, self.config.top_k)
+                if relaxed_answer:
+                    answer = relaxed_answer
+                elif not sources:
+                    answer = NO_MATCH_ANSWER
+                elif _known_brand_terms(question):
+                    sources = []
+                    answer = NO_MATCH_ANSWER
+                else:
+                    answer = _format_fuzzy_sources(sources)
         return RagResult(answer=answer, sources=sources, warning=message, fallback=True)
 
     def model_code_search(
@@ -959,6 +978,18 @@ class RagPipeline:
                 matched_tags.append(tag)
         return matched_tags
 
+    def _brand_search_tags(self, question: str) -> list[str]:
+        brand_terms = _known_brand_terms(question)
+        if not brand_terms:
+            return []
+        self._corpus_items()
+        matched_tags: list[str] = []
+        for brand in brand_terms:
+            tag = self._tag_lookup_cache.get(brand.lower())
+            if tag and tag not in matched_tags:
+                matched_tags.append(tag)
+        return matched_tags
+
     def _source_tags_from_subscriptions(self) -> dict[str, list[str]]:
         subscriptions_path = self.config.index_dir / "tencent_doc_subscriptions.json"
         source_tags: dict[str, list[str]] = {}
@@ -1210,6 +1241,28 @@ def _has_time_left(deadline: float | None) -> bool:
     return deadline is None or time.monotonic() < deadline
 
 
+def _format_relaxed_product_candidates(
+    question: str,
+    sources: list[RetrievedChunk],
+    system_prompt: str | None,
+    max_products: int,
+) -> str | None:
+    if not sources or not is_product_query(question):
+        return None
+    answer = build_structured_product_answer(
+        question,
+        sources,
+        system_prompt=system_prompt,
+        require_question_match=False,
+        max_products=max_products,
+    )
+    if not answer:
+        return None
+    cleaned_question = re.sub(r"\s+", " ", question).strip()
+    prefix = f"\u6ca1\u6709\u7cbe\u786e\u627e\u5230{cleaned_question}\uff0c\u8fd9\u8fb9\u5148\u7ed9\u4f60\u770b\u4e0b\u76f8\u5173\u6b3e\u5f0f\uff1a"
+    return f"{prefix}\n{answer}"
+
+
 def _corpus_file_signature(path: Path) -> tuple[int, int]:
     stat = path.stat()
     return (stat.st_mtime_ns, stat.st_size)
@@ -1245,7 +1298,7 @@ def _run_daemon_with_timeout(callable_fn: Callable[[], object], timeout_seconds:
 
 def _format_fuzzy_sources(sources: list[RetrievedChunk]) -> str:
     if not sources:
-        return "资料中未找到相关信息。"
+        return NO_MATCH_ANSWER
     lines = ["模糊搜索结果："]
     for index, source in enumerate(sources, start=1):
         preview = re.sub(r"\s+", " ", source.text).strip()
@@ -1354,6 +1407,14 @@ def _keyword_score(
 def _is_precise_lookup(question: str) -> bool:
     normalized = question.strip()
     return bool(re.search(r"(?=[A-Za-z0-9._-]*[A-Za-z])(?=[A-Za-z0-9._-]*\d)[A-Za-z0-9._-]{3,}", normalized))
+
+
+def _is_standalone_model_code_lookup(question: str) -> bool:
+    compact_question = _compact_ascii_model_code(question)
+    if not (_is_model_code(compact_question) and len(compact_question) >= 5):
+        return False
+    codes = _model_code_queries(question)
+    return bool(codes) and compact_question in codes and all(char.isascii() or char.isspace() for char in question)
 
 
 def _is_model_code(value: str) -> bool:

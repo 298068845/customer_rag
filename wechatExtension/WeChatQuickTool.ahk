@@ -49,6 +49,7 @@ global PREVIEW_BRANDS := []
 global PREVIEW_SELECTED_BRAND := ""
 global PREVIEW_FORCE_SPLIT := false
 global PREVIEW_CLOSE_BUTTON := 0
+global PREVIEW_CLOSED_PRODUCT_COLOR := 0x0000CC
 global LAST_SEND_TICK := 0
 global MIN_SEND_INTERVAL_MS := 300
 global SEND_IN_PROGRESS := false
@@ -257,11 +258,7 @@ StartRagFromQueryDialog(*) {
     FileAppend question, LAST_SELECTED_PATH, "UTF-8"
     CloseQueryDialog()
     if (queryMode = "talk") {
-        if (question = "") {
-            ShowSendPreview("", "", "", "talk_shortcuts")
-        } else {
-            AskRagForSelection("", true, true)
-        }
+        AskRagForSelection("", true, true)
     } else {
         AskRagForSelection()
     }
@@ -414,7 +411,7 @@ CheckRagQueryDone() {
 
 WriteRagFallbackResult() {
     FileDeleteSafe(SEND_TEXT_PATH)
-    FileAppend "__RAG_FUZZY_FALLBACK__`n资料中未找到相关信息", SEND_TEXT_PATH, "UTF-8"
+    FileAppend "__RAG_FUZZY_FALLBACK__`n没有做这款呢，看看其他", SEND_TEXT_PATH, "UTF-8"
 }
 
 ShowRagResultPreview() {
@@ -566,6 +563,7 @@ ShowSendPreview(text, mouseX := "", mouseY := "", mode := "query") {
 
     PREVIEW_GUI.SetFont("s9 c2F2620", "Microsoft YaHei")
     PREVIEW_LIST := PREVIEW_GUI.AddListView("xm y+8 w476 h132 Checked -Multi BackgroundFFF9F2 c2F2620", [T("list_header"), "full_text"])
+    PREVIEW_LIST.OnNotify(-12, PreviewListCustomDraw)
     PREVIEW_LIST.ModifyCol(1, 452)
     PREVIEW_LIST.ModifyCol(2, 0)
 
@@ -745,6 +743,7 @@ UpdatePreviewText() {
     PREVIEW_LIST.Delete()
     checkedCount := 0
     fallbackText := FallbackManualReply()
+    allResultsClosed := AreAllProductResultsClosed()
     if PREVIEW_FALLBACK_MODE {
         PREVIEW_LIST.Add("Check", MakeListPreview(fallbackText), fallbackText)
         checkedCount += 1
@@ -753,7 +752,7 @@ UpdatePreviewText() {
         if CleanOneLine(part) = fallbackText {
             continue
         }
-        options := (PREVIEW_TAB_DEFAULT_CHECKED && ShouldDefaultCheckPart(part)) ? "Check" : ""
+        options := (PREVIEW_TAB_DEFAULT_CHECKED && ShouldDefaultCheckPart(part, allResultsClosed)) ? "Check" : ""
         if options = "Check" {
             checkedCount += 1
         }
@@ -764,18 +763,70 @@ UpdatePreviewText() {
     }
 }
 
-ShouldDefaultCheckPart(text) {
+PreviewListCustomDraw(control, lParam) {
+    global PREVIEW_CLOSED_PRODUCT_COLOR
+
+    drawStage := NumGet(lParam, A_PtrSize = 8 ? 24 : 12, "UInt")
+    if drawStage = 0x00000001 {
+        return 0x00000020
+    }
+    if drawStage != 0x00010001 {
+        return 0
+    }
+
+    row := NumGet(lParam, A_PtrSize = 8 ? 56 : 36, "UPtr") + 1
+    try fullText := control.GetText(row, 2)
+    catch {
+        fullText := ""
+    }
+    if IsClosedProductResult(fullText) {
+        NumPut("UInt", PREVIEW_CLOSED_PRODUCT_COLOR, lParam, A_PtrSize = 8 ? 80 : 48)
+    }
+    return 0
+}
+
+IsClosedProductResult(text) {
+    cleaned := CleanOneLine(text)
+    if cleaned = "" || cleaned = TemporaryClosedReply() {
+        return false
+    }
+    return InStr(cleaned, "截团") > 0
+}
+
+IsProductResultPart(text) {
+    cleaned := CleanOneLine(text)
+    return cleaned != "" && cleaned != TemporaryClosedReply() && cleaned != FallbackManualReply()
+}
+
+AreAllProductResultsClosed() {
+    global PREVIEW_PARTS
+
+    productCount := 0
+    closedCount := 0
+    for index, part in PREVIEW_PARTS {
+        if !IsProductResultPart(part) {
+            continue
+        }
+        productCount += 1
+        if IsClosedProductResult(part) {
+            closedCount += 1
+        }
+    }
+    return productCount > 0 && productCount = closedCount
+}
+
+ShouldDefaultCheckPart(text, allResultsClosed := false) {
     global PREVIEW_FALLBACK_MODE
 
     cleaned := CleanOneLine(text)
     if PREVIEW_FALLBACK_MODE {
         return cleaned = FallbackManualReply()
     }
-    if InStr(cleaned, "暂时截团") {
+    if cleaned = TemporaryClosedReply() {
         return true
     }
     if InStr(cleaned, "截团") {
-        return false
+        return allResultsClosed
     }
     return true
 }
@@ -1727,9 +1778,13 @@ TryFocusSendBoxByUIAutomation(hwnd) {
 
 CreateUIAutomation() {
     try {
-        return ComObject("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+        uia := ComObject("UIAutomationClient.CUIAutomation")
+        uia.CreateTrueCondition()
+        return uia
     } catch {
-        return ComObject("UIAutomationClient.CUIAutomation")
+        uia := ComObject("{ff48dba4-60ef-4201-aa87-54103eef594e}")
+        uia.CreateTrueCondition()
+        return uia
     }
 }
 
@@ -2188,7 +2243,7 @@ PreparePreviewSourceText(text) {
         if !InStr(output, fallbackText) {
             output .= (output = "" ? "" : "`n---`n") fallbackText
         }
-    } else if InStr(output, "暂时截团") {
+    } else if InStr(output, "截团") {
         temporaryClosedText := TemporaryClosedReply()
         if !InStr(output, temporaryClosedText) {
             output := temporaryClosedText (output = "" ? "" : "`n---`n" output)
@@ -2198,7 +2253,7 @@ PreparePreviewSourceText(text) {
 }
 
 FallbackManualReply() {
-    return "没做这款的，看看其他的呢"
+    return "没有做这款呢，看看其他"
 }
 
 TemporaryClosedReply() {

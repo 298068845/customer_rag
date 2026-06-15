@@ -64,6 +64,20 @@ st.markdown(
         display: flex;
         align-items: center;
         margin-bottom: 0;
+            font-size: 14px;
+            color: #303544;
+            font-weight: 400;
+        }
+        /* 优化按钮区域的对齐和间距 */
+        div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlock"]:has(.compact-transfer-title) {
+            gap: 8px;
+        }
+        /* 优化导入导出按钮容器的布局 */
+        div[data-testid="stVerticalBlock"]:has(div[data-testid="stDownloadButton"]) {
+            margin-top: 8px;
+            font-size: 14px;
+            color: #303544;
+            font-weight: 400;
         transform: translateY(-8px);
     }
     .chain-step {
@@ -84,17 +98,18 @@ st.markdown(
         font-size: 20px;
         font-weight: 700;
         color: #303544;
-        margin: 0 0 4px 0;
+        margin: 0 0 8px 0;
         line-height: 1.25;
     }
     .compact-transfer-note {
         color: #8a94a6;
         font-size: 13px;
-        margin: 0 0 8px 0;
+        margin: 0 0 12px 0;
         line-height: 1.35;
     }
     div[data-testid="stCheckbox"] {
-        min-height: 28px;
+        min-height: 32px;
+        margin-bottom: 12px;
     }
     div[data-testid="stCheckbox"] label {
         margin-bottom: 0;
@@ -189,8 +204,9 @@ def main() -> None:
 def render_config_transfer() -> None:
     st.markdown("<div class='compact-transfer-title'>配置导入导出</div>", unsafe_allow_html=True)
     include_realtime, selected_fixed_titles = render_config_transfer_scope()
+    
     export_name = f"talk-rag-config-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
-    action_cols = st.columns([0.28, 0.28, 0.44], gap="small", vertical_alignment="bottom")
+    action_cols = st.columns([0.3, 0.3, 0.4], gap="small", vertical_alignment="center")
     with action_cols[0]:
         st.download_button(
             "导出配置 ZIP",

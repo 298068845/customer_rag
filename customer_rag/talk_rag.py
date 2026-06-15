@@ -610,8 +610,10 @@ def match_fixed_talk(
     assets: list[AssetItem],
 ) -> TalkMatch | None:
     entry = next((item for item in entries if item.title == entry_title), None)
-    if entry is None or not normalize_text(question):
+    if entry is None:
         return None
+    if not normalize_text(question):
+        return render_all_fixed_talk(entry, assets)
     assets_by_id = {item.id: item for item in assets}
     for rule in entry.reply_rules:
         matched_keyword = next(
@@ -640,6 +642,36 @@ def match_fixed_talk(
             assets=matched_assets,
         )
     return None
+
+
+def render_all_fixed_talk(entry: FixedTalkEntry, assets: list[AssetItem]) -> TalkMatch | None:
+    assets_by_id = {item.id: item for item in assets}
+    selected_assets: list[AssetItem] = []
+    selected_asset_ids: set[str] = set()
+    for rule in entry.reply_rules:
+        for asset_id in rule.asset_ids:
+            asset = assets_by_id.get(asset_id)
+            if asset and asset.id not in selected_asset_ids:
+                selected_assets.append(asset)
+                selected_asset_ids.add(asset.id)
+    for asset in assets:
+        if entry.title in asset.categories and asset.id not in selected_asset_ids:
+            selected_assets.append(asset)
+            selected_asset_ids.add(asset.id)
+    answer = render_fixed_assets(selected_assets)
+    if not answer:
+        return None
+    return TalkMatch(
+        answer=answer,
+        link=None,
+        chain=[
+            f"固定话术：{entry.title}",
+            "空查询返回全量回复",
+            "回复素材：" + "、".join(item.title for item in selected_assets),
+        ],
+        score=80,
+        assets=selected_assets,
+    )
 
 
 def render_fixed_assets(assets: list[AssetItem]) -> str:
