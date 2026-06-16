@@ -34,6 +34,7 @@ start_subscription_job = subscription_jobs_module.start_subscription_job
 from customer_rag.tencent_docs import (
     TencentDocSubscription,
     load_subscriptions,
+    merge_reimported_subscriptions,
     save_subscriptions,
     subscription_output_path,
 )
@@ -1715,10 +1716,21 @@ def delete_selected_subscriptions() -> int:
     if not selected_urls:
         return 0
     current = load_subscriptions(subscriptions_path())
+    removed_subscriptions = [subscription for subscription in current if subscription.url in selected_urls]
     kept = [subscription for subscription in current if subscription.url not in selected_urls]
     removed = len(current) - len(kept)
     if removed:
         save_subscriptions(subscriptions_path(), kept)
+        removed_paths = {
+            subscription_output_path(subscription, cfg.raw_data_dir)
+            for subscription in removed_subscriptions
+        }
+        for path in removed_paths:
+            path.unlink(missing_ok=True)
+        stats = get_pipeline().delete_sources(removed_paths, rebuild_index=True)
+        if stats.get("index_error"):
+            queue_ui_notice("warning", f"订阅已删除，但向量索引重建失败：{stats['index_error']}")
+        cached_corpus_item_payloads.clear()
     save_subscription_delete_selection(set())
     return removed
 
@@ -1875,15 +1887,19 @@ def batch_add_subscription_dialog() -> None:
             st.warning("没有识别到可增加的订阅。")
             return
         existing_subscriptions = load_subscriptions(subscriptions_path())
-        existing_urls = {subscription.url for subscription in existing_subscriptions}
-        new_rows = [row for row in rows if row["腾讯文档地址"] not in existing_urls]
-        skipped = len(rows) - len(new_rows)
-        new_subscriptions = subscription_rows_to_items(new_rows)
+        merged_subscriptions, merge_stats = merge_reimported_subscriptions(
+            existing_subscriptions,
+            subscription_rows_to_items(rows),
+        )
         save_subscriptions(
             subscriptions_path(),
-            new_subscriptions + existing_subscriptions,
+            merged_subscriptions,
         )
-        queue_ui_notice("success", f"已增加 {len(new_rows)} 个订阅" + (f"，跳过重复 {skipped} 个" if skipped else ""))
+        queue_ui_notice(
+            "success",
+            f"已增加 {merge_stats['added']} 个订阅，更新 {merge_stats['updated']} 个同名订阅"
+            + (f"，跳过重复 {merge_stats['skipped']} 个" if merge_stats["skipped"] else ""),
+        )
         st.rerun()
 
 

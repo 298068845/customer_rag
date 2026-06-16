@@ -1039,6 +1039,44 @@ class RagPipeline:
     def delete_corpus_many(self, item_ids: set[str]) -> int:
         return self.corpus.delete_many(item_ids)
 
+    def delete_sources(
+        self,
+        sources: set[str | Path],
+        *,
+        rebuild_index: bool = True,
+    ) -> dict[str, int | str | None]:
+        source_values = {str(source) for source in sources if str(source).strip()}
+        removed = self.corpus.delete_by_sources(source_values)
+        self._remove_raw_parse_manifest_sources(source_values)
+        chunks = 0
+        index_error = None
+        if rebuild_index and removed:
+            try:
+                chunks = self.rebuild_index()
+            except RuntimeError as exc:
+                index_error = str(exc)
+        return {
+            "removed": removed,
+            "chunks": chunks,
+            "index_error": index_error,
+        }
+
+    def _remove_raw_parse_manifest_sources(self, sources: set[str]) -> None:
+        if not sources:
+            return
+        manifest = self._read_raw_parse_manifest()
+        if not manifest:
+            return
+        source_keys = {_raw_path_key(Path(source)) for source in sources}
+        source_keys.update(_normalize_path_value(source) for source in sources)
+        next_manifest = {
+            key: value
+            for key, value in manifest.items()
+            if _normalize_path_value(key) not in source_keys
+        }
+        if len(next_manifest) != len(manifest):
+            self._write_raw_parse_manifest(next_manifest)
+
     def add_tags_to_corpus_many(self, item_ids: set[str], tags: list[str]) -> int:
         return self.corpus.add_tags_many(item_ids, tags)
 

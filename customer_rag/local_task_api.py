@@ -229,6 +229,7 @@ class _TaskApiHandler(BaseHTTPRequestHandler):
         for item in subscriptions:
             if item.url == original_url:
                 changed = True
+                url_changed = item.url != next_url
                 updated.append(
                     TencentDocSubscription(
                         name=name,
@@ -236,8 +237,8 @@ class _TaskApiHandler(BaseHTTPRequestHandler):
                         tags=tags,
                         enabled=enabled,
                         last_updated=item.last_updated,
-                        last_status=item.last_status,
-                        last_modified=item.last_modified,
+                        last_status="" if url_changed else item.last_status,
+                        last_modified="" if url_changed else item.last_modified,
                     )
                 )
             else:

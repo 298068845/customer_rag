@@ -106,6 +106,42 @@ def save_subscriptions(path: Path, subscriptions: list[TencentDocSubscription]) 
     )
 
 
+def merge_reimported_subscriptions(
+    existing_subscriptions: list[TencentDocSubscription],
+    imported_subscriptions: list[TencentDocSubscription],
+) -> tuple[list[TencentDocSubscription], dict[str, int]]:
+    merged = list(existing_subscriptions)
+    stats = {"added": 0, "updated": 0, "skipped": 0}
+    for imported in imported_subscriptions:
+        same_url_index = next(
+            (index for index, subscription in enumerate(merged) if subscription.url == imported.url),
+            None,
+        )
+        if same_url_index is not None:
+            stats["skipped"] += 1
+            continue
+
+        same_name_index = next(
+            (index for index, subscription in enumerate(merged) if subscription.name == imported.name),
+            None,
+        )
+        if same_name_index is None:
+            merged.insert(0, imported)
+            stats["added"] += 1
+            continue
+
+        merged[same_name_index] = TencentDocSubscription(
+            name=imported.name,
+            url=imported.url,
+            tags=imported.tags,
+            enabled=imported.enabled,
+            last_status="",
+            last_modified="",
+        )
+        stats["updated"] += 1
+    return merged, stats
+
+
 def download_subscription(
     subscription: TencentDocSubscription,
     raw_data_dir: Path,

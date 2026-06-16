@@ -72,6 +72,7 @@ global QUERY_MODE := "standard"
 global PASTE_ONLY_MODE := false
 
 EnsureBootstrapFiles()
+OnError(LogUnhandledRuntimeError)
 
 if HasArg("--preview-test") {
     RunPreviewSelfTest()
@@ -857,7 +858,9 @@ SendNextPreviewPart() {
     text := PREVIEW_LIST.GetText(row, 2)
     SEND_IN_PROGRESS := true
     try {
-        PasteTextToWeChat(text)
+        if !PasteTextToWeChat(text) {
+            return
+        }
         if !IsObject(PREVIEW_LIST) {
             SEND_IN_PROGRESS := false
             return
@@ -942,59 +945,92 @@ ClosePreview(*) {
 
 PasteTextToWeChat(text) {
     global LAST_SEND_TICK, MIN_SEND_INTERVAL_MS, PASTE_ONLY_MODE
+    static pasteActive := false
 
-    testMode := PASTE_ONLY_MODE || ReadBoolConfig("send", "test_mode", false)
-    imagePath := ExtractImagePath(text)
-    textToSend := RemoveMediaMetadataLines(text)
-    if (Trim(textToSend) = "" && imagePath = "") {
-        ShowTip("消息为空")
-        return
+    if pasteActive {
+        ShowTip("上一条消息仍在发送，请稍候")
+        return false
     }
+    pasteActive := true
 
-    WaitForSendInterval()
-    restoreClipboard := ReadBoolConfig("send", "restore_clipboard_after_paste", false)
-    oldClipboard := restoreClipboard ? ClipboardAll() : 0
+    restoreClipboard := false
+    oldClipboard := 0
+    sentSomething := false
+    testMode := false
+    textToSend := ""
+    imagePath := ""
+    clipboardImagePath := ""
+    try {
+        testMode := PASTE_ONLY_MODE || ReadBoolConfig("send", "test_mode", false)
+        imagePath := ExtractImagePath(text)
+        textToSend := RemoveMediaMetadataLines(text)
+        if (Trim(textToSend) = "" && imagePath = "") {
+            ShowTip("消息为空")
+            return false
+        }
 
-    if !FocusSendBox() {
-        ShowTip("未能自动定位微信发送框，已取消粘贴")
-        return
-    }
-    if (Trim(textToSend) != "") {
-        A_Clipboard := textToSend
-        Sleep ReadIntConfig("send", "clipboard_settle_ms", 80)
-        Send "^v"
-        Sleep ReadIntConfig("send", "after_text_paste_ms", 180)
-    }
-
-    if (imagePath != "" && FileExist(imagePath)) {
-        clipboardImagePath := SetClipboardImage(imagePath)
-        if clipboardImagePath {
-            Sleep ImageClipboardSettleMs(clipboardImagePath)
-            Send "^v"
-            Sleep ImagePasteWaitMs(clipboardImagePath)
-            if !testMode && ReadBoolConfig("send", "send_image_before_text", false) {
-                PrepareImageEnter()
-                PressSendShortcut()
-                Sleep ReadIntConfig("send", "after_image_enter_ms", 500)
+        WaitForSendInterval()
+        restoreClipboard := ReadBoolConfig("send", "restore_clipboard_after_paste", false)
+        if restoreClipboard {
+            try oldClipboard := ClipboardAll()
+            catch {
+                oldClipboard := 0
+                restoreClipboard := false
             }
-        } else {
-            ShowTip("图片复制失败")
         }
-    }
 
-    if !testMode && ReadBoolConfig("send", "press_enter", true) && (Trim(textToSend) != "" || imagePath != "") {
-        Sleep ReadIntConfig("send", "before_enter_ms", 120)
-        if (imagePath != "") {
-            PrepareImageEnter()
+        if !FocusSendBox() {
+            ShowTip("未能自动定位微信发送框，已取消粘贴")
+            return false
         }
-        PressSendShortcut()
-    }
+        if (Trim(textToSend) != "") {
+            A_Clipboard := textToSend
+            Sleep ReadIntConfig("send", "clipboard_settle_ms", 80)
+            Send "^v"
+            Sleep ReadIntConfig("send", "after_text_paste_ms", 180)
+            sentSomething := true
+        }
 
-    if restoreClipboard {
-        A_Clipboard := oldClipboard
+        if (imagePath != "" && FileExist(imagePath)) {
+            clipboardImagePath := SetClipboardImage(imagePath)
+            if clipboardImagePath {
+                Sleep ImageClipboardSettleMs(clipboardImagePath)
+                Send "^v"
+                Sleep ImagePasteWaitMs(clipboardImagePath)
+                sentSomething := true
+                if !testMode && ReadBoolConfig("send", "send_image_before_text", false) {
+                    PrepareImageEnter()
+                    PressSendShortcut()
+                    Sleep ReadIntConfig("send", "after_image_enter_ms", 500)
+                }
+            } else {
+                ShowTip("图片复制失败")
+                return false
+            }
+        }
+
+        if !testMode && ReadBoolConfig("send", "press_enter", true) && sentSomething {
+            Sleep ReadIntConfig("send", "before_enter_ms", 120)
+            if (imagePath != "") {
+                PrepareImageEnter()
+            }
+            PressSendShortcut()
+        }
+
+        LAST_SEND_TICK := A_TickCount
+        ShowTip(testMode ? "测试模式：已粘贴，未发送" : "已粘贴到发送框")
+        return true
+    } catch as exc {
+        details := "text_len=" StrLen(textToSend) "`nimage_path=" imagePath "`nclipboard_image_path=" clipboardImagePath
+        LogSendErrorWithContext(exc, details)
+        ShowTip("发送失败，请重试")
+        return false
+    } finally {
+        if restoreClipboard {
+            try A_Clipboard := oldClipboard
+        }
+        pasteActive := false
     }
-    LAST_SEND_TICK := A_TickCount
-    ShowTip(testMode ? "测试模式：已粘贴，未发送" : "已粘贴到发送框")
 }
 
 PrepareImageEnter() {
@@ -1963,6 +1999,30 @@ LogSendError(exc) {
     try FileAppend details "`n`n", SEND_ERROR_LOG_PATH, "UTF-8"
 }
 
+LogSendErrorWithContext(exc, context := "") {
+    global SEND_ERROR_LOG_PATH
+
+    details := context
+    if (details != "") {
+        details .= "`n"
+    }
+    details .= "[" A_Now "] " exc.Message
+    try details .= "`nwhat=" exc.What
+    try details .= "`nfile=" exc.File
+    try details .= "`nline=" exc.Line
+    try details .= "`nstack=" exc.Stack
+    try FileAppend details "`n`n", SEND_ERROR_LOG_PATH, "UTF-8"
+}
+
+LogUnhandledRuntimeError(exc, mode := "") {
+    context := "unhandled=1"
+    if (mode != "") {
+        context .= "`nmode=" mode
+    }
+    LogSendErrorWithContext(exc, context)
+    return true
+}
+
 
 GetWorkAreaForPoint(x, y, &left, &top, &right, &bottom) {
     count := MonitorGetCount()
@@ -2684,8 +2744,12 @@ RunPasteImageSelfTest() {
             Send "{Backspace}"
             Sleep 180
         }
-        PasteTextToWeChat("图片：" imagePath)
-        FileAppend "pasted=1`n", resultPath, "UTF-8"
+        pasted := PasteTextToWeChat("图片：" imagePath)
+        FileAppend "pasted=" (pasted ? "1" : "0") "`n", resultPath, "UTF-8"
+        if !pasted {
+            FileAppend "error=paste_returned_false`n", resultPath, "UTF-8"
+            return
+        }
         ClearClipboardAll()
         Sleep 120
         Send "^a"
