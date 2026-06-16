@@ -18,6 +18,7 @@ FIELD_NOTE = "\u9650\u5236\u8bf4\u660e"
 FOOTREST_WITH_TERMS = ("\u6709\u811a\u8e0f", "\u5e26\u811a\u8e0f", "\u811a\u8e0f\u6b3e", "\u811a\u8e0f\u7248")
 FOOTREST_WITH_QUERY_TERMS = FOOTREST_WITH_TERMS + ("\u811a\u8e0f",)
 FOOTREST_WITHOUT_TERMS = ("\u65e0\u811a\u8e0f", "\u4e0d\u5e26\u811a\u8e0f", "\u4e0d\u8981\u811a\u8e0f")
+PLATFORM_BRAND_EXCLUSIONS = {"\u4eac\u4e1c", "\u5929\u732b", "\u6dd8\u5b9d", "jd", "tmall", "taobao"}
 
 
 PRODUCT_QUERY_WORDS = (
@@ -190,7 +191,8 @@ def _product_identity(product_name: str, fields: dict[str, str]) -> str:
     brand = fields.get("品牌", "")
     normalized_name = re.sub(r"\s+", "", product_name).lower()
     if normalized_name:
-        return f"product:{brand.strip().lower()}:{normalized_name}"
+        platform = _link_platform(link)
+        return f"product:{brand.strip().lower()}:{normalized_name}:{platform}"
     if link:
         return f"link:{link.strip().lower()}"
     return f"{brand.strip().lower()}:{normalized_name}"
@@ -202,7 +204,24 @@ def _product_series_identity(title: str, product_name: str, fields: dict[str, st
     normalized_name = _series_model_code(f"{first_line}\n{product_name}") or re.sub(r"\s+", "", first_line).lower()
     variant_text = "\n".join([product_name, fields.get(FIELD_MODEL, ""), fields.get(FIELD_NOTE, "")])
     variant = _footrest_text_state(variant_text)
-    return f"{brand}:{normalized_name}:{variant}" if variant else f"{brand}:{normalized_name}"
+    platform = _link_platform(fields.get("商品链接", ""))
+    if variant:
+        return f"{brand}:{normalized_name}:{variant}:{platform}"
+    return f"{brand}:{normalized_name}:{platform}"
+
+
+def _link_platform(link: str) -> str:
+    match = re.match(r"https?://([^/?#]+)", str(link or "").strip().lower())
+    if not match:
+        return ""
+    host = match.group(1).split("@")[-1].split(":")[0]
+    if host == "3.cn" or host == "jd.com" or host.endswith(".jd.com") or host == "jd.hk" or host.endswith(".jd.hk"):
+        return "jd"
+    if host == "tmall.com" or host.endswith(".tmall.com") or host == "tmall.hk" or host.endswith(".tmall.hk"):
+        return "tmall"
+    if host == "taobao.com" or host.endswith(".taobao.com") or host == "tb.cn" or host.endswith(".tb.cn"):
+        return "taobao"
+    return ""
 
 
 def _product_title(value: str) -> str:
@@ -443,7 +462,11 @@ def _known_brand_terms(query: str) -> list[str]:
     for brands in category_brands().values():
         known_brands.extend(brands)
     lowered = query.lower()
-    matched = [brand for brand in known_brands if brand in query or brand.lower() in lowered]
+    matched = [
+        brand
+        for brand in known_brands
+        if brand.lower() not in PLATFORM_BRAND_EXCLUSIONS and (brand in query or brand.lower() in lowered)
+    ]
     return list(dict.fromkeys(matched))
 
 

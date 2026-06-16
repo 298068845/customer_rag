@@ -67,6 +67,41 @@ class FixedTalkTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.answer, "美的专属话术\n---\n通用兜底话术")
 
+    def test_platform_keyword_promotes_matching_order_link_prefix(self) -> None:
+        entries = [
+            FixedTalkEntry(
+                title="links",
+                reply_rules=[FixedReplyRule(id="rule", keywords=["sofa"], asset_ids=["taobao", "jd", "neutral"])],
+            )
+        ]
+        assets = [
+            AssetItem(id="taobao", title="taobao", paths=[], categories=[], description="order https://s.click.taobao.com/abc"),
+            AssetItem(id="jd", title="jd", paths=[], categories=[], description="order https://u.jd.com/abc"),
+            AssetItem(id="neutral", title="neutral", paths=[], categories=[], description="no order link"),
+        ]
+
+        result = match_fixed_talk("\u4eac\u4e1c sofa", "links", entries, assets)
+
+        self.assertIsNotNone(result)
+        self.assertEqual([asset.id for asset in result.assets], ["jd", "taobao", "neutral"])
+
+    def test_tmall_keyword_promotes_tmall_before_taobao_short_link(self) -> None:
+        entries = [
+            FixedTalkEntry(
+                title="links",
+                reply_rules=[FixedReplyRule(id="rule", keywords=["lamp"], asset_ids=["taobao", "tmall"])],
+            )
+        ]
+        assets = [
+            AssetItem(id="taobao", title="taobao", paths=[], categories=[], description="order https://s.click.taobao.com/abc"),
+            AssetItem(id="tmall", title="tmall", paths=[], categories=[], description="order https://detail.tmall.com/item.htm?id=1"),
+        ]
+
+        result = match_fixed_talk("\u5929\u732b lamp", "links", entries, assets)
+
+        self.assertIsNotNone(result)
+        self.assertEqual([asset.id for asset in result.assets], ["tmall", "taobao"])
+
     def test_combined_talk_expands_mapping_term_to_fixed_keywords(self) -> None:
         config = CombinedTalkConfig(
             triggers=["检索{keyword}"],

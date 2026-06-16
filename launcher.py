@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.request
 import webbrowser
+import ctypes
 from datetime import datetime
 from pathlib import Path
 
@@ -45,6 +46,7 @@ LOCATOR_MODE_LABELS = {
 }
 SUBSCRIPTION_COMPLETE_NOTIFY_SECTION = "notify"
 SUBSCRIPTION_COMPLETE_NOTIFY_KEY = "subscription_complete"
+SINGLE_INSTANCE_MUTEX_NAME = "Local\\CustomerRagLauncher_9E4D52A1"
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -56,9 +58,12 @@ streamlit_process: subprocess.Popen | None = None
 talk_streamlit_process: subprocess.Popen | None = None
 llama_server_process: subprocess.Popen | None = None
 rag_ready = False
+single_instance_mutex_handle: int | None = None
 
 
 def main() -> None:
+    if not acquire_single_instance():
+        return
     ensure_python()
     refresh_wechat_state()
     icon = pystray.Icon(
@@ -70,6 +75,23 @@ def main() -> None:
     threading.Thread(target=start_all, args=(icon,), daemon=True).start()
     threading.Thread(target=monitor_cookie_login_state, args=(icon,), daemon=True).start()
     icon.run()
+
+
+def acquire_single_instance() -> bool:
+    if sys.platform != "win32":
+        return True
+    global single_instance_mutex_handle
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    handle = kernel32.CreateMutexW(None, False, SINGLE_INSTANCE_MUTEX_NAME)
+    if not handle:
+        return True
+    if ctypes.get_last_error() == 183:
+        kernel32.CloseHandle(handle)
+        return False
+    single_instance_mutex_handle = handle
+    return True
 
 
 def build_menu() -> pystray.Menu:

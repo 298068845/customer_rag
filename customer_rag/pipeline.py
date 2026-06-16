@@ -38,6 +38,16 @@ NO_MATCH_ANSWER = "\u6ca1\u6709\u505a\u8fd9\u6b3e\u5462\uff0c\u770b\u770b\u5176\
 FOOTREST_WITH_TERMS = ("\u6709\u811a\u8e0f", "\u5e26\u811a\u8e0f", "\u811a\u8e0f\u6b3e", "\u811a\u8e0f\u7248")
 FOOTREST_WITH_QUERY_TERMS = FOOTREST_WITH_TERMS + ("\u811a\u8e0f",)
 FOOTREST_WITHOUT_TERMS = ("\u65e0\u811a\u8e0f", "\u4e0d\u5e26\u811a\u8e0f", "\u4e0d\u8981\u811a\u8e0f")
+PLATFORM_QUERY_TERMS: dict[str, tuple[str, ...]] = {
+    "jd": ("\u4eac\u4e1c", "jd"),
+    "tmall": ("\u5929\u732b", "tmall"),
+    "taobao": ("\u6dd8\u5b9d", "taobao"),
+}
+PLATFORM_BRAND_EXCLUSIONS = {
+    term.lower()
+    for terms in PLATFORM_QUERY_TERMS.values()
+    for term in terms
+}
 
 
 @dataclass(frozen=True)
@@ -390,6 +400,7 @@ class RagPipeline:
                 deadline,
             )
         if precise_lookup and model_code_sources and model_code_sources[0].score >= STRONG_KEYWORD_MATCH_SCORE:
+            model_code_sources = _rank_sources_for_requested_platform(question, model_code_sources)
             confirmed_sources = _dedupe_sources_by_product(model_code_sources)
             answer = build_structured_product_answer(
                 question,
@@ -432,6 +443,7 @@ class RagPipeline:
             )
             keyword_sources = _merge_sources(fast_category_sources, keyword_sources)
         keyword_sources = _merge_sources(model_code_sources, keyword_sources)
+        keyword_sources = _rank_sources_for_requested_platform(question, keyword_sources)
         strong_keyword_match = bool(
             keyword_sources and keyword_sources[0].score >= STRONG_KEYWORD_MATCH_SCORE
         )
@@ -516,19 +528,24 @@ class RagPipeline:
                     return self._fuzzy_fallback_result(question, keyword_sources or sources, system_prompt, search_tags, None, deadline)
             sources = _merge_sources(attribute_sources, sources)
         sources = _apply_numeric_conditions(
-            _filter_weak_sources(_dedupe_sources_by_product(sources)),
+            _filter_weak_sources(_dedupe_sources_by_product(_rank_sources_for_requested_platform(question, sources))),
             conditions,
         )[: self.config.top_k]
 
         answer_sources = sources
         if precise_product_lookup and keyword_sources:
             answer_sources = _apply_numeric_conditions(
-                _dedupe_sources_by_product(_merge_sources(sources, keyword_sources)),
+                _dedupe_sources_by_product(_rank_sources_for_requested_platform(question, _merge_sources(sources, keyword_sources))),
                 conditions,
             )
         if product_query:
             answer_sources = _apply_numeric_conditions(
-                _dedupe_sources_by_product(_merge_sources(_merge_sources(attribute_sources, keyword_sources), sources)),
+                _dedupe_sources_by_product(
+                    _rank_sources_for_requested_platform(
+                        question,
+                        _merge_sources(_merge_sources(attribute_sources, keyword_sources), sources),
+                    )
+                ),
                 conditions,
             )
             if broad_category_query:
@@ -1575,7 +1592,11 @@ def _known_brand_terms(query: str) -> list[str]:
     for brands in category_brands().values():
         known_brands.extend(brands)
     lowered = query.lower()
-    matched = [brand.lower() for brand in known_brands if brand in query or brand.lower() in lowered]
+    matched = [
+        brand.lower()
+        for brand in known_brands
+        if brand.lower() not in PLATFORM_BRAND_EXCLUSIONS and (brand in query or brand.lower() in lowered)
+    ]
     return list(dict.fromkeys(matched))
 
 
@@ -1710,11 +1731,61 @@ def _source_product_key(source: RetrievedChunk) -> str:
     product_info = _extract_product_key_field(text, ("产品信息", "型号", "规格"))
     brand = _extract_product_key_field(text, ("品牌",))
     if product_info:
-        return f"product:{_normalize_product_key_part(brand)}:{_normalize_product_key_part(product_info)}"
-    link_match = re.search(r"(?:商品链接|礼金短链接|链接)[:：]\s*([^；\s]+)", text)
-    if link_match:
-        return "link:" + link_match.group(1).strip().lower()
+        platform = _source_link_platform(source)
+        return f"product:{_normalize_product_key_part(brand)}:{_normalize_product_key_part(product_info)}:{platform}"
+    link = _extract_source_link(source)
+    if link:
+        return "link:" + link.strip().lower()
     return f"chunk:{source.source}:{source.location}:{source.title}"
+
+
+def _rank_sources_for_requested_platform(query_text: str, sources: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    platform = _requested_platform(query_text)
+    if not platform or len(sources) < 2:
+        return sources
+    indexed_sources = list(enumerate(sources))
+    if not any(_source_link_platform(source) == platform for source in sources):
+        return sources
+    ranked = sorted(
+        indexed_sources,
+        key=lambda item: (0 if _source_link_platform(item[1]) == platform else 1, item[0]),
+    )
+    if ranked == indexed_sources:
+        return sources
+    return [source for _, source in ranked]
+
+
+def _requested_platform(query_text: str) -> str:
+    normalized = _normalize_product_key_part(query_text)
+    if not normalized:
+        return ""
+    for platform, terms in PLATFORM_QUERY_TERMS.items():
+        if any(_normalize_product_key_part(term) in normalized for term in terms):
+            return platform
+    return ""
+
+
+def _source_link_platform(source: RetrievedChunk) -> str:
+    return _link_platform(_extract_source_link(source))
+
+
+def _extract_source_link(source: RetrievedChunk) -> str:
+    match = re.search(r"(?:商品链接|礼金短链接|下单链接|全店链接|链接)[:：]\s*([^；\s]+)", source.text)
+    return match.group(1).strip() if match else ""
+
+
+def _link_platform(link: str) -> str:
+    match = re.match(r"https?://([^/?#]+)", str(link or "").strip().lower())
+    if not match:
+        return ""
+    host = match.group(1).split("@")[-1].split(":")[0]
+    if host == "3.cn" or host == "jd.com" or host.endswith(".jd.com") or host == "jd.hk" or host.endswith(".jd.hk"):
+        return "jd"
+    if host == "tmall.com" or host.endswith(".tmall.com") or host == "tmall.hk" or host.endswith(".tmall.hk"):
+        return "tmall"
+    if host == "taobao.com" or host.endswith(".taobao.com") or host == "tb.cn" or host.endswith(".tb.cn"):
+        return "taobao"
+    return ""
 
 
 def _extract_product_key_field(text: str, field_names: tuple[str, ...]) -> str:

@@ -1573,7 +1573,8 @@ PositionPreviewNearMouse(mouseX := "", mouseY := "") {
 
     best := ""
     for candidate in candidates {
-        if FitsInWorkArea(candidate.x, candidate.y, previewW, previewH, left, top, right, bottom) {
+        if FitsInWorkArea(candidate.x, candidate.y, previewW, previewH, left, top, right, bottom)
+            && !OverlapsSendAnchorGuard(candidate.x, candidate.y, previewW, previewH) {
             best := candidate
             break
         }
@@ -1585,6 +1586,7 @@ PositionPreviewNearMouse(mouseX := "", mouseY := "") {
             y: Clamp(mouseY + gap, top + 10, bottom - previewH - 10)
         }
     }
+    best := KeepPreviewAwayFromSendAnchor(best.x, best.y, previewW, previewH, left, top, right, bottom)
 
     PREVIEW_GUI.Show("x" best.x " y" best.y " AutoSize")
     Sleep 30
@@ -1615,6 +1617,9 @@ PositionPreviewAt(x, y) {
         WinGetPos ,, &previewW, &previewH, "ahk_id " PREVIEW_GUI.Hwnd
         x := Clamp(x, left + 10, right - previewW - 10)
         y := Clamp(y, top + 10, bottom - previewH - 10)
+        adjusted := KeepPreviewAwayFromSendAnchor(x, y, previewW, previewH, left, top, right, bottom)
+        x := adjusted.x
+        y := adjusted.y
         PREVIEW_GUI.Show("x" x " y" y " AutoSize")
         Sleep 30
         WinGetPos &RAG_PREVIEW_X, &RAG_PREVIEW_Y,,, "ahk_id " PREVIEW_GUI.Hwnd
@@ -1637,6 +1642,76 @@ ClearPreviewSelection() {
 
 FitsInWorkArea(x, y, w, h, left, top, right, bottom) {
     return x >= left + 10 && y >= top + 10 && x + w <= right - 10 && y + h <= bottom - 10
+}
+
+KeepPreviewAwayFromSendAnchor(x, y, w, h, left, top, right, bottom) {
+    if !OverlapsSendAnchorGuard(x, y, w, h) {
+        return {x: x, y: y}
+    }
+    if !GetSendAnchorGuardRect(&guardLeft, &guardTop, &guardRight, &guardBottom) {
+        return {x: x, y: y}
+    }
+
+    gap := ReadIntConfig("preview", "send_anchor_guard_gap", 12)
+    candidates := [
+        {x: x, y: guardTop - h - gap},
+        {x: x, y: guardBottom + gap},
+        {x: guardLeft - w - gap, y: y},
+        {x: guardRight + gap, y: y}
+    ]
+    for candidate in candidates {
+        candidateX := Clamp(candidate.x, left + 10, right - w - 10)
+        candidateY := Clamp(candidate.y, top + 10, bottom - h - 10)
+        if FitsInWorkArea(candidateX, candidateY, w, h, left, top, right, bottom)
+            && !OverlapsSendAnchorGuard(candidateX, candidateY, w, h) {
+            return {x: candidateX, y: candidateY}
+        }
+    }
+
+    fallbackY := guardTop - h - gap
+    if (fallbackY < top + 10) {
+        fallbackY := guardBottom + gap
+    }
+    return {
+        x: Clamp(x, left + 10, right - w - 10),
+        y: Clamp(fallbackY, top + 10, bottom - h - 10)
+    }
+}
+
+OverlapsSendAnchorGuard(x, y, w, h) {
+    if !GetSendAnchorGuardRect(&guardLeft, &guardTop, &guardRight, &guardBottom) {
+        return false
+    }
+    return x < guardRight && x + w > guardLeft && y < guardBottom && y + h > guardTop
+}
+
+GetSendAnchorGuardRect(&guardLeft, &guardTop, &guardRight, &guardBottom) {
+    global PREVIEW_TARGET_HWND
+
+    if !ReadBoolConfig("preview", "avoid_send_anchor", true) {
+        return false
+    }
+
+    targetHwnd := PREVIEW_TARGET_HWND
+    if !targetHwnd || !WinExist("ahk_id " targetHwnd) || !IsWeChatWindow(targetHwnd) {
+        targetHwnd := GetAvailableWeChatWindow()
+    }
+    if !targetHwnd {
+        return false
+    }
+
+    try GetInputAnchor(targetHwnd, &anchorX, &anchorY)
+    catch {
+        return false
+    }
+    guardX := ReadIntConfig("preview", "send_anchor_guard_x", 80)
+    guardAbove := ReadIntConfig("preview", "send_anchor_guard_above", 260)
+    guardBelow := ReadIntConfig("preview", "send_anchor_guard_below", 100)
+    guardLeft := anchorX - guardX
+    guardRight := anchorX + guardX
+    guardTop := anchorY - guardAbove
+    guardBottom := anchorY + guardBelow
+    return true
 }
 
 GetInputAnchor(hwnd, &anchorX, &anchorY) {
@@ -2559,6 +2634,11 @@ timeout_seconds=0.6
 [preview]
 send_mode=all
 return_count=5
+avoid_send_anchor=1
+send_anchor_guard_x=80
+send_anchor_guard_above=260
+send_anchor_guard_below=100
+send_anchor_guard_gap=12
 
 [send]
 text=

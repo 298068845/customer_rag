@@ -29,6 +29,14 @@ _DEFAULT_BRAND_REPLY_RULES_PATH = Path(__file__).with_name("default_brand_reply_
 _INDEX_CATALOG_MTIME: float | None = None
 _INDEX_CATEGORY_BRANDS: dict[str, list[str]] = {}
 
+_PLATFORM_QUERY_TERMS: dict[str, tuple[str, ...]] = {
+    "jd": ("京东", "jd"),
+    "tmall": ("天猫", "tmall"),
+    "taobao": ("淘宝", "taobao"),
+}
+_ORDER_LINK_LABEL_PATTERN = re.compile(r"(?:下单链接|商品链接|全店链接|链接)\s*[:：]\s*(https?://[^\s；;，,]+)")
+_URL_PATTERN = re.compile(r"https?://[^\s；;，,]+")
+
 
 @dataclass(frozen=True)
 class TalkLink:
@@ -738,6 +746,7 @@ def match_fixed_talk(
         ):
             continue
         matched_assets = [assets_by_id[asset_id] for asset_id in rule.asset_ids if asset_id in assets_by_id]
+        matched_assets = rank_assets_for_requested_platform(question, matched_assets)
         answer = render_fixed_assets(matched_assets)
         if not answer:
             continue
@@ -785,7 +794,7 @@ def match_combined_talk(
                     matched_titles.append(title)
                 continue
             if title in FIXED_TALK_TITLES:
-                fixed_assets = select_fixed_assets_by_keywords(rule.keywords, title, entries, assets)
+                fixed_assets = select_fixed_assets_by_keywords(rule.keywords, title, entries, assets, query_text=question)
                 fixed_answer = render_fixed_assets(fixed_assets)
                 if fixed_answer:
                     parts.append(fixed_answer)
@@ -830,6 +839,7 @@ def select_fixed_assets_by_keywords(
     entry_title: str,
     entries: list[FixedTalkEntry],
     assets: list[AssetItem],
+    query_text: str = "",
 ) -> list[AssetItem]:
     entry = next((item for item in entries if item.title == entry_title), None)
     if entry is None:
@@ -851,7 +861,54 @@ def select_fixed_assets_by_keywords(
             if asset and asset.id not in selected_asset_ids:
                 selected_assets.append(asset)
                 selected_asset_ids.add(asset.id)
-    return selected_assets
+    return rank_assets_for_requested_platform(query_text, selected_assets)
+
+
+def rank_assets_for_requested_platform(query_text: str, assets: list[AssetItem]) -> list[AssetItem]:
+    platform = requested_platform(query_text)
+    if not platform or len(assets) < 2:
+        return assets
+    indexed_assets = list(enumerate(assets))
+    if not any(asset_matches_platform(asset, platform) for asset in assets):
+        return assets
+    ranked = sorted(
+        indexed_assets,
+        key=lambda item: (0 if asset_matches_platform(item[1], platform) else 1, item[0]),
+    )
+    if ranked == indexed_assets:
+        return assets
+    return [asset for _, asset in ranked]
+
+
+def requested_platform(query_text: str) -> str:
+    normalized = normalize_text(query_text)
+    if not normalized:
+        return ""
+    for platform, terms in _PLATFORM_QUERY_TERMS.items():
+        if any(normalize_text(term) in normalized for term in terms):
+            return platform
+    return ""
+
+
+def asset_matches_platform(asset: AssetItem, platform: str) -> bool:
+    text = "\n".join([asset.title, asset.description, *asset.paths])
+    links = _ORDER_LINK_LABEL_PATTERN.findall(text)
+    links.extend(url for url in _URL_PATTERN.findall(text) if url not in links)
+    return any(link_platform(link) == platform for link in links)
+
+
+def link_platform(link: str) -> str:
+    match = re.match(r"https?://([^/?#]+)", link.strip().lower())
+    if not match:
+        return ""
+    host = match.group(1).split("@")[-1].split(":")[0]
+    if host == "3.cn" or host == "jd.com" or host.endswith(".jd.com") or host == "jd.hk" or host.endswith(".jd.hk"):
+        return "jd"
+    if host == "tmall.com" or host.endswith(".tmall.com") or host == "tmall.hk" or host.endswith(".tmall.hk"):
+        return "tmall"
+    if host == "taobao.com" or host.endswith(".taobao.com") or host == "tb.cn" or host.endswith(".tb.cn"):
+        return "taobao"
+    return ""
 
 
 def unique_assets(assets: list[AssetItem]) -> list[AssetItem]:
