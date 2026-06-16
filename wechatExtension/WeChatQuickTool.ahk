@@ -16,6 +16,7 @@ global RAG_TALK_SHORTCUTS_PATH := A_ScriptDir "\rag-talk-shortcuts.txt"
 global PREVIEW_TEST_PATH := A_ScriptDir "\preview-test-result.ini"
 global SEND_BOX_DEBUG_PATH := A_ScriptDir "\sendbox-debug.log"
 global SEND_ERROR_LOG_PATH := A_ScriptDir "\send-error.log"
+global UNHANDLED_ERROR_LOG_PATH := A_ScriptDir "\unhandled-error.log"
 global CUSTOM_TAB_PATHS := [
     A_ScriptDir "\custom-tab-1.txt",
     A_ScriptDir "\custom-tab-2.txt",
@@ -50,6 +51,8 @@ global PREVIEW_SELECTED_BRAND := ""
 global PREVIEW_FORCE_SPLIT := false
 global PREVIEW_CLOSE_BUTTON := 0
 global PREVIEW_CLOSED_PRODUCT_COLOR := 0x0000CC
+global PREVIEW_CLOSED_TAB_BG := "D9534F"
+global PREVIEW_CLOSED_TAB_FG := "FFFFFF"
 global LAST_SEND_TICK := 0
 global MIN_SEND_INTERVAL_MS := 300
 global SEND_IN_PROGRESS := false
@@ -702,14 +705,16 @@ SetPreviewShortcut(index, *) {
 }
 
 RefreshPreviewTabs() {
-    global PREVIEW_TABS, PREVIEW_ACTIVE_TAB
+    global PREVIEW_TABS, PREVIEW_ACTIVE_TAB, PREVIEW_CLOSED_TAB_BG, PREVIEW_CLOSED_TAB_FG
 
     if !IsObject(PREVIEW_TABS) {
         return
     }
 
     for index, tabControl in PREVIEW_TABS {
-        if index = PREVIEW_ACTIVE_TAB {
+        if IsClosedPreviewTab(index) {
+            tabControl.Opt("c" PREVIEW_CLOSED_TAB_FG " Background" PREVIEW_CLOSED_TAB_BG)
+        } else if index = PREVIEW_ACTIVE_TAB {
             tabControl.Opt("cFFFFFF BackgroundD97745")
         } else {
             tabControl.Opt("c7A5A43 BackgroundF0DDC8")
@@ -763,6 +768,7 @@ UpdatePreviewText() {
         PREVIEW_LIST.Insert(1, "Check", MakeListPreview(fallbackText), fallbackText)
     }
     PREVIEW_LIST.ModifyCol(1, CalculatePreviewColumnWidth())
+    RedrawPreviewList()
 }
 
 PreviewListCustomDraw(control, lParam) {
@@ -793,6 +799,28 @@ IsClosedProductResult(text) {
         return false
     }
     return InStr(cleaned, "截团") > 0
+}
+
+IsClosedPreviewTab(index) {
+    global PREVIEW_TAB_TEXTS
+
+    if !IsObject(PREVIEW_TAB_TEXTS) || index < 1 || index > PREVIEW_TAB_TEXTS.Length {
+        return false
+    }
+    for part in SplitSendText(PREVIEW_TAB_TEXTS[index]) {
+        if IsClosedProductResult(part) {
+            return true
+        }
+    }
+    return false
+}
+
+RedrawPreviewList() {
+    global PREVIEW_LIST
+
+    if IsObject(PREVIEW_LIST) {
+        try DllCall("RedrawWindow", "ptr", PREVIEW_LIST.Hwnd, "ptr", 0, "ptr", 0, "uint", 0x105)
+    }
 }
 
 IsProductResultPart(text) {
@@ -844,20 +872,20 @@ SendNextPreviewPart() {
         return
     }
 
-    if !IsObject(PREVIEW_LIST) {
-        ClosePreview()
-        return
-    }
-
-    row := PREVIEW_LIST.GetNext(0, "Checked")
-    if row = 0 {
-        ClosePreview()
-        return
-    }
-
-    text := PREVIEW_LIST.GetText(row, 2)
-    SEND_IN_PROGRESS := true
     try {
+        if !IsObject(PREVIEW_LIST) {
+            ClosePreview()
+            return
+        }
+
+        row := PREVIEW_LIST.GetNext(0, "Checked")
+        if row = 0 {
+            ClosePreview()
+            return
+        }
+
+        text := PREVIEW_LIST.GetText(row, 2)
+        SEND_IN_PROGRESS := true
         if !PasteTextToWeChat(text) {
             return
         }
@@ -873,8 +901,8 @@ SendNextPreviewPart() {
             return
         }
     } catch as exc {
-        LogSendError(exc)
-        ShowTip("发送失败：" exc.Message)
+        LogSendErrorWithContext(exc, "entry=SendNextPreviewPart")
+        TryShowTip("发送失败，请重试")
     } finally {
         SEND_IN_PROGRESS := false
     }
@@ -1023,7 +1051,7 @@ PasteTextToWeChat(text) {
     } catch as exc {
         details := "text_len=" StrLen(textToSend) "`nimage_path=" imagePath "`nclipboard_image_path=" clipboardImagePath
         LogSendErrorWithContext(exc, details)
-        ShowTip("发送失败，请重试")
+        TryShowTip("发送失败，请重试")
         return false
     } finally {
         if restoreClipboard {
@@ -1563,6 +1591,7 @@ PositionPreviewNearMouse(mouseX := "", mouseY := "") {
     try WinGetPos &RAG_PREVIEW_X, &RAG_PREVIEW_Y,,, "ahk_id " PREVIEW_GUI.Hwnd
     DebugPreviewTest("position_after_show")
     ClearPreviewSelection()
+    RedrawPreviewList()
     ApplyRoundedPreviewRegion()
     DebugPreviewTest("position_after_region")
 }
@@ -1594,6 +1623,7 @@ PositionPreviewAt(x, y) {
         RAG_PREVIEW_Y := y
     }
     ClearPreviewSelection()
+    RedrawPreviewList()
     ApplyRoundedPreviewRegion()
 }
 
@@ -1991,35 +2021,49 @@ SendBoxDebug(message) {
 LogSendError(exc) {
     global SEND_ERROR_LOG_PATH
 
-    details := "[" A_Now "] " exc.Message
-    try details .= "`nwhat=" exc.What
-    try details .= "`nfile=" exc.File
-    try details .= "`nline=" exc.Line
-    try details .= "`nstack=" exc.Stack
-    try FileAppend details "`n`n", SEND_ERROR_LOG_PATH, "UTF-8"
+    SafeAppendLog(SEND_ERROR_LOG_PATH, BuildErrorDetails(exc) "`n`n")
 }
 
 LogSendErrorWithContext(exc, context := "") {
     global SEND_ERROR_LOG_PATH
 
+    SafeAppendLog(SEND_ERROR_LOG_PATH, BuildErrorDetails(exc, context) "`n`n")
+}
+
+BuildErrorDetails(exc, context := "") {
     details := context
     if (details != "") {
         details .= "`n"
     }
-    details .= "[" A_Now "] " exc.Message
+
+    message := "<message unavailable>"
+    try message := exc.Message
+    details .= "[" A_Now "] " message
     try details .= "`nwhat=" exc.What
     try details .= "`nfile=" exc.File
     try details .= "`nline=" exc.Line
     try details .= "`nstack=" exc.Stack
-    try FileAppend details "`n`n", SEND_ERROR_LOG_PATH, "UTF-8"
+    return details
+}
+
+SafeAppendLog(path, message) {
+    try FileAppend message, path, "UTF-8"
+}
+
+TryShowTip(message) {
+    try ShowTip(message)
 }
 
 LogUnhandledRuntimeError(exc, mode := "") {
+    global UNHANDLED_ERROR_LOG_PATH
+
     context := "unhandled=1"
     if (mode != "") {
         context .= "`nmode=" mode
     }
-    LogSendErrorWithContext(exc, context)
+    details := BuildErrorDetails(exc, context)
+    SafeAppendLog(UNHANDLED_ERROR_LOG_PATH, details "`n`n")
+    SafeAppendLog(SEND_ERROR_LOG_PATH, details "`n`n")
     return true
 }
 

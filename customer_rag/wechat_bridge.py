@@ -14,10 +14,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from customer_rag.config import load_config
 from customer_rag.category_config import category_aliases
 from customer_rag.category_config import category_brands
-from customer_rag.pipeline import RagPipeline
 from customer_rag.prompt_defaults import DEFAULT_SYSTEM_PROMPT
 from customer_rag.talk_rag import TalkRagEngine
 
@@ -56,6 +54,9 @@ def main() -> int:
     try:
         os.chdir(project_root)
         if args.filters_file:
+            from customer_rag.config import load_config
+            from customer_rag.pipeline import RagPipeline
+
             pipeline = RagPipeline(load_config(project_root / "config.yaml"))
             write_filter_rows(args.filters_file, pipeline)
             write_log(log_file, f"OK\nfilters={args.filters_file}\n")
@@ -79,6 +80,9 @@ def main() -> int:
                 args.talk_shortcuts_file.write_text("\n__TALK_SHORTCUT__\n".join(shortcut_answers), encoding="utf-8")
             write_log(log_file, f"OK\nmode=talk-only\nquestion={question}\noutput={args.output_file}\n")
             return 0
+
+        from customer_rag.config import load_config
+        from customer_rag.pipeline import RagPipeline
 
         config = load_config(project_root / "config.yaml")
         if args.top_k in {5, 10}:

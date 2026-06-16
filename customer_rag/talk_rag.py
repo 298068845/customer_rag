@@ -436,19 +436,43 @@ class TalkRagStore:
 class TalkRagEngine:
     def __init__(self, store: TalkRagStore | None = None):
         self.store = store or TalkRagStore()
+        self._realtime_config: RealtimeTalkConfig | None = None
+        self._combined_config: CombinedTalkConfig | None = None
+        self._fixed_entries: list[FixedTalkEntry] | None = None
+        self._assets: list[AssetItem] | None = None
+
+    def realtime_config(self) -> RealtimeTalkConfig:
+        if self._realtime_config is None:
+            self._realtime_config = self.store.load_realtime_config()
+        return self._realtime_config
+
+    def combined_config(self) -> CombinedTalkConfig:
+        if self._combined_config is None:
+            self._combined_config = self.store.load_combined_config()
+        return self._combined_config
+
+    def fixed_entries(self) -> list[FixedTalkEntry]:
+        if self._fixed_entries is None:
+            self._fixed_entries = self.store.load_fixed_entries()
+        return self._fixed_entries
+
+    def assets(self) -> list[AssetItem]:
+        if self._assets is None:
+            self._assets = self.store.load_assets()
+        return self._assets
 
     def ask(self, question: str, entry_title: str = REALTIME_TALK_TITLE) -> TalkMatch:
         if entry_title == REALTIME_TALK_TITLE:
-            realtime_match = match_realtime_talk(question, self.store.load_realtime_config())
+            realtime_match = match_realtime_talk(question, self.realtime_config())
             if realtime_match:
                 return realtime_match
         elif entry_title == COMBINED_TALK_TITLE:
             combined_match = match_combined_talk(
                 question,
-                self.store.load_combined_config(),
-                self.store.load_realtime_config(),
-                self.store.load_fixed_entries(),
-                self.store.load_assets(),
+                self.combined_config(),
+                self.realtime_config(),
+                self.fixed_entries(),
+                self.assets(),
             )
             if combined_match:
                 return combined_match
@@ -456,8 +480,8 @@ class TalkRagEngine:
             fixed_match = match_fixed_talk(
                 question,
                 entry_title,
-                self.store.load_fixed_entries(),
-                self.store.load_assets(),
+                self.fixed_entries(),
+                self.assets(),
             )
             if fixed_match:
                 return fixed_match
@@ -637,7 +661,7 @@ def realtime_config_from_payload(payload: dict) -> RealtimeTalkConfig:
     )
 
 
-def match_realtime_talk(question: str, config: RealtimeTalkConfig) -> TalkMatch | None:
+def match_realtime_talk(question: str, config: RealtimeTalkConfig, *, include_index: bool | None = None) -> TalkMatch | None:
     normalized_question = normalize_text(question)
     if not normalized_question:
         return None
@@ -649,7 +673,7 @@ def match_realtime_talk(question: str, config: RealtimeTalkConfig) -> TalkMatch 
             score=100,
         )
 
-    open_group_brand = extract_brand_from_question(question, config)
+    open_group_brand = extract_brand_from_question(question, config, include_index=include_index)
     if open_group_brand and not render_brand_reply(open_group_brand, config):
         open_group_brand = ""
     if open_group_brand and any(trigger_matches_question(trigger, question, "brand") for trigger in config.open_group_triggers):
@@ -679,7 +703,7 @@ def match_realtime_talk(question: str, config: RealtimeTalkConfig) -> TalkMatch 
             return schedule_match
 
     if any(trigger_matches_question(trigger, question, "keyword") for trigger in config.brand_triggers):
-        brand_or_category_reply = render_keyword_reply(question, config)
+        brand_or_category_reply = render_keyword_reply(question, config, include_index=include_index)
         if brand_or_category_reply:
             return TalkMatch(
                 answer=brand_or_category_reply,
@@ -790,9 +814,9 @@ def render_combined_realtime_reply(keywords: list[str], config: RealtimeTalkConf
     replies: list[str] = []
     seen: set[str] = set()
     for keyword in keywords:
-        reply = render_keyword_reply(keyword, config)
+        reply = render_keyword_reply(keyword, config, include_index=False)
         if not reply:
-            match = match_realtime_talk(keyword, config)
+            match = match_realtime_talk(keyword, config, include_index=False)
             reply = match.answer if match else ""
         normalized = normalize_text(reply)
         if reply and normalized not in seen:
@@ -898,8 +922,13 @@ def trigger_matches_question(trigger: str, question: str, variable_name: str) ->
     return (not before or before in question_text) and (not after or after in question_text)
 
 
-def render_keyword_reply(question: str, config: RealtimeTalkConfig) -> str:
-    aliases, brands_by_category = _talk_category_catalog()
+def render_keyword_reply(question: str, config: RealtimeTalkConfig, *, include_index: bool | None = None) -> str:
+    should_include_index = _should_scan_index_for_question(question) if include_index is None else include_index
+    brand = extract_brand_from_question(question, config, include_index=should_include_index)
+    if brand:
+        return render_brand_reply(brand, config)
+
+    aliases, brands_by_category = _talk_category_catalog(include_index=should_include_index)
     categories = extract_categories_from_question(question, aliases)
     if categories:
         brands = unique_terms(
@@ -909,9 +938,6 @@ def render_keyword_reply(question: str, config: RealtimeTalkConfig) -> str:
         )
         replies = [render_brand_reply(brand, config) for brand in brands]
         return deduplicate_reply_parts(replies)
-    brand = extract_brand_from_question(question, config)
-    if brand:
-        return render_brand_reply(brand, config)
     return ""
 
 
@@ -980,8 +1006,9 @@ def find_sale_status_rule(brand: str, config: RealtimeTalkConfig) -> BrandSaleSt
     return None
 
 
-def extract_brand_from_question(question: str, config: RealtimeTalkConfig) -> str:
-    candidates = all_known_brands(config)
+def extract_brand_from_question(question: str, config: RealtimeTalkConfig, *, include_index: bool | None = None) -> str:
+    should_include_index = _should_scan_index_for_question(question) if include_index is None else include_index
+    candidates = all_known_brands(config, include_index=should_include_index)
     normalized_question = normalize_text(question)
     for candidate in candidates:
         value = normalize_text(candidate)
@@ -997,7 +1024,9 @@ def extract_category_from_question(question: str, aliases_by_category: dict[str,
 
 def extract_categories_from_question(question: str, aliases_by_category: dict[str, list[str]] | None = None) -> list[str]:
     normalized_question = normalize_text(question)
-    aliases_by_category = aliases_by_category or _talk_category_catalog()[0]
+    aliases_by_category = aliases_by_category or _talk_category_catalog(
+        include_index=_should_scan_index_for_question(question)
+    )[0]
     matched: list[str] = []
     for category, aliases in aliases_by_category.items():
         terms = [category, *aliases, *semantic_category_terms(category, aliases)]
@@ -1015,16 +1044,24 @@ def _category_term_matches_question(term: str, normalized_question: str) -> bool
     return normalized_term in normalized_question
 
 
-def _talk_category_catalog() -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+def _talk_category_catalog(*, include_index: bool = True) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     aliases = {category: list(values) for category, values in category_aliases().items()}
     brands = {category: list(values) for category, values in category_brands().items()}
-    for category, indexed_brands in _indexed_category_brands().items():
-        aliases.setdefault(category, [])
-        current_brands = brands.setdefault(category, [])
-        for brand in indexed_brands:
-            if brand not in current_brands:
-                current_brands.append(brand)
+    if include_index:
+        for category, indexed_brands in _indexed_category_brands().items():
+            aliases.setdefault(category, [])
+            current_brands = brands.setdefault(category, [])
+            for brand in indexed_brands:
+                if brand not in current_brands:
+                    current_brands.append(brand)
     return aliases, brands
+
+
+def _should_scan_index_for_question(question: str) -> bool:
+    normalized = normalize_text(question)
+    if len(normalized) < 2:
+        return False
+    return not bool(re.fullmatch(r"[a-z0-9._-]+", normalized))
 
 
 def _indexed_category_brands() -> dict[str, list[str]]:
@@ -1079,9 +1116,9 @@ def normalize_brand(brand: str, config: RealtimeTalkConfig) -> str:
     return value
 
 
-def all_known_brands(config: RealtimeTalkConfig) -> list[str]:
+def all_known_brands(config: RealtimeTalkConfig, *, include_index: bool = True) -> list[str]:
     values: list[str] = []
-    for brand_values in _talk_category_catalog()[1].values():
+    for brand_values in _talk_category_catalog(include_index=include_index)[1].values():
         values.extend(brand_values)
     for rule in config.brand_reply_rules:
         if rule.keyword_type == "品牌":
