@@ -252,7 +252,7 @@ def system_snapshot(project_root: str | Path | None = None) -> dict[str, Any]:
     try:
         from customer_rag.config import load_config
 
-        config = load_config(root / "config.yaml")
+        config = load_config()
         snapshot["config"] = {
             "raw_data_dir": str((root / config.raw_data_dir).resolve() if not config.raw_data_dir.is_absolute() else config.raw_data_dir),
             "index_dir": str((root / config.index_dir).resolve() if not config.index_dir.is_absolute() else config.index_dir),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import html
 import re
+import shutil
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +44,7 @@ from customer_rag.tencent_docs import (
 
 
 APP_ICON_PATH = Path(__file__).resolve().parent / "customer_rag" / "assets" / "app_icon.png"
+PROJECT_ROOT = Path(__file__).resolve().parent
 
 st.set_page_config(page_title="本地腾讯文档 RAG", page_icon=str(APP_ICON_PATH), layout="wide")
 LOCAL_TASK_API_URL = ensure_local_task_api()
@@ -1907,73 +1909,231 @@ def batch_add_subscription_dialog() -> None:
         st.rerun()
 
 
+def resolve_project_path(path: Path | str) -> Path:
+    value = Path(str(path)).expanduser()
+    if value.is_absolute():
+        return value.resolve()
+    return (PROJECT_ROOT / value).resolve()
+
+
+def display_config_path(path: Path | str) -> str:
+    return str(resolve_project_path(path))
+
+
+def user_config_root(config) -> Path:
+    paths = [config.raw_data_dir, config.index_dir, config.talk_data_dir]
+    parents = [Path(path).parent for path in paths]
+    if parents and all(parent == parents[0] for parent in parents):
+        return parents[0]
+    return Path("data")
+
+
+def move_directory_contents(source: Path, target: Path) -> None:
+    if not source.exists():
+        target.mkdir(parents=True, exist_ok=True)
+        return
+    if source.resolve() == target.resolve():
+        target.mkdir(parents=True, exist_ok=True)
+        return
+    target.mkdir(parents=True, exist_ok=True)
+    for child in source.iterdir():
+        destination = target / child.name
+        if destination.exists():
+            if child.is_dir() and destination.is_dir():
+                move_directory_contents(child, destination)
+            else:
+                raise FileExistsError(f"目标路径已存在，无法覆盖：{destination}")
+        else:
+            shutil.move(str(child), str(destination))
+    try:
+        source.rmdir()
+    except OSError:
+        pass
+
+
+def assert_no_directory_conflicts(source: Path, target: Path) -> None:
+    if not source.exists() or source.resolve() == target.resolve():
+        return
+    for child in source.iterdir():
+        destination = target / child.name
+        if child.is_dir() and destination.is_dir():
+            assert_no_directory_conflicts(child, destination)
+        elif destination.exists():
+            raise FileExistsError(f"目标路径已存在，无法覆盖：{destination}")
+
+
+def migrate_user_config_dirs(current, next_user_root: str) -> dict[str, str]:
+    next_root = resolve_project_path(next_user_root.strip() or display_config_path(user_config_root(current)))
+    next_raw = next_root / "raw"
+    next_index = next_root / "index"
+    next_talk = next_root / "talk_rag"
+    moves = [
+        (current.raw_data_dir, next_raw),
+        (current.index_dir, next_index),
+        (current.talk_data_dir, next_talk),
+    ]
+    resolved_moves = [(resolve_project_path(source), resolve_project_path(target)) for source, target in moves]
+    for source, target in resolved_moves:
+        assert_no_directory_conflicts(source, target)
+    for source, target in resolved_moves:
+        move_directory_contents(source, target)
+    return {
+        "raw_data_dir": str(next_raw),
+        "index_dir": str(next_index),
+        "talk_data_dir": str(next_talk),
+    }
+
+
+def select_directory_dialog(title: str, initial_path: Path | str) -> str | None:
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    initial_dir = resolve_project_path(initial_path)
+    if initial_dir.is_file():
+        initial_dir = initial_dir.parent
+    selected = filedialog.askdirectory(title=title, initialdir=str(initial_dir))
+    root.destroy()
+    return str(Path(selected).resolve()) if selected else None
+
+
+def select_file_dialog(title: str, initial_path: Path | str, filetypes: list[tuple[str, str]]) -> str | None:
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    initial_file = resolve_project_path(initial_path)
+    initial_dir = initial_file.parent if initial_file.suffix else initial_file
+    selected = filedialog.askopenfilename(
+        title=title,
+        initialdir=str(initial_dir),
+        initialfile=initial_file.name if initial_file.suffix else "",
+        filetypes=filetypes,
+    )
+    root.destroy()
+    return str(Path(selected).resolve()) if selected else None
+
+
+def initialize_path_picker_state(current) -> None:
+    defaults = {
+        "settings_embedding_model_path": display_config_path(current.embedding_model_path),
+        "settings_llm_model_path": display_config_path(current.llm_model_path),
+        "settings_tools_dir": display_config_path(current.tools_dir),
+        "settings_user_config_dir": display_config_path(user_config_root(current)),
+    }
+    for key, value in defaults.items():
+        st.session_state.setdefault(key, value)
+
+
+def render_path_picker(label: str, state_key: str, button_key: str, picker) -> str:
+    st.markdown(f"**{label}**")
+    path_col, button_col = st.columns([0.78, 0.22], gap="small", vertical_alignment="center")
+    path_col.code(str(st.session_state.get(state_key, "")), language=None)
+    if button_col.button("选择", key=button_key, use_container_width=True):
+        try:
+            selected = picker(str(st.session_state.get(state_key, "")))
+        except Exception as exc:  # noqa: BLE001 - surface local dialog failures in the settings UI.
+            st.error(f"无法打开路径选择器：{exc}")
+        else:
+            if selected:
+                st.session_state[state_key] = selected
+                st.rerun()
+    return str(st.session_state.get(state_key, ""))
+
+
 @st.dialog("本机性能设置", width="large")
 def machine_settings_dialog() -> None:
     current = load_config()
+    initialize_path_picker_state(current)
     batch_options = [16, 32, 64, 128, 256]
     thread_options = [1, 2, 4, 6, 8, 12, 16, 24, 32]
     gpu_layer_options = [0, 8, 16, 24, 32, 48, 64, 99]
     ctx_options = [2048, 4096, 8192, 16384]
     llm_batch_options = [64, 128, 256, 512, 1024]
 
-    with st.form("machine_settings_form"):
-        st.subheader("常用性能")
-        col_a, col_b, col_c = st.columns(3)
-        with col_a:
-            embedding_batch_size = st.selectbox(
-                "Embedding batch size",
-                batch_options,
-                index=batch_options.index(current.embedding_batch_size)
-                if current.embedding_batch_size in batch_options
-                else batch_options.index(32),
-            )
-        with col_b:
-            n_threads = st.selectbox(
-                "LLM CPU 线程数",
-                thread_options,
-                index=thread_options.index(current.llm.n_threads)
-                if current.llm.n_threads in thread_options
-                else thread_options.index(4),
-            )
-        with col_c:
-            n_gpu_layers = st.selectbox(
-                "LLM GPU 层数",
-                gpu_layer_options,
-                index=gpu_layer_options.index(current.llm.n_gpu_layers)
-                if current.llm.n_gpu_layers in gpu_layer_options
-                else 0,
-            )
+    perf_col, path_col = st.columns([0.48, 0.52], gap="large")
+    with perf_col:
+        st.subheader("性能设置")
+        embedding_batch_size = st.selectbox(
+            "Embedding batch size",
+            batch_options,
+            index=batch_options.index(current.embedding_batch_size)
+            if current.embedding_batch_size in batch_options
+            else batch_options.index(32),
+        )
+        n_threads = st.selectbox(
+            "LLM CPU 线程数",
+            thread_options,
+            index=thread_options.index(current.llm.n_threads)
+            if current.llm.n_threads in thread_options
+            else thread_options.index(4),
+        )
+        n_gpu_layers = st.selectbox(
+            "LLM GPU 层数",
+            gpu_layer_options,
+            index=gpu_layer_options.index(current.llm.n_gpu_layers)
+            if current.llm.n_gpu_layers in gpu_layer_options
+            else 0,
+        )
+        n_ctx = st.selectbox(
+            "LLM 上下文长度",
+            ctx_options,
+            index=ctx_options.index(current.llm.n_ctx)
+            if current.llm.n_ctx in ctx_options
+            else ctx_options.index(4096),
+        )
+        num_batch = st.selectbox(
+            "LLM num_batch",
+            llm_batch_options,
+            index=llm_batch_options.index(current.llm.num_batch)
+            if current.llm.num_batch in llm_batch_options
+            else llm_batch_options.index(128),
+        )
 
-        st.subheader("高级性能")
-        col_d, col_e = st.columns(2)
-        with col_d:
-            n_ctx = st.selectbox(
-                "LLM 上下文长度",
-                ctx_options,
-                index=ctx_options.index(current.llm.n_ctx)
-                if current.llm.n_ctx in ctx_options
-                else ctx_options.index(4096),
-            )
-        with col_e:
-            num_batch = st.selectbox(
-                "LLM num_batch",
-                llm_batch_options,
-                index=llm_batch_options.index(current.llm.num_batch)
-                if current.llm.num_batch in llm_batch_options
-                else llm_batch_options.index(128),
-            )
+    with path_col:
+        st.subheader("路径设置")
+        embedding_model_path = render_path_picker(
+            "Embedding 模型路径",
+            "settings_embedding_model_path",
+            "settings_pick_embedding_model_path",
+            lambda initial: select_directory_dialog("选择 Embedding 模型文件夹", initial),
+        )
+        llm_model_path = render_path_picker(
+            "LLM 模型路径",
+            "settings_llm_model_path",
+            "settings_pick_llm_model_path",
+            lambda initial: select_file_dialog("选择 LLM GGUF 模型文件", initial, [("GGUF 模型", "*.gguf"), ("所有文件", "*.*")]),
+        )
+        tools_dir = render_path_picker(
+            "Tools 路径",
+            "settings_tools_dir",
+            "settings_pick_tools_dir",
+            lambda initial: select_directory_dialog("选择 Tools 文件夹", initial),
+        )
+        user_config_dir = render_path_picker(
+            "用户配置路径",
+            "settings_user_config_dir",
+            "settings_pick_user_config_dir",
+            lambda initial: select_directory_dialog("选择用户配置文件夹", initial),
+        )
+        st.caption(
+            "用户配置路径包含订阅文件、语料库缓存、Prompt 设置、话术配置和素材库。保存后会把这些文件夹迁移到新位置。"
+        )
 
-        with st.expander("模型路径"):
-            embedding_model_path = st.text_input("Embedding 模型路径", value=str(current.embedding_model_path))
-            llm_model_path = st.text_input("LLM 模型路径", value=str(current.llm_model_path))
-
-        submitted = st.form_submit_button("保存设置", type="primary")
-        if submitted:
+    if st.button("保存设置", type="primary", key="machine_settings_save"):
+        try:
+            path_updates = migrate_user_config_dirs(current, user_config_dir)
             save_machine_config(
                 {
-                    "embedding_model_path": embedding_model_path.strip() or str(current.embedding_model_path),
-                    "llm_model_path": llm_model_path.strip() or str(current.llm_model_path),
+                    "embedding_model_path": str(resolve_project_path(embedding_model_path)),
+                    "llm_model_path": str(resolve_project_path(llm_model_path)),
+                    "tools_dir": str(resolve_project_path(tools_dir)),
                     "embedding_batch_size": int(embedding_batch_size),
+                    **path_updates,
                 },
                 {
                     "n_threads": int(n_threads),
@@ -1982,7 +2142,10 @@ def machine_settings_dialog() -> None:
                     "num_batch": int(num_batch),
                 },
             )
-            queue_ui_notice("success", "本机性能设置已保存。Embedding 配置将在下次重建索引时生效，LLM 配置需重启服务后生效。")
+        except OSError as exc:
+            st.error(f"路径迁移失败：{exc}")
+        else:
+            queue_ui_notice("success", "本机性能与路径设置已保存。路径和 LLM 配置需重启服务后完全生效。")
             st.rerun()
 
 

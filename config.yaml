@@ -1,8 +1,9 @@
-raw_data_dir: data/raw
-index_dir: data/index
-embedding_model_path: models/embeddings/bge-small-zh-v1.5
-llm_model_path: models/llm/model.gguf
-
+raw_data_dir: D:/workplace/customer_rag/data/raw
+index_dir: D:/workplace/customer_rag/data/index
+talk_data_dir: D:/workplace/customer_rag/data/talk_rag
+embedding_model_path: D:/workplace/customer_rag/models/embeddings/bge-small-zh-v1.5
+llm_model_path: D:/workplace/customer_rag/models/llm/model.gguf
+tools_dir: D:/workplace/customer_rag/tools
 chunk_size: 700
 chunk_overlap: 120
 embedding_batch_size: 32
@@ -10,7 +11,6 @@ top_k: 5
 search_timeout_seconds: 4
 product_search_timeout_seconds: 6
 precise_search_timeout_seconds: 8
-
 llm:
   backend: llama_cpp_server
   ollama_url: http://localhost:11434

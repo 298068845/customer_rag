@@ -19,7 +19,7 @@ from customer_rag.category_config import category_aliases
 from customer_rag.category_config import category_brands
 from customer_rag.logging_config import configure_logging, log_event, log_exception, logs_dir
 from customer_rag.prompt_defaults import DEFAULT_SYSTEM_PROMPT
-from customer_rag.talk_rag import TalkRagEngine
+from customer_rag.talk_rag import TalkRagEngine, TalkRagStore
 
 
 DEFAULT_PROMPT_SUFFIX = """
@@ -63,7 +63,7 @@ def main() -> int:
             from customer_rag.config import load_config
             from customer_rag.pipeline import RagPipeline
 
-            pipeline = RagPipeline(load_config(project_root / "config.yaml"))
+            pipeline = RagPipeline(load_config())
             write_filter_rows(args.filters_file, pipeline)
             write_log(log_file, f"OK\nfilters={args.filters_file}\n")
             return 0
@@ -93,7 +93,10 @@ def main() -> int:
         )
 
         if args.talk_only:
-            engine = TalkRagEngine()
+            from customer_rag.config import load_config
+
+            config = load_config()
+            engine = TalkRagEngine(TalkRagStore(config.talk_data_dir))
             result = engine.ask(question)
             answer = format_wechat_answer(result.answer)
             args.output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -116,10 +119,10 @@ def main() -> int:
         from customer_rag.config import load_config
         from customer_rag.pipeline import RagPipeline
 
-        config = load_config(project_root / "config.yaml")
+        config = load_config()
         if args.top_k in {5, 10}:
             config = replace(config, top_k=args.top_k)
-        system_prompt = load_system_prompt(project_root / "data" / "index" / "prompt_settings.json")
+        system_prompt = load_system_prompt(config.index_dir / "prompt_settings.json")
         selected_brand = args.brand.strip()
         effective_question = question if not selected_brand else f"{question}\nbrand:{selected_brand}"
         parsed_tags = parse_tags(args.tags)

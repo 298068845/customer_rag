@@ -18,6 +18,7 @@ from pathlib import Path
 import pystray
 from PIL import Image, ImageDraw
 
+from customer_rag import __version__
 from customer_rag.config import load_config
 from customer_rag.llama_server import build_llama_server_plan, is_llama_server_healthy
 from customer_rag.logging_config import (
@@ -28,7 +29,7 @@ from customer_rag.logging_config import (
     logs_dir,
 )
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 LOG_DIR = logs_dir(ROOT)
 STREAMLIT_LOG = LOG_DIR / "streamlit.log"
@@ -52,6 +53,15 @@ LOCATOR_MODE_DEFAULT = "uia"
 LOCATOR_MODE_LABELS = {
     "uia": "UIA \u5b9a\u4f4d",
     "f8": "F8 \u5b9a\u4f4d",
+}
+BOUND_APP_DEFAULT = "wechat"
+BOUND_APP_LABELS = {
+    "wechat": "\u5fae\u4fe1",
+    "wecom": "\u4f01\u4e1a\u5fae\u4fe1",
+}
+BOUND_APP_EXE_LISTS = {
+    "wechat": "WeChat.exe,Weixin.exe",
+    "wecom": "WXWork.exe,WXWorkWeb.exe",
 }
 SUBSCRIPTION_COMPLETE_NOTIFY_SECTION = "notify"
 SUBSCRIPTION_COMPLETE_NOTIFY_KEY = "subscription_complete"
@@ -96,6 +106,7 @@ def acquire_single_instance() -> bool:
         return True
     global single_instance_mutex_handle
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
     kernel32.CreateMutexW.restype = ctypes.c_void_p
     kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
     handle = kernel32.CreateMutexW(None, False, SINGLE_INSTANCE_MUTEX_NAME)
@@ -111,6 +122,7 @@ def acquire_single_instance() -> bool:
 def build_menu() -> pystray.Menu:
     return pystray.Menu(
         pystray.MenuItem(lambda _: f"状态：{get_status()}", noop, enabled=False),
+        pystray.MenuItem(f"当前版本v{__version__}", noop, enabled=False),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("打开 RAG 页面", open_app),
         pystray.MenuItem("打开话术 RAG 页面", open_talk_app),
@@ -151,6 +163,23 @@ def build_menu() -> pystray.Menu:
                     LOCATOR_MODE_LABELS["f8"],
                     set_locator_mode_f8,
                     checked=lambda _: get_locator_mode() == "f8",
+                    radio=True,
+                ),
+            ),
+        ),
+        pystray.MenuItem(
+            "\u7ed1\u5b9a\u8f6f\u4ef6",
+            pystray.Menu(
+                pystray.MenuItem(
+                    BOUND_APP_LABELS["wechat"],
+                    set_bound_app_wechat,
+                    checked=lambda _: get_bound_app() == "wechat",
+                    radio=True,
+                ),
+                pystray.MenuItem(
+                    BOUND_APP_LABELS["wecom"],
+                    set_bound_app_wecom,
+                    checked=lambda _: get_bound_app() == "wecom",
                     radio=True,
                 ),
             ),
@@ -307,7 +336,7 @@ def stop_talk_streamlit() -> None:
 
 def start_llama_server(icon: pystray.Icon | None = None) -> None:
     global llama_server_process
-    config = load_config(ROOT / "config.yaml")
+    config = load_config()
     plan = build_llama_server_plan(config, ROOT)
     if not plan.enabled:
         log_event("llama", "llama_server_disabled", "llama server not started", project_root=ROOT, context={"reason": plan.reason, "backend": config.llm.backend})
@@ -350,7 +379,7 @@ def start_llama_server(icon: pystray.Icon | None = None) -> None:
 
 def stop_llama_server() -> None:
     global llama_server_process
-    config = load_config(ROOT / "config.yaml")
+    config = load_config()
     if llama_server_process and llama_server_process.poll() is None:
         stop_process_tree(llama_server_process.pid)
     llama_server_process = None
@@ -540,6 +569,22 @@ def set_locator_mode(icon: pystray.Icon, mode: str) -> None:
     write_ini_value(WECHAT_CONFIG, "send", "locator_mode", mode)
     icon.update_menu()
     notify(icon, "\u5b9a\u4f4d\u6a21\u5f0f\u5df2\u5207\u6362", LOCATOR_MODE_LABELS[mode])
+
+
+def set_bound_app_wechat(icon: pystray.Icon, _: object = None) -> None:
+    set_bound_app(icon, "wechat")
+
+
+def set_bound_app_wecom(icon: pystray.Icon, _: object = None) -> None:
+    set_bound_app(icon, "wecom")
+
+
+def set_bound_app(icon: pystray.Icon, app: str) -> None:
+    app = normalize_bound_app(app)
+    write_ini_value(WECHAT_CONFIG, "wechat", "bind_app", app)
+    write_ini_value(WECHAT_CONFIG, "wechat", "exe_list", BOUND_APP_EXE_LISTS[app])
+    icon.update_menu()
+    notify(icon, "\u7ed1\u5b9a\u8f6f\u4ef6\u5df2\u5207\u6362", BOUND_APP_LABELS[app])
 
 
 def toggle_test_mode(icon: pystray.Icon, _: object = None) -> None:
@@ -827,6 +872,13 @@ def get_locator_mode() -> str:
     return normalize_locator_mode(read_ini_value(WECHAT_CONFIG, "send", "locator_mode", LOCATOR_MODE_DEFAULT))
 
 
+def get_bound_app() -> str:
+    app = read_ini_value(WECHAT_CONFIG, "wechat", "bind_app", "").strip()
+    if app:
+        return normalize_bound_app(app)
+    return infer_bound_app_from_exe_list(read_ini_value(WECHAT_CONFIG, "wechat", "exe_list", BOUND_APP_EXE_LISTS[BOUND_APP_DEFAULT]))
+
+
 def get_test_mode() -> bool:
     value = read_ini_value(WECHAT_CONFIG, "send", "test_mode", "0").strip().lower()
     return value in {"1", "true", "yes", "on"}
@@ -847,6 +899,20 @@ def normalize_locator_mode(value: str | None) -> str:
     if mode in {"f8", "saved_point", "saved-point", "point"}:
         return "f8"
     return "uia"
+
+
+def normalize_bound_app(value: str | None) -> str:
+    app = (value or BOUND_APP_DEFAULT).strip().lower()
+    if app in {"wecom", "wxwork", "work_wechat", "work-wechat", "enterprise_wechat", "enterprise-wechat"}:
+        return "wecom"
+    return "wechat"
+
+
+def infer_bound_app_from_exe_list(value: str | None) -> str:
+    normalized = (value or "").lower()
+    if "wxwork.exe" in normalized or "wxworkweb.exe" in normalized:
+        return "wecom"
+    return BOUND_APP_DEFAULT
 
 
 def read_ini_value(path: Path, section: str, key: str, default: str) -> str:

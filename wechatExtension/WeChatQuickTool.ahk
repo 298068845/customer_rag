@@ -166,9 +166,14 @@ IsQueryVisible() {
 }
 
 HandleTabHotkey() {
-    global PREVIEW_VISIBLE, SEND_IN_PROGRESS
+    global PREVIEW_VISIBLE, QUERY_VISIBLE, SEND_IN_PROGRESS
 
     if SEND_IN_PROGRESS {
+        return
+    }
+
+    if QUERY_VISIBLE {
+        StartRagFromQueryDialog()
         return
     }
 
@@ -447,7 +452,12 @@ ShowRagResultPreview() {
 }
 
 PreviewOrSendNext() {
-    global PREVIEW_VISIBLE
+    global PREVIEW_VISIBLE, QUERY_VISIBLE
+
+    if QUERY_VISIBLE {
+        StartRagFromQueryDialog()
+        return
+    }
 
     if PREVIEW_VISIBLE {
         SendNextPreviewPart()
@@ -904,7 +914,7 @@ SendNextPreviewPart() {
             SEND_IN_PROGRESS := false
             return
         }
-        PREVIEW_LIST.Delete(row)
+        DeletePreviewRow(row)
 
         if CountCheckedRows() = 0 {
             SEND_IN_PROGRESS := false
@@ -916,6 +926,33 @@ SendNextPreviewPart() {
         TryShowTip("发送失败，请重试")
     } finally {
         SEND_IN_PROGRESS := false
+    }
+}
+
+DeletePreviewRow(row) {
+    global PREVIEW_GUI, PREVIEW_LIST
+
+    if !IsObject(PREVIEW_LIST) {
+        return
+    }
+
+    redrawDisabled := false
+    try {
+        SendMessage 0x000B, 0, 0,, "ahk_id " PREVIEW_LIST.Hwnd
+        redrawDisabled := true
+    }
+    try {
+        PREVIEW_LIST.Delete(row)
+        PREVIEW_LIST.ModifyCol(1, CalculatePreviewColumnWidth())
+    } finally {
+        if redrawDisabled {
+            try SendMessage 0x000B, 1, 0,, "ahk_id " PREVIEW_LIST.Hwnd
+        }
+    }
+
+    RedrawPreviewList()
+    if IsObject(PREVIEW_GUI) {
+        try DllCall("RedrawWindow", "ptr", PREVIEW_GUI.Hwnd, "ptr", 0, "ptr", 0, "uint", 0x185)
     }
 }
 
@@ -1575,27 +1612,19 @@ PositionPreviewNearMouse(mouseX := "", mouseY := "") {
     }
     DebugPreviewTest("position_after_wingetpos")
 
-    candidates := [
-        {x: mouseX + gap, y: mouseY + gap},
-        {x: mouseX - previewW - gap, y: mouseY + gap},
-        {x: mouseX + gap, y: mouseY - previewH - gap},
-        {x: mouseX - previewW - gap, y: mouseY - previewH - gap}
-    ]
+    candidates := BuildPreviewPositionCandidates(mouseX, mouseY, previewW, previewH, left, top, right, bottom, gap)
 
     best := ""
     for candidate in candidates {
         if FitsInWorkArea(candidate.x, candidate.y, previewW, previewH, left, top, right, bottom)
-            && !OverlapsSendAnchorGuard(candidate.x, candidate.y, previewW, previewH) {
+            && PreviewClearsSendAnchor(candidate.x, candidate.y, previewW, previewH) {
             best := candidate
             break
         }
     }
 
     if !IsObject(best) {
-        best := {
-            x: Clamp(mouseX + gap, left + 10, right - previewW - 10),
-            y: Clamp(mouseY + gap, top + 10, bottom - previewH - 10)
-        }
+        best := ClampPreviewCandidate(candidates[1], previewW, previewH, left, top, right, bottom)
     }
     best := KeepPreviewAwayFromSendAnchor(best.x, best.y, previewW, previewH, left, top, right, bottom)
 
@@ -1655,8 +1684,30 @@ FitsInWorkArea(x, y, w, h, left, top, right, bottom) {
     return x >= left + 10 && y >= top + 10 && x + w <= right - 10 && y + h <= bottom - 10
 }
 
+BuildPreviewPositionCandidates(mouseX, mouseY, w, h, left, top, right, bottom, gap) {
+    centerX := left + Floor((right - left) / 2)
+    centerY := top + Floor((bottom - top) / 2)
+    primaryX := mouseX >= centerX ? mouseX - w - gap : mouseX + gap
+    secondaryX := mouseX >= centerX ? mouseX + gap : mouseX - w - gap
+    primaryY := mouseY >= centerY ? mouseY - h - gap : mouseY + gap
+    secondaryY := mouseY >= centerY ? mouseY + gap : mouseY - h - gap
+    return [
+        {x: primaryX, y: primaryY},
+        {x: secondaryX, y: primaryY},
+        {x: primaryX, y: secondaryY},
+        {x: secondaryX, y: secondaryY}
+    ]
+}
+
+ClampPreviewCandidate(candidate, w, h, left, top, right, bottom) {
+    return {
+        x: Clamp(candidate.x, left + 10, right - w - 10),
+        y: Clamp(candidate.y, top + 10, bottom - h - 10)
+    }
+}
+
 KeepPreviewAwayFromSendAnchor(x, y, w, h, left, top, right, bottom) {
-    if !OverlapsSendAnchorGuard(x, y, w, h) {
+    if PreviewClearsSendAnchor(x, y, w, h) {
         return {x: x, y: y}
     }
     if !GetSendAnchorGuardRect(&guardLeft, &guardTop, &guardRight, &guardBottom) {
@@ -1664,24 +1715,34 @@ KeepPreviewAwayFromSendAnchor(x, y, w, h, left, top, right, bottom) {
     }
 
     gap := ReadIntConfig("preview", "send_anchor_guard_gap", 12)
+    preferAbove := y < guardTop
+    preferLeft := x < guardLeft
+    nearY := preferAbove ? guardTop - h - gap : guardBottom + gap
+    farY := preferAbove ? guardBottom + gap : guardTop - h - gap
+    nearX := preferLeft ? guardLeft - w - gap : guardRight + gap
+    farX := preferLeft ? guardRight + gap : guardLeft - w - gap
     candidates := [
-        {x: x, y: guardTop - h - gap},
-        {x: x, y: guardBottom + gap},
-        {x: guardLeft - w - gap, y: y},
-        {x: guardRight + gap, y: y}
+        {x: x, y: nearY},
+        {x: nearX, y: y},
+        {x: nearX, y: nearY},
+        {x: farX, y: nearY},
+        {x: x, y: farY},
+        {x: nearX, y: farY},
+        {x: farX, y: y},
+        {x: farX, y: farY}
     ]
     for candidate in candidates {
         candidateX := Clamp(candidate.x, left + 10, right - w - 10)
         candidateY := Clamp(candidate.y, top + 10, bottom - h - 10)
         if FitsInWorkArea(candidateX, candidateY, w, h, left, top, right, bottom)
-            && !OverlapsSendAnchorGuard(candidateX, candidateY, w, h) {
+            && PreviewClearsSendAnchor(candidateX, candidateY, w, h) {
             return {x: candidateX, y: candidateY}
         }
     }
 
-    fallbackY := guardTop - h - gap
-    if (fallbackY < top + 10) {
-        fallbackY := guardBottom + gap
+    fallbackY := nearY
+    if (fallbackY < top + 10 || fallbackY + h > bottom - 10) {
+        fallbackY := farY
     }
     return {
         x: Clamp(x, left + 10, right - w - 10),
@@ -1697,6 +1758,30 @@ OverlapsSendAnchorGuard(x, y, w, h) {
 }
 
 GetSendAnchorGuardRect(&guardLeft, &guardTop, &guardRight, &guardBottom) {
+    return GetSendAnchorInfo(&guardLeft, &guardTop, &guardRight, &guardBottom, &anchorX, &anchorY)
+}
+
+PreviewClearsSendAnchor(x, y, w, h) {
+    if !GetSendAnchorInfo(&guardLeft, &guardTop, &guardRight, &guardBottom, &anchorX, &anchorY) {
+        return true
+    }
+    if x < guardRight && x + w > guardLeft && y < guardBottom && y + h > guardTop {
+        return false
+    }
+    minDistance := ReadIntConfig("preview", "send_anchor_min_distance", 220)
+    if minDistance <= 0 {
+        return true
+    }
+    return RectDistanceToPoint(x, y, w, h, anchorX, anchorY) >= minDistance
+}
+
+RectDistanceToPoint(x, y, w, h, pointX, pointY) {
+    dx := pointX < x ? x - pointX : (pointX > x + w ? pointX - (x + w) : 0)
+    dy := pointY < y ? y - pointY : (pointY > y + h ? pointY - (y + h) : 0)
+    return Sqrt(dx * dx + dy * dy)
+}
+
+GetSendAnchorInfo(&guardLeft, &guardTop, &guardRight, &guardBottom, &anchorX, &anchorY) {
     global PREVIEW_TARGET_HWND
 
     if !ReadBoolConfig("preview", "avoid_send_anchor", true) {
@@ -1715,9 +1800,9 @@ GetSendAnchorGuardRect(&guardLeft, &guardTop, &guardRight, &guardBottom) {
     catch {
         return false
     }
-    guardX := ReadIntConfig("preview", "send_anchor_guard_x", 80)
-    guardAbove := ReadIntConfig("preview", "send_anchor_guard_above", 260)
-    guardBelow := ReadIntConfig("preview", "send_anchor_guard_below", 100)
+    guardX := ReadIntConfig("preview", "send_anchor_guard_x", 240)
+    guardAbove := ReadIntConfig("preview", "send_anchor_guard_above", 320)
+    guardBelow := ReadIntConfig("preview", "send_anchor_guard_below", 140)
     guardLeft := anchorX - guardX
     guardRight := anchorX + guardX
     guardTop := anchorY - guardAbove
@@ -2485,7 +2570,11 @@ StripBom(text) {
 
 IsSeparatorLine(line) {
     trimmed := Trim(line)
-    return RegExMatch(trimmed, "^-{3,}$")
+    if !RegExMatch(trimmed, "^[\s\-–—―─]+$") {
+        return false
+    }
+    dashOnly := RegExReplace(trimmed, "\s+", "")
+    return StrLen(dashOnly) >= 3
 }
 
 AddPart(parts, text) {
@@ -2651,19 +2740,21 @@ DefaultConfig() {
     return "
 (
 [wechat]
+bind_app=wechat
 exe_list=WeChat.exe,Weixin.exe
 
 [capture]
-timeout_seconds=0.6
+timeout_seconds=0.3
 
 [preview]
 send_mode=all
 return_count=5
 avoid_send_anchor=1
-send_anchor_guard_x=80
-send_anchor_guard_above=260
-send_anchor_guard_below=100
+send_anchor_guard_x=240
+send_anchor_guard_above=320
+send_anchor_guard_below=140
 send_anchor_guard_gap=12
+send_anchor_min_distance=220
 
 [send]
 text=

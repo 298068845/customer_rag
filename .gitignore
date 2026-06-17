@@ -21,6 +21,10 @@ __pycache__/
 *.py[cod]
 .venv/
 
+# Installer build outputs.
+build/
+dist/
+
 # Local runtime logs and temporary WeChat bridge files.
 *.log
 wechatExtension/send-text.txt

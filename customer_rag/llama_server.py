@@ -10,7 +10,7 @@ from pathlib import Path
 from customer_rag.config import RagConfig
 
 
-LLAMA_CPP_DIR = Path("tools") / "llama.cpp"
+LLAMA_CPP_SUBDIR = Path("llama.cpp")
 
 
 @dataclass(frozen=True)
@@ -69,11 +69,12 @@ def find_llama_server_executable(config: RagConfig, root: Path | None = None) ->
 
     requested = config.llm.llama_server_backend.lower()
     backend_order = _backend_order(requested)
+    tools_dir = _resolve_config_path(config.tools_dir, root)
     for backend in backend_order:
-        for candidate in _backend_candidates(root, backend):
+        for candidate in _backend_candidates(tools_dir, backend):
             if candidate.exists():
                 return candidate, backend, ""
-    return None, requested, _missing_executable_message(root, backend_order)
+    return None, requested, _missing_executable_message(tools_dir, backend_order)
 
 
 def is_llama_server_healthy(config: RagConfig, timeout: float = 1.0) -> bool:
@@ -106,8 +107,12 @@ def _backend_order(requested: str) -> list[str]:
     return order
 
 
-def _backend_candidates(root: Path, backend: str) -> list[Path]:
-    base = root / LLAMA_CPP_DIR
+def _resolve_config_path(path: Path, root: Path) -> Path:
+    return path if path.is_absolute() else root / path
+
+
+def _backend_candidates(tools_dir: Path, backend: str) -> list[Path]:
+    base = tools_dir / LLAMA_CPP_SUBDIR
     names = ["llama-server.exe", "server.exe"]
     return [base / backend / name for name in names] + [base / name for name in names]
 
@@ -126,6 +131,6 @@ def _has_nvidia_gpu() -> bool:
         return False
 
 
-def _missing_executable_message(root: Path, backends: list[str]) -> str:
-    folders = "、".join(str(root / LLAMA_CPP_DIR / backend / "llama-server.exe") for backend in backends)
+def _missing_executable_message(tools_dir: Path, backends: list[str]) -> str:
+    folders = "、".join(str(tools_dir / LLAMA_CPP_SUBDIR / backend / "llama-server.exe") for backend in backends)
     return f"未找到 llama-server.exe，请放到：{folders}"

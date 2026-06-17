@@ -11,6 +11,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from customer_rag.category_config import category_brands
+from customer_rag.config import load_config
 from customer_rag.logging_config import configure_logging, log_exception
 import customer_rag.talk_rag as talk_rag_module
 
@@ -42,7 +43,7 @@ APP_ICON_PATH = Path(__file__).resolve().parent / "customer_rag" / "assets" / "a
 
 st.set_page_config(page_title="话术 RAG 管理台", page_icon=str(APP_ICON_PATH), layout="wide")
 
-STORE = TalkRagStore()
+STORE = TalkRagStore(load_config().talk_data_dir)
 ENGINE = TalkRagEngine(STORE)
 STORE.ensure_seed_data()
 
