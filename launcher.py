@@ -20,13 +20,21 @@ from PIL import Image, ImageDraw
 
 from customer_rag.config import load_config
 from customer_rag.llama_server import build_llama_server_plan, is_llama_server_healthy
+from customer_rag.logging_config import (
+    configure_logging,
+    install_exception_hooks,
+    log_event,
+    log_system_snapshot,
+    logs_dir,
+)
 
 ROOT = Path(__file__).resolve().parent
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
-STREAMLIT_LOG = ROOT / "streamlit.log"
-STREAMLIT_ERR = ROOT / "streamlit.err.log"
-TALK_STREAMLIT_LOG = ROOT / "talk-streamlit.log"
-TALK_STREAMLIT_ERR = ROOT / "talk-streamlit.err.log"
+LOG_DIR = logs_dir(ROOT)
+STREAMLIT_LOG = LOG_DIR / "streamlit.log"
+STREAMLIT_ERR = LOG_DIR / "streamlit.error.log"
+TALK_STREAMLIT_LOG = LOG_DIR / "talk-streamlit.log"
+TALK_STREAMLIT_ERR = LOG_DIR / "talk-streamlit.error.log"
 WECHAT_START = ROOT / "wechatExtension" / "start.ps1"
 WECHAT_STOP = ROOT / "wechatExtension" / "stop.ps1"
 WECHAT_CONFIG = ROOT / "wechatExtension" / "config.ini"
@@ -35,10 +43,11 @@ APP_PORT = 8501
 TASK_API_URL = "http://127.0.0.1:8512"
 SUBSCRIPTION_JOB_STATE = ROOT / "data" / "index" / "subscription_update_job.json"
 RAW_JOB_STATE = ROOT / "data" / "index" / "raw_job_state.json"
-NOTIFICATION_LOG = ROOT / "data" / "index" / "notification.log"
+NOTIFICATION_LOG = LOG_DIR / "notification.log"
 NOTIFICATION_REQUEST = ROOT / "data" / "index" / "notification.request.json"
 TALK_APP_URL = "http://127.0.0.1:8502"
 TALK_APP_PORT = 8502
+APP_ICON_PATH = ROOT / "customer_rag" / "assets" / "app_icon.png"
 LOCATOR_MODE_DEFAULT = "uia"
 LOCATOR_MODE_LABELS = {
     "uia": "UIA \u5b9a\u4f4d",
@@ -62,7 +71,12 @@ single_instance_mutex_handle: int | None = None
 
 
 def main() -> None:
+    configure_logging(ROOT, component="app")
+    install_exception_hooks(ROOT, component="app")
+    log_system_snapshot(ROOT)
+    log_event("app", "launcher_starting", "launcher starting", project_root=ROOT)
     if not acquire_single_instance():
+        log_event("app", "launcher_already_running", "another launcher instance is already running", project_root=ROOT)
         return
     ensure_python()
     refresh_wechat_state()
@@ -158,9 +172,11 @@ def build_menu() -> pystray.Menu:
 
 
 def start_all(icon: pystray.Icon) -> None:
+    log_event("app", "services_starting", "starting services", project_root=ROOT)
     set_status(icon, "正在启动 RAG 服务", "starting")
     notify(icon, "正在启动 RAG 服务", "请稍候，服务启动完成前不会打开 RAG 页面。")
     if not preflight_check():
+        log_event("app", "preflight_failed", "preflight check failed", level=40, project_root=ROOT, include_system=True)
         set_status(icon, "RAG 服务启动失败", "paused")
         notify(icon, "RAG 服务启动失败", "代码自检未通过，请查看 streamlit.err.log。")
         return
@@ -168,11 +184,13 @@ def start_all(icon: pystray.Icon) -> None:
     start_streamlit()
     start_talk_streamlit()
     if not wait_for_streamlit() or not wait_for_talk_streamlit():
+        log_event("app", "streamlit_healthcheck_failed", "streamlit healthcheck failed", level=40, project_root=ROOT, include_system=True)
         set_status(icon, "RAG 服务启动失败", "paused")
         notify(icon, "RAG 服务启动失败", "请查看 streamlit.err.log 或 streamlit.log。")
         return
     set_status(icon, "正在启动微信插件", "starting")
     start_wechat_plugin(icon)
+    log_event("app", "services_started", "services started", project_root=ROOT)
     set_status(icon, "运行中", "running")
     open_app(icon)
 
@@ -200,6 +218,13 @@ def start_streamlit() -> None:
             env=env,
             creationflags=CREATE_NO_WINDOW,
         )
+    log_event(
+        "app",
+        "streamlit_started",
+        "streamlit process started",
+        project_root=ROOT,
+        context={"pid": streamlit_process.pid if streamlit_process else 0, "port": APP_PORT},
+    )
 
 
 def start_talk_streamlit() -> None:
@@ -224,6 +249,13 @@ def start_talk_streamlit() -> None:
             env=env,
             creationflags=CREATE_NO_WINDOW,
         )
+    log_event(
+        "app",
+        "talk_streamlit_started",
+        "talk streamlit process started",
+        project_root=ROOT,
+        context={"pid": talk_streamlit_process.pid if talk_streamlit_process else 0, "port": TALK_APP_PORT},
+    )
 
 
 def restart_streamlit(icon: pystray.Icon, _: object = None) -> None:
@@ -278,6 +310,7 @@ def start_llama_server(icon: pystray.Icon | None = None) -> None:
     config = load_config(ROOT / "config.yaml")
     plan = build_llama_server_plan(config, ROOT)
     if not plan.enabled:
+        log_event("llama", "llama_server_disabled", "llama server not started", project_root=ROOT, context={"reason": plan.reason, "backend": config.llm.backend})
         if config.llm.backend == "llama_cpp_server" and icon:
             notify(icon, "llama.cpp server 未启动", plan.reason)
         return
@@ -287,8 +320,8 @@ def start_llama_server(icon: pystray.Icon | None = None) -> None:
         for owner in port_owner_pids(config.llm.llama_server_port):
             run_powershell(f"Stop-Process -Id {owner} -Force")
         time.sleep(1)
-    log_path = ROOT / "llama-server.log"
-    err_path = ROOT / "llama-server.err.log"
+    log_path = LOG_DIR / "llama.log"
+    err_path = LOG_DIR / "llama.error.log"
     with log_path.open("ab") as stdout, err_path.open("ab") as stderr:
         env = dict(os.environ)
         env["LLAMA_ARG_NO_DISPLAY_PROMPT"] = "1"
@@ -300,9 +333,17 @@ def start_llama_server(icon: pystray.Icon | None = None) -> None:
             env=env,
             creationflags=CREATE_NO_WINDOW,
         )
+    log_event(
+        "llama",
+        "llama_server_started",
+        "llama server process started",
+        project_root=ROOT,
+        context={"pid": llama_server_process.pid if llama_server_process else 0, "backend": plan.backend},
+    )
     if icon and config.llm.backend == "llama_cpp_server":
         notify(icon, "正在启动 llama.cpp server", f"后端：{plan.backend}")
     if config.llm.backend == "llama_cpp_server" and not wait_for_llama_server(config):
+        log_event("llama", "llama_server_healthcheck_failed", "llama server healthcheck failed", level=40, project_root=ROOT, include_system=True)
         if icon:
             notify(icon, "llama.cpp server 启动超时", "RAG 页面仍会启动，问答会临时回退到检索结果或 Ollama。")
 
@@ -450,6 +491,7 @@ def start_wechat_plugin(icon: pystray.Icon | None = None, _: object = None) -> N
         if WECHAT_START.exists():
             run_powershell(f"& {quote_ps(WECHAT_START)}")
         set_wechat_running(True)
+        log_event("wechat", "wechat_plugin_started", "wechat plugin started", project_root=ROOT)
     finally:
         set_wechat_busy(False)
     if icon:
@@ -462,6 +504,7 @@ def stop_wechat_plugin(icon: pystray.Icon | None = None, _: object = None) -> No
         if WECHAT_STOP.exists():
             run_powershell(f"& {quote_ps(WECHAT_STOP)}")
         set_wechat_running(False)
+        log_event("wechat", "wechat_plugin_stopped", "wechat plugin stopped", project_root=ROOT)
     finally:
         set_wechat_busy(False)
     if icon:
@@ -643,6 +686,15 @@ def preflight_check() -> bool:
     )
     if result.returncode == 0:
         return True
+    log_event(
+        "app",
+        "preflight_command_failed",
+        "preflight command failed",
+        level=40,
+        project_root=ROOT,
+        context={"returncode": result.returncode, "stderr": result.stderr[-4000:], "stdout": result.stdout[-4000:]},
+        include_system=True,
+    )
     with STREAMLIT_ERR.open("ab") as stderr:
         stderr.write(("\n[launcher preflight failed]\n" + result.stderr + result.stdout).encode("utf-8", errors="ignore"))
     return False
@@ -873,7 +925,16 @@ def current_icon_kind() -> str:
 
 
 def create_icon(kind: str) -> Image.Image:
-    image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    try:
+        with Image.open(APP_ICON_PATH) as source:
+            image = source.convert("RGBA").resize((64, 64), Image.Resampling.LANCZOS)
+    except Exception:
+        image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        draw.rounded_rectangle((8, 8, 56, 56), radius=14, fill=(66, 133, 244, 255))
+        draw.text((21, 18), "R", fill=(255, 255, 255, 255))
+        return image
+
     draw = ImageDraw.Draw(image)
     if kind == "paused":
         fill = (230, 126, 34, 255)
@@ -881,8 +942,7 @@ def create_icon(kind: str) -> Image.Image:
         fill = (36, 150, 89, 255)
     else:
         fill = (66, 133, 244, 255)
-    draw.rounded_rectangle((8, 8, 56, 56), radius=14, fill=fill)
-    draw.text((21, 18), "R", fill=(255, 255, 255, 255))
+    draw.ellipse((43, 43, 61, 61), fill=fill, outline=(255, 255, 255, 230), width=2)
     return image
 
 

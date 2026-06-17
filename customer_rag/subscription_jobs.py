@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from customer_rag.config import RagConfig
 from customer_rag.cookie_login import load_saved_cookie, read_login_state, start_cookie_login
+from customer_rag.logging_config import configure_logging, log_event, log_exception
 from customer_rag.process_utils import process_is_alive, start_worker_process
 from customer_rag.task_coordinator import read_state as read_coordinator_state, release, try_acquire
 from customer_rag.time_format import display_datetime, display_datetimes_in_text, now_display
@@ -163,7 +164,6 @@ def start_subscription_job(
             state.origin = origin
             state.worker_pid = 0
             state.resume_count = int(state.resume_count or 0) + 1
-            _add_log(state, f"第 {state.resume_count} 次从安全点继续，已完成 {len(state.processed_urls)} / {state.total} 个订阅")
         _write_state(config, state)
         if os.environ.get("CUSTOMER_RAG_INLINE_WORKER") == "1":
             _worker = threading.Thread(
@@ -193,6 +193,14 @@ def start_subscription_job(
                 )
                 _write_state(config, state)
             except Exception as exc:
+                log_exception(
+                    "subscription",
+                    "subscription_worker_start_failed",
+                    "subscription worker start failed",
+                    exc,
+                    job_id=job_id,
+                    context={"origin": origin, "total": len(subscriptions)},
+                )
                 state.status = "error"
                 state.finished_at = _now()
                 state.message = f"启动独立订阅更新进程失败：{exc}"
@@ -258,6 +266,7 @@ def _run_subscription_job(
     cookie: str,
     job_id: str,
 ) -> None:
+    configure_logging()
     state = read_job_state(config)
     started_monotonic = time.monotonic()
     state_lock = threading.Lock()
@@ -266,6 +275,18 @@ def _run_subscription_job(
     failed_subscriptions: list[TencentDocSubscription] = []
     cookie_failed_subscriptions: list[TencentDocSubscription] = []
     active_cookie = cookie
+    log_event(
+        "subscription",
+        "subscription_job_started",
+        "subscription job started",
+        job_id=job_id,
+        context={
+            "origin": state.origin,
+            "total": len(subscriptions),
+            "subscriptions_path": str(subscriptions_path),
+            "cookie_saved": bool(cookie),
+        },
+    )
 
     def current_state_is_active() -> bool:
         return read_job_state(config).job_id == job_id
@@ -302,8 +323,6 @@ def _run_subscription_job(
             state.current_total = None
             state.message = f"正在更新：{subscription.name}"
             save_status(subscription, "更新中")
-            local_modified = display_datetime(subscription.last_modified) or "空"
-            _add_log(state, f"{subscription.name} 开始检查；本地记录最后修改={local_modified}")
             write_state()
 
         try:
@@ -313,16 +332,6 @@ def _run_subscription_job(
             output_path = subscription_output_path(subscription, config.raw_data_dir)
             local_exists = output_path.exists()
 
-            with state_lock:
-                _add_log(
-                    state,
-                    (
-                        f"{subscription.name} 远端最后修改={display_datetime(remote_modified) or '未读取到'}；"
-                        f"本地文件={'存在' if local_exists else '不存在'}；路径={output_path}"
-                    ),
-                )
-                write_state()
-
             if remote_modified and display_datetime(remote_modified) == local_modified and local_exists:
                 with state_lock:
                     state.skipped += 1
@@ -330,24 +339,9 @@ def _run_subscription_job(
                         state.processed_urls.append(subscription.url)
                     update_download_percent()
                     save_status(subscription, "跳过：文件未变化", last_modified=remote_modified)
-                    _add_log(
-                        state,
-                        f"{subscription.name} 跳过：远端最后修改与已入库记录一致 ({display_datetime(remote_modified)})，且本地文件存在",
-                    )
+                    _add_log(state, f"{subscription.name} 跳过")
                     write_state()
                 return
-
-            with state_lock:
-                if not remote_modified:
-                    _add_log(state, f"{subscription.name} 决定下载：未读取到远端最后修改时间，无法确认本地是否最新")
-                elif display_datetime(remote_modified) != local_modified:
-                    _add_log(
-                        state,
-                        f"{subscription.name} 决定下载：远端最后修改 {display_datetime(remote_modified)} != 已入库记录 {local_modified or '空'}",
-                    )
-                elif not local_exists:
-                    _add_log(state, f"{subscription.name} 决定下载：远端时间未变化但本地文件不存在")
-                write_state()
 
             last_progress_write = 0.0
 
@@ -384,12 +378,23 @@ def _run_subscription_job(
                 update_download_percent()
                 state.updated_names.append(subscription.name)
                 save_status(subscription, "已下载待解析")
-                _add_log(
-                    state,
-                    f"{subscription.name} 下载完成；保存到={downloaded_path}；待提交远端最后修改={display_datetime(remote_modified) or '空'}",
-                )
+                _add_log(state, f"{subscription.name} 成功")
                 write_state()
         except Exception as exc:  # noqa: BLE001 - one failed document must not abort the batch.
+            log_exception(
+                "subscription",
+                "subscription_document_failed",
+                "subscription document failed",
+                exc,
+                job_id=job_id,
+                context={
+                    "subscription_name": subscription.name,
+                    "url": subscription.url,
+                    "index": index,
+                    "cookie_error": _is_cookie_error(exc),
+                    "output_path": str(subscription_output_path(subscription, config.raw_data_dir)),
+                },
+            )
             with state_lock:
                 state.failed += 1
                 update_download_percent()
@@ -398,7 +403,7 @@ def _run_subscription_job(
                     state.cookie_refresh_required = True
                     cookie_failed_subscriptions.append(subscription)
                 save_status(subscription, f"失败：{exc}")
-                _add_log(state, f"{subscription.name} 更新失败：{exc}")
+                _add_log(state, f"{subscription.name} 失败：{exc}")
                 write_state()
 
     try:
@@ -421,7 +426,6 @@ def _run_subscription_job(
             failed_subscriptions[:] = [item for item in failed_subscriptions if item.url not in failed_urls]
             state.status = "waiting_cookie"
             state.message = "Cookie 已失效，等待重新登录腾讯文档"
-            _add_log(state, f"等待重新获取 Cookie，之后重试失败订阅 {len(retry_subscriptions)} 个")
             write_state()
             start_cookie_login(config, timeout_seconds=1800, poll_seconds=10)
             while not _stop_requested(config):
@@ -477,7 +481,6 @@ def _run_subscription_job(
             state.status = "rebuilding"
             state.percent = 58
             state.message = f"正在解析 {len(downloaded_paths)} 个更新文件"
-            _add_log(state, f"下载完成：新增/更新 {len(downloaded_paths)} 个原始文件，开始解析")
             write_state()
             pipeline = RagPipeline(config)
 
@@ -510,7 +513,6 @@ def _run_subscription_job(
             state.removed = int(stats.get("removed") or 0)
             state.percent = 70
             state.message = "语料解析完成，正在构建新索引"
-            _add_log(state, f"解析完成：文档 {state.documents} 个，新增语料 {state.items} 条，替换旧语料 {state.removed} 条")
             write_state()
 
             def rebuild_progress(percent: int, message: str) -> None:
@@ -534,7 +536,6 @@ def _run_subscription_job(
             state.processed_urls = []
             state.percent = 100
             state.message = f"订阅更新完成：{len(state.updated_names)} 个"
-            _add_log(state, f"索引原子切换完成：{state.chunks} 个片段")
         else:
             state.message = "订阅检查完成，无需下载。"
             state.percent = 100
@@ -544,10 +545,40 @@ def _run_subscription_job(
         state.status = "completed"
         state.finished_at = _now()
         state.duration_seconds = max(0, int(time.monotonic() - started_monotonic))
-        _add_log(state, f"任务完成，总耗时 {state.duration_seconds} 秒")
+        log_event(
+            "subscription",
+            "subscription_job_finished",
+            "subscription job finished",
+            job_id=job_id,
+            context={
+                "downloaded": state.downloaded,
+                "skipped": state.skipped,
+                "failed": state.failed,
+                "documents": state.documents,
+                "items": state.items,
+                "chunks": state.chunks,
+                "duration_seconds": state.duration_seconds,
+                "updated_names": state.updated_names,
+            },
+        )
         release(config, state.job_id or job_id, f"auto:{state.status}" if state.origin == "auto" else state.status)
         write_state()
     except Exception as exc:  # noqa: BLE001 - background jobs must persist diagnostics.
+        log_exception(
+            "subscription",
+            "subscription_job_failed",
+            "subscription job failed",
+            exc,
+            job_id=job_id,
+            context={
+                "status": state.status,
+                "current_name": state.current_name,
+                "downloaded": state.downloaded,
+                "skipped": state.skipped,
+                "failed": state.failed,
+                "updated_files": state.updated_files,
+            },
+        )
         state.status = "error"
         state.finished_at = _now()
         state.message = f"后台任务异常：{exc}"

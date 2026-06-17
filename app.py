@@ -23,6 +23,7 @@ from uuid import uuid4
 
 from customer_rag.category_config import category_aliases, category_brands, save_category_catalog
 from customer_rag.local_task_api import ensure_local_task_api
+from customer_rag.logging_config import configure_logging, log_exception
 from customer_rag.loaders import SUPPORTED_SUFFIXES
 from customer_rag.prompt_defaults import DEFAULT_SYSTEM_PROMPT
 from customer_rag.time_format import display_datetime
@@ -31,6 +32,7 @@ is_subscription_job_running = subscription_jobs_module.is_subscription_job_runni
 read_job_state = subscription_jobs_module.read_job_state
 request_stop_subscription_job = subscription_jobs_module.request_stop_subscription_job
 start_subscription_job = subscription_jobs_module.start_subscription_job
+configure_logging(component="app")
 from customer_rag.tencent_docs import (
     TencentDocSubscription,
     load_subscriptions,
@@ -40,7 +42,9 @@ from customer_rag.tencent_docs import (
 )
 
 
-st.set_page_config(page_title="本地腾讯文档 RAG", layout="wide")
+APP_ICON_PATH = Path(__file__).resolve().parent / "customer_rag" / "assets" / "app_icon.png"
+
+st.set_page_config(page_title="本地腾讯文档 RAG", page_icon=str(APP_ICON_PATH), layout="wide")
 LOCAL_TASK_API_URL = ensure_local_task_api()
 st.markdown(
     """
@@ -1994,11 +1998,25 @@ def submit_qa_query() -> None:
     question = str(st.session_state.get("qa_query_question", "")).strip()
     if not question:
         return
-    st.session_state["qa_query_result"] = pipeline.ask(
-        question,
-        system_prompt=current_system_prompt(),
-        tags=list(st.session_state.get("qa_query_tags", [])),
-    )
+    try:
+        st.session_state["qa_query_result"] = pipeline.ask(
+            question,
+            system_prompt=current_system_prompt(),
+            tags=list(st.session_state.get("qa_query_tags", [])),
+        )
+    except Exception as exc:  # noqa: BLE001 - persist UI query diagnostics before Streamlit renders the error.
+        log_exception(
+            "query",
+            "streamlit_query_failed",
+            "streamlit query failed",
+            exc,
+            context={
+                "question_length": len(question),
+                "question_preview": question[:80],
+                "tags": list(st.session_state.get("qa_query_tags", [])),
+            },
+        )
+        raise
 
 title_col, settings_col = st.columns([1, 0.16], vertical_alignment="center")
 with title_col:

@@ -6,12 +6,15 @@ from pathlib import Path
 
 from customer_rag.config import load_config
 from customer_rag.cookie_login import load_saved_cookie
+from customer_rag.logging_config import configure_logging, install_exception_hooks, log_exception
 from customer_rag.raw_jobs import _run_raw_job
 from customer_rag.subscription_jobs import _run_subscription_job
 from customer_rag.tencent_docs import TencentDocSubscription
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_logging()
+    install_exception_hooks(component="app")
     args = list(argv or sys.argv[1:])
     if not args:
         return 2
@@ -53,4 +56,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:  # noqa: BLE001 - persist worker startup failures.
+        log_exception("app", "job_worker_failed", "job worker failed", exc)
+        raise

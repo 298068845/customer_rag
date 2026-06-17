@@ -5,6 +5,7 @@ import time
 
 from customer_rag.config import RagConfig
 from customer_rag.cookie_login import has_saved_cookie, load_saved_cookie, start_cookie_login
+from customer_rag.logging_config import log_exception
 from customer_rag.subscription_jobs import resume_interrupted_subscription_job, start_subscription_job
 from customer_rag.task_coordinator import auto_is_due, defer_auto, read_state, schedule_auto_now_on_start
 from customer_rag.tencent_docs import load_subscriptions
@@ -60,6 +61,7 @@ def _run_scheduler(config: RagConfig) -> None:
     while True:
         try:
             run_auto_update_check(config)
-        except Exception:
+        except Exception as exc:
+            log_exception("subscription", "auto_update_scheduler_error", "auto update scheduler error", exc)
             defer_auto(config, "scheduler_error")
         time.sleep(2)

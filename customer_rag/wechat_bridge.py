@@ -9,6 +9,7 @@ import sys
 import time
 from dataclasses import replace
 from pathlib import Path
+from uuid import uuid4
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -16,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from customer_rag.category_config import category_aliases
 from customer_rag.category_config import category_brands
+from customer_rag.logging_config import configure_logging, log_event, log_exception, logs_dir
 from customer_rag.prompt_defaults import DEFAULT_SYSTEM_PROMPT
 from customer_rag.talk_rag import TalkRagEngine
 
@@ -46,10 +48,14 @@ def main() -> int:
     parser.add_argument("--filters-file", type=Path)
     parser.add_argument("--talk-only", action="store_true")
     parser.add_argument("--talk-shortcuts-file", type=Path)
+    parser.add_argument("--query-id", default="")
     args = parser.parse_args()
 
     project_root = args.project_root.resolve()
-    log_file = args.log_file or project_root / "wechatExtension" / "rag-bridge.log"
+    configure_logging(project_root, component="query")
+    log_file = args.log_file or logs_dir(project_root) / "rag-bridge.last.log"
+    query_id = args.query_id.strip() or uuid4().hex
+    started_monotonic = time.monotonic()
 
     try:
         os.chdir(project_root)
@@ -67,6 +73,24 @@ def main() -> int:
         question = args.question_file.read_text(encoding="utf-8-sig").strip()
         if not question and not args.talk_only:
             raise ValueError("question file is empty")
+        query_context = {
+            "mode": "talk" if args.talk_only else "tab",
+            "question_length": len(question),
+            "question_preview": _preview_text(question),
+            "tags": args.tags,
+            "brand": args.brand,
+            "top_k": args.top_k,
+            "question_file": str(args.question_file),
+            "output_file": str(args.output_file),
+        }
+        log_event(
+            "query",
+            "query_started",
+            "query started",
+            project_root=project_root,
+            query_id=query_id,
+            context=query_context,
+        )
 
         if args.talk_only:
             engine = TalkRagEngine()
@@ -78,6 +102,14 @@ def main() -> int:
                 shortcut_answers = [format_wechat_answer(item.answer) for item in engine.ask_shortcuts(question)]
                 args.talk_shortcuts_file.parent.mkdir(parents=True, exist_ok=True)
                 args.talk_shortcuts_file.write_text("\n__TALK_SHORTCUT__\n".join(shortcut_answers), encoding="utf-8")
+            log_event(
+                "query",
+                "query_completed",
+                "talk query completed",
+                project_root=project_root,
+                query_id=query_id,
+                context={**query_context, "duration_seconds": round(time.monotonic() - started_monotonic, 3), "answer_length": len(answer)},
+            )
             write_log(log_file, f"OK\nmode=talk-only\nquestion={question}\noutput={args.output_file}\n")
             return 0
 
@@ -108,6 +140,14 @@ def main() -> int:
             if args.brands_file:
                 args.brands_file.parent.mkdir(parents=True, exist_ok=True)
                 args.brands_file.write_text(str(cached.get("brands", "")), encoding="utf-8")
+            log_event(
+                "query",
+                "query_completed",
+                "query completed from cache",
+                project_root=project_root,
+                query_id=query_id,
+                context={**query_context, "cache": "hit", "duration_seconds": round(time.monotonic() - started_monotonic, 3), "answer_length": len(str(cached.get("answer", "")))},
+            )
             write_log(log_file, f"OK\ncache=hit\nquestion={question}\nbrand={selected_brand}\noutput={args.output_file}\n")
             return 0
 
@@ -131,9 +171,41 @@ def main() -> int:
             write_query_brands(args.brands_file, result.sources, selected_brand, answer=answer)
             brands_text = read_text_or_empty(args.brands_file)
         write_query_cache(project_root, cache_key, answer=answer, brands=brands_text)
+        log_event(
+            "query",
+            "query_completed",
+            "query completed",
+            project_root=project_root,
+            query_id=query_id,
+            context={
+                **query_context,
+                "cache": "miss",
+                "duration_seconds": round(time.monotonic() - started_monotonic, 3),
+                "answer_length": len(answer),
+                "sources": len(result.sources),
+                "fallback": bool(result.fallback),
+            },
+        )
         write_log(log_file, f"OK\ncache=miss\nquestion={question}\nbrand={selected_brand}\noutput={args.output_file}\n")
         return 0
     except Exception as exc:  # noqa: BLE001 - CLI bridge should log any user-facing failure.
+        log_exception(
+            "query",
+            "query_failed",
+            "query failed",
+            exc,
+            project_root=project_root,
+            query_id=query_id,
+            context={
+                "duration_seconds": round(time.monotonic() - started_monotonic, 3),
+                "question_file": str(args.question_file) if args.question_file else "",
+                "output_file": str(args.output_file) if args.output_file else "",
+                "talk_only": bool(args.talk_only),
+                "tags": args.tags,
+                "brand": args.brand,
+                "top_k": args.top_k,
+            },
+        )
         write_log(log_file, f"ERROR\n{type(exc).__name__}: {exc}\n")
         return 1
 
@@ -265,6 +337,13 @@ def read_text_or_empty(path: Path | None) -> str:
         return path.read_text(encoding="utf-8-sig")
     except OSError:
         return ""
+
+
+def _preview_text(value: str, limit: int = 80) -> str:
+    cleaned = re.sub(r"\s+", " ", value or "").strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit] + "..."
 
 
 def _sha1_text(value: str) -> str:

@@ -4,15 +4,18 @@ import json
 import importlib
 from dataclasses import replace
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
 from customer_rag.category_config import category_brands
+from customer_rag.logging_config import configure_logging, log_exception
 import customer_rag.talk_rag as talk_rag_module
 
 talk_rag_module = importlib.reload(talk_rag_module)
+configure_logging(component="app")
 
 from customer_rag.talk_rag import (
     COMBINED_REPLY_OPTIONS,
@@ -35,7 +38,9 @@ from customer_rag.talk_rag import (
 )
 
 
-st.set_page_config(page_title="话术 RAG 管理台", layout="wide")
+APP_ICON_PATH = Path(__file__).resolve().parent / "customer_rag" / "assets" / "app_icon.png"
+
+st.set_page_config(page_title="话术 RAG 管理台", page_icon=str(APP_ICON_PATH), layout="wide")
 
 STORE = TalkRagStore()
 ENGINE = TalkRagEngine(STORE)
@@ -297,7 +302,17 @@ def render_match_test() -> None:
         st.subheader("对话测试")
         selected_entry = st.selectbox("话术入口", TALK_ENTRY_OPTIONS, index=0)
         question = st.text_input("问题", value="今日清单是什么", placeholder="例如：美的还有卖吗？空气炸锅有吗？源氏木语什么时候开团？")
-        result = ENGINE.ask(question or "", selected_entry)
+        try:
+            result = ENGINE.ask(question or "", selected_entry)
+        except Exception as exc:  # noqa: BLE001 - persist diagnostics before Streamlit renders the error.
+            log_exception(
+                "query",
+                "talk_streamlit_query_failed",
+                "talk streamlit query failed",
+                exc,
+                context={"entry": selected_entry, "question_length": len(question or ""), "question_preview": (question or "")[:80]},
+            )
+            raise
         st.markdown("#### 输出结果")
         answer = result.answer
         st.markdown(f"<div class='talk-card'>{answer}</div>", unsafe_allow_html=True)

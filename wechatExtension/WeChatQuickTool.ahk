@@ -9,14 +9,15 @@ CoordMode "ToolTip", "Screen"
 OnMessage(0x0201, PreviewWindowMouseDown)
 
 global CONFIG_PATH := A_ScriptDir "\config.ini"
+global LOG_DIR := A_ScriptDir "\..\logs"
 global SEND_TEXT_PATH := A_ScriptDir "\send-text.txt"
 global LAST_SELECTED_PATH := A_ScriptDir "\last-selected.txt"
 global RAG_BRANDS_PATH := A_ScriptDir "\rag-brands.txt"
 global RAG_TALK_SHORTCUTS_PATH := A_ScriptDir "\rag-talk-shortcuts.txt"
 global PREVIEW_TEST_PATH := A_ScriptDir "\preview-test-result.ini"
-global SEND_BOX_DEBUG_PATH := A_ScriptDir "\sendbox-debug.log"
-global SEND_ERROR_LOG_PATH := A_ScriptDir "\send-error.log"
-global UNHANDLED_ERROR_LOG_PATH := A_ScriptDir "\unhandled-error.log"
+global SEND_BOX_DEBUG_PATH := LOG_DIR "\sendbox-debug.log"
+global SEND_ERROR_LOG_PATH := LOG_DIR "\wechat.error.log"
+global UNHANDLED_ERROR_LOG_PATH := LOG_DIR "\wechat.unhandled.error.log"
 global CUSTOM_TAB_PATHS := [
     A_ScriptDir "\custom-tab-1.txt",
     A_ScriptDir "\custom-tab-2.txt",
@@ -60,6 +61,7 @@ global STATUS_GUI := 0
 global STATUS_TITLE := 0
 global STATUS_BODY := 0
 global RAG_QUERY_PID := 0
+global RAG_QUERY_ID := ""
 global RAG_QUERY_STARTED_AT := 0
 global RAG_TALK_ONLY_PENDING := false
 global RAG_TALK_PREVIEW_PENDING := false
@@ -294,7 +296,7 @@ CloseQueryDialog(*) {
 }
 
 AskRagForSelection(tags := "", talkOnly := false, previewTalk := false) {
-    global RAG_QUERY_PID, RAG_QUERY_STARTED_AT, RAG_TALK_ONLY_PENDING, RAG_TALK_PREVIEW_PENDING, RAG_SELECTED_BRAND
+    global RAG_QUERY_PID, RAG_QUERY_ID, RAG_QUERY_STARTED_AT, RAG_TALK_ONLY_PENDING, RAG_TALK_PREVIEW_PENDING, RAG_SELECTED_BRAND
     global RAG_TALK_SHORTCUTS_PATH
 
     if !ReadBoolConfig("rag", "enabled", false) {
@@ -309,7 +311,10 @@ AskRagForSelection(tags := "", talkOnly := false, previewTalk := false) {
     projectRoot := A_ScriptDir "\.."
     python := projectRoot "\.venv\Scripts\python.exe"
     bridge := projectRoot "\customer_rag\wechat_bridge.py"
-    logPath := A_ScriptDir "\rag-bridge.log"
+    EnsureLogDir()
+    logPath := LOG_DIR "\rag-bridge.last.log"
+    queryId := GenerateQueryId()
+    RAG_QUERY_ID := queryId
 
     if !FileExist(python) {
         ShowTip("Python venv not found: " python)
@@ -329,7 +334,7 @@ AskRagForSelection(tags := "", talkOnly := false, previewTalk := false) {
     if (Trim(RAG_SELECTED_BRAND) = "") {
         FileDeleteSafe(RAG_BRANDS_PATH)
     }
-    command := QuoteArg(python) " " QuoteArg(bridge) " --question-file " QuoteArg(LAST_SELECTED_PATH) " --output-file " QuoteArg(SEND_TEXT_PATH) " --project-root " QuoteArg(projectRoot) " --log-file " QuoteArg(logPath)
+    command := QuoteArg(python) " " QuoteArg(bridge) " --question-file " QuoteArg(LAST_SELECTED_PATH) " --output-file " QuoteArg(SEND_TEXT_PATH) " --project-root " QuoteArg(projectRoot) " --log-file " QuoteArg(logPath) " --query-id " QuoteArg(queryId)
     if (Trim(RAG_SELECTED_BRAND) != "") {
         command .= " --brand " QuoteArg(RAG_SELECTED_BRAND)
     }
@@ -352,12 +357,13 @@ AskRagForSelection(tags := "", talkOnly := false, previewTalk := false) {
         RAG_QUERY_STARTED_AT := 0
         RAG_TALK_ONLY_PENDING := false
         RAG_TALK_PREVIEW_PENDING := false
+        SafeAppendLog(SEND_ERROR_LOG_PATH, BuildErrorDetails(exc, "event=query_start_failed`nquery_id=" queryId) "`n`n")
         ShowStatus("error", "查询启动失败", exc.Message, 4200)
     }
 }
 
 CheckRagQueryDone() {
-    global RAG_QUERY_PID, RAG_QUERY_STARTED_AT, RAG_TALK_ONLY_PENDING, RAG_TALK_PREVIEW_PENDING
+    global RAG_QUERY_PID, RAG_QUERY_ID, RAG_QUERY_STARTED_AT, RAG_TALK_ONLY_PENDING, RAG_TALK_PREVIEW_PENDING
 
     if !RAG_QUERY_PID {
         SetTimer CheckRagQueryDone, 0
@@ -371,7 +377,9 @@ CheckRagQueryDone() {
         fallbackMs := fallbackSeconds * 1000
         if (RAG_QUERY_STARTED_AT && A_TickCount - RAG_QUERY_STARTED_AT >= fallbackMs) {
             try ProcessClose RAG_QUERY_PID
+            SafeAppendLog(SEND_ERROR_LOG_PATH, "[query_timeout] query_id=" RAG_QUERY_ID " timeout_ms=" fallbackMs " talk_only=" (RAG_TALK_ONLY_PENDING ? "1" : "0") "`n")
             RAG_QUERY_PID := 0
+            RAG_QUERY_ID := ""
             RAG_QUERY_STARTED_AT := 0
             SetTimer CheckRagQueryDone, 0
             if (RAG_TALK_ONLY_PENDING) {
@@ -388,8 +396,10 @@ CheckRagQueryDone() {
         return
     }
 
+    doneQueryId := RAG_QUERY_ID
     RAG_QUERY_PID := 0
     RAG_QUERY_STARTED_AT := 0
+    RAG_QUERY_ID := ""
     SetTimer CheckRagQueryDone, 0
 
     if FileExist(SEND_TEXT_PATH) && Trim(ReadSendText()) != "" {
@@ -407,9 +417,10 @@ CheckRagQueryDone() {
             ShowRagResultPreview()
         }
     } else {
+        SafeAppendLog(SEND_ERROR_LOG_PATH, "[query_empty_output] query_id=" doneQueryId " send_text_exists=" (FileExist(SEND_TEXT_PATH) ? "1" : "0") "`n")
         RAG_TALK_ONLY_PENDING := false
         RAG_TALK_PREVIEW_PENDING := false
-        ShowStatus("error", "查询失败", "请查看 rag-bridge.log 后重试。", 4200)
+        ShowStatus("error", "查询失败", "请查看 logs\query.error.log 后重试。", 4200)
     }
 }
 
@@ -423,7 +434,7 @@ ShowRagResultPreview() {
 
     text := ReadSendText()
     if (Trim(text) = "") {
-        ShowStatus("error", "查询完成但结果为空", "send-text.txt 为空，请查看 rag-bridge.log。", 4200)
+        ShowStatus("error", "查询完成但结果为空", "send-text.txt 为空，请查看 logs\query.error.log。", 4200)
         return
     }
 
@@ -2607,6 +2618,8 @@ C(chars*) {
 EnsureBootstrapFiles() {
     global CUSTOM_TAB_PATHS
 
+    EnsureLogDir()
+
     if !FileExist(CONFIG_PATH) {
         FileAppend DefaultConfig(), CONFIG_PATH, "UTF-8"
     }
@@ -2620,6 +2633,18 @@ EnsureBootstrapFiles() {
             FileAppend "", path, "UTF-8"
         }
     }
+}
+
+EnsureLogDir() {
+    global LOG_DIR
+
+    if !DirExist(LOG_DIR) {
+        DirCreate LOG_DIR
+    }
+}
+
+GenerateQueryId() {
+    return A_Now A_MSec "-" A_TickCount
 }
 
 DefaultConfig() {

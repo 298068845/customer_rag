@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlparse
 
 from customer_rag.config import load_config
 from customer_rag.auto_update import ensure_auto_update_scheduler
+from customer_rag.logging_config import configure_logging, log_exception
 from customer_rag.cookie_login import (
     capture_cookie,
     cookie_window_is_open,
@@ -41,6 +42,7 @@ def ensure_local_task_api(port: int = 8512) -> str:
     with _lock:
         if _server is not None:
             return f"http://127.0.0.1:{_server_port or port}"
+        configure_logging()
         last_error: OSError | None = None
         for candidate_port in range(port, port + 10):
             try:
@@ -74,6 +76,19 @@ class _TaskApiHandler(BaseHTTPRequestHandler):
         self._send_json({})
 
     def do_GET(self) -> None:
+        try:
+            self._do_GET()
+        except Exception as exc:  # noqa: BLE001 - local API must return JSON diagnostics.
+            log_exception(
+                "app",
+                "local_task_api_error",
+                "local task API request failed",
+                exc,
+                context={"path": self.path, "client": str(self.client_address)},
+            )
+            self._send_json({"ok": False, "error": str(exc), "error_type": type(exc).__name__}, status=500)
+
+    def _do_GET(self) -> None:
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
         config = load_config()

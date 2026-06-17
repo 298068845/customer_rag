@@ -33,7 +33,7 @@ from customer_rag.task_coordinator import (
     try_acquire,
     write_state,
 )
-from customer_rag.tencent_docs import TencentDocSubscription, save_subscriptions
+from customer_rag.tencent_docs import TencentDocSubscription, save_subscriptions, subscription_output_path
 from customer_rag.tencent_docs import _write_xlsx_atomically
 from customer_rag.process_utils import CREATE_NO_WINDOW, DETACHED_PROCESS, _worker_executable, start_worker_process
 
@@ -335,9 +335,43 @@ def test_complete_subscription_flow(config: RagConfig) -> None:
     assert state.updated_names == ["测试订阅"]
     assert state.documents == 3 and state.items == 4 and state.removed == 2 and state.chunks == 7
     assert state.duration_seconds >= 0
+    assert any(log.endswith("测试订阅 成功") for log in state.logs)
+    assert not any(
+        marker in log
+        for log in state.logs
+        for marker in ["开始检查", "远端最后修改", "路径=", "决定下载", "下载完成", "解析完成", "任务完成"]
+    )
     coordinator = read_state(config)
     assert coordinator.active_kind == ""
     assert datetime.fromisoformat(coordinator.next_auto_at) > datetime.now() + timedelta(minutes=19)
+
+
+def test_unchanged_subscription_log_is_compact(config: RagConfig) -> None:
+    remote_modified = "2026-06-11T12:00:00+08:00"
+    subscription = TencentDocSubscription(
+        name="已同步订阅",
+        url="https://docs.qq.com/synced",
+        last_modified=remote_modified,
+    )
+    subscriptions_path = config.index_dir / "tencent_doc_subscriptions.json"
+    save_subscriptions(subscriptions_path, [subscription])
+    downloaded = subscription_output_path(subscription, config.raw_data_dir)
+    downloaded.parent.mkdir(parents=True, exist_ok=True)
+    downloaded.write_bytes(b"cached")
+
+    with patch("customer_rag.subscription_jobs.fetch_subscription_page", return_value=object()), patch(
+        "customer_rag.subscription_jobs.fetch_subscription_last_modified", return_value=remote_modified
+    ), patch("customer_rag.subscription_jobs.download_subscription") as download:
+        started = start_subscription_job(config, subscriptions_path, [subscription], "cookie=ok", origin="manual")
+        assert started.status == "running"
+        wait_until(lambda: read_job_state(config).status not in {"running", "waiting_cookie", "rebuilding", "stopping"})
+
+    state = read_job_state(config)
+    assert state.status == "completed", state
+    assert state.skipped == 1 and state.downloaded == 0 and state.failed == 0
+    assert any(log.endswith("已同步订阅 跳过") for log in state.logs)
+    assert not any("远端最后修改" in log or "本地文件" in log or "路径=" in log for log in state.logs)
+    download.assert_not_called()
 
 
 def test_download_failure_requests_cookie(config: RagConfig) -> None:
@@ -421,6 +455,9 @@ def test_timeout_does_not_restart_successful_downloads(config: RagConfig) -> Non
     assert state.status == "completed", state
     assert state.downloaded == 1 and state.failed == 1
     assert not state.cookie_refresh_required
+    assert any(log.endswith("正常订阅 成功") for log in state.logs)
+    assert any(log.endswith("超时订阅 失败：The read operation timed out") for log in state.logs)
+    assert not any("更新失败" in log or "开始检查" in log or "路径=" in log for log in state.logs)
     assert download.call_count == 1
     login.assert_not_called()
     coordinator = read_state(config)

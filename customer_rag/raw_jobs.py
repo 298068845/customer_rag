@@ -11,6 +11,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from customer_rag.config import RagConfig
+from customer_rag.logging_config import configure_logging, log_event, log_exception
 from customer_rag.pipeline import RagPipeline
 from customer_rag.process_utils import process_is_alive, start_worker_process
 from customer_rag.task_coordinator import release, try_acquire
@@ -114,6 +115,14 @@ def start_raw_job(config: RagConfig, task: str, scope: str = "all") -> RawJobSta
                 state.worker_pid = start_worker_process(["raw", state.job_id, task, scope], Path.cwd())
                 _write_state(config, state)
             except Exception as exc:
+                log_exception(
+                    "subscription",
+                    "raw_worker_start_failed",
+                    "raw import worker start failed",
+                    exc,
+                    job_id=job_id,
+                    context={"task": task, "scope": scope},
+                )
                 state.status = "error"
                 state.finished_at = _now()
                 state.error = f"启动独立导入进程失败：{exc}"
@@ -145,7 +154,15 @@ def resume_interrupted_raw_job(config: RagConfig) -> RawJobState:
 
 
 def _run_raw_job(config: RagConfig, task: str, job_id: str, scope: str = "all") -> None:
+    configure_logging()
     state = read_raw_job_state(config)
+    log_event(
+        "subscription",
+        "raw_job_started",
+        "raw import job started",
+        job_id=job_id,
+        context={"task": task, "scope": scope},
+    )
 
     def update(percent: int, message: str) -> None:
         if read_raw_job_state(config).job_id != job_id:
@@ -194,9 +211,31 @@ def _run_raw_job(config: RagConfig, task: str, job_id: str, scope: str = "all") 
         state.percent = 100
         state.finished_at = _now()
         state.message = _task_label(task) + "完成"
+        log_event(
+            "subscription",
+            "raw_job_finished",
+            "raw import job finished",
+            job_id=job_id,
+            context={
+                "task": task,
+                "scope": scope,
+                "documents": state.documents,
+                "items": state.items,
+                "chunks": state.chunks,
+                "committed_subscriptions": state.committed_subscriptions,
+            },
+        )
         _add_log(state, state.message)
         _write_state(config, state)
     except Exception as exc:  # noqa: BLE001 - user-facing background job boundary.
+        log_exception(
+            "subscription",
+            "raw_job_failed",
+            "raw import job failed",
+            exc,
+            job_id=job_id,
+            context={"task": task, "scope": scope, "percent": state.percent, "message": state.message},
+        )
         if read_raw_job_state(config).job_id != job_id:
             return
         state.status = "error"
