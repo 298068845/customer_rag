@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from customer_rag.browser_cookies import (
     close_tencent_docs_login_window,
+    is_likely_logged_in_cookie,
     is_tencent_docs_login_window_open,
     open_tencent_docs_login_window,
     read_tencent_docs_cookie_from_login_window,
@@ -45,6 +46,8 @@ def has_saved_cookie(config: RagConfig) -> bool:
 
 
 def save_cookie(config: RagConfig, cookie: str) -> None:
+    if not is_likely_logged_in_cookie(cookie):
+        raise RuntimeError("尚未检测到腾讯文档登录态 Cookie，请完成登录后再次点击获取 Cookie")
     data = cookie.encode("utf-8")
     try:
         import win32crypt
@@ -69,12 +72,21 @@ def load_saved_cookie(config: RagConfig) -> str:
         if payload.startswith(b"dpapi:"):
             import win32crypt
 
-            return win32crypt.CryptUnprotectData(payload[6:], None, None, None, 0)[1].decode("utf-8")
+            cookie = win32crypt.CryptUnprotectData(payload[6:], None, None, None, 0)[1].decode("utf-8")
+            return cookie if is_likely_logged_in_cookie(cookie) else ""
         if payload.startswith(b"plain:"):
-            return payload[6:].decode("utf-8")
+            cookie = payload[6:].decode("utf-8")
+            return cookie if is_likely_logged_in_cookie(cookie) else ""
     except (ImportError, OSError, UnicodeDecodeError):
         return ""
     return ""
+
+
+def clear_saved_cookie(config: RagConfig) -> None:
+    try:
+        cookie_path(config).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def read_login_state(config: RagConfig) -> CookieLoginState:

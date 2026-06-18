@@ -124,8 +124,8 @@ def build_menu() -> pystray.Menu:
         pystray.MenuItem(lambda _: f"状态：{get_status()}", noop, enabled=False),
         pystray.MenuItem(f"当前版本v{__version__}", noop, enabled=False),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("打开 RAG 页面", open_app),
-        pystray.MenuItem("打开话术 RAG 页面", open_talk_app),
+        pystray.MenuItem("打开货盘RAG页面", open_app),
+        pystray.MenuItem("打开话术RAG页面", open_talk_app),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(
             "腾讯文档：等待登录",

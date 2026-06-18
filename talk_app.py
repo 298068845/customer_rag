@@ -21,6 +21,7 @@ configure_logging(component="app")
 from customer_rag.talk_rag import (
     COMBINED_REPLY_OPTIONS,
     COMBINED_TALK_TITLE,
+    FIXED_TALK_PAGE_LABELS,
     FIXED_TALK_TITLES,
     TALK_SHORTCUT_TITLES,
     BrandReplyRule,
@@ -35,11 +36,16 @@ from customer_rag.talk_rag import (
     TalkRagEngine,
     TalkRagStore,
     clean_terms,
+    talk_shortcut_display_title,
     new_id,
 )
 
 
 APP_ICON_PATH = Path(__file__).resolve().parent / "customer_rag" / "assets" / "app_icon.png"
+ASSET_LIST_TABLE_COMPONENT = components.declare_component(
+    "asset_list_table",
+    path=str(Path(__file__).resolve().parent / "components" / "asset_list_table"),
+)
 
 st.set_page_config(page_title="话术 RAG 管理台", page_icon=str(APP_ICON_PATH), layout="wide")
 
@@ -52,8 +58,10 @@ DELETE_COLUMN_WIDTH = 78
 FIXED_TRIGGER_EDITOR_HEIGHT = 276
 FIXED_REPLY_RULES_EDITOR_HEIGHT = 260
 ASSET_LIST_EDITOR_HEIGHT = 336
+ASSET_LIST_SAVE_BUTTON_SPACER_HEIGHT = 29
 COMBINED_TRIGGER_EDITOR_HEIGHT = 316
 COMBINED_REPLY_RULES_EDITOR_HEIGHT = 300
+CONFIG_IMPORT_UPLOAD_VERSION_KEY = "talk_rag_config_import_zip_version"
 TALK_ENTRY_OPTIONS = [
     REALTIME_TALK_TITLE,
     *FIXED_TALK_TITLES,
@@ -86,17 +94,37 @@ st.markdown(
             color: #303544;
             font-weight: 400;
         }
-        /* 优化按钮区域的对齐和间距 */
-        div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlock"]:has(.compact-transfer-title) {
-            gap: 8px;
-        }
-        /* 优化导入导出按钮容器的布局 */
-        div[data-testid="stVerticalBlock"]:has(div[data-testid="stDownloadButton"]) {
-            margin-top: 8px;
-            font-size: 14px;
-            color: #303544;
-            font-weight: 400;
-        transform: translateY(-8px);
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) {
+        align-items: stretch;
+        margin: 22px 0 26px 0;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) > div[data-testid="stColumn"]:first-child {
+        display: flex;
+        align-items: center;
+        min-height: 250px;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) > div[data-testid="stColumn"]:first-child h1 {
+        font-size: 44px;
+        line-height: 1.15;
+        letter-spacing: 0;
+        margin: 0 0 18px 0;
+        color: #252b3a;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) > div[data-testid="stColumn"]:first-child [data-testid="stCaptionContainer"] {
+        font-size: 17px;
+        color: #8d94a3;
+        line-height: 1.5;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) > div[data-testid="stColumn"]:has(.compact-transfer-title) {
+        border-left: 1px solid #e4e7ee;
+        padding-left: 46px;
+        min-height: 250px;
+        display: flex;
+        align-items: center;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) {
+        gap: 0;
+        width: 100%;
     }
     .chain-step {
         background: #f7fbff;
@@ -113,40 +141,61 @@ st.markdown(
         margin: -2px 0 12px 0;
     }
     .compact-transfer-title {
-        font-size: 20px;
-        font-weight: 700;
+        font-size: 26px;
+        font-weight: 800;
         color: #303544;
-        margin: 0 0 8px 0;
-        line-height: 1.25;
+        margin: 0 0 16px 0;
+        line-height: 1.15;
     }
     .compact-transfer-note {
         color: #8a94a6;
-        font-size: 13px;
-        margin: 0 0 12px 0;
-        line-height: 1.35;
+        font-size: 16px;
+        margin: 0 0 24px 0;
+        line-height: 1.45;
     }
-    div[data-testid="stCheckbox"] {
-        min-height: 32px;
-        margin-bottom: 12px;
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stCheckbox"] {
+        min-height: 26px;
+        margin-bottom: 10px;
     }
-    div[data-testid="stCheckbox"] label {
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stCheckbox"] label {
         margin-bottom: 0;
+        align-items: center;
+        gap: 8px;
     }
-    div[data-testid="stFileUploader"]:has(input[accept*=".zip"]) {
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stCheckbox"] p {
+        font-size: 16px;
+        color: #303544;
+        font-weight: 600;
+        line-height: 20px;
+        margin: 0;
+        padding: 0;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stCheckbox"] [data-testid="stWidgetLabel"] {
+        min-height: 24px;
+        display: flex;
+        align-items: center;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stCheckbox"] [data-testid="stWidgetLabel"] > div:first-child {
+        border-radius: 6px;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stHorizontalBlock"]:has(div[data-testid="stDownloadButton"]) {
+        margin-top: 10px;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stFileUploader"]:has(input[accept*=".zip"]) {
         margin: 0;
     }
-    div[data-testid="stFileUploader"]:has(input[accept*=".zip"]) section[data-testid="stFileUploaderDropzone"] {
-        min-height: 38px;
-        height: 38px;
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stFileUploader"]:has(input[accept*=".zip"]) section[data-testid="stFileUploaderDropzone"] {
+        min-height: 48px;
+        height: 48px;
         padding: 0;
-        border: 1px solid #d9dee8;
+        border: 1px dashed #cfd5df;
         border-radius: 8px;
         background: #ffffff;
         display: flex;
         align-items: center;
         justify-content: center;
     }
-    div[data-testid="stFileUploader"]:has(input[accept*=".zip"]) section[data-testid="stFileUploaderDropzone"] > div {
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stFileUploader"]:has(input[accept*=".zip"]) section[data-testid="stFileUploaderDropzone"] > div {
         width: 100%;
         height: 100%;
         display: flex;
@@ -154,7 +203,7 @@ st.markdown(
         justify-content: center;
         padding: 0;
     }
-    div[data-testid="stFileUploader"]:has(input[accept*=".zip"]) div[data-testid="stFileUploaderDropzoneInstructions"] {
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stFileUploader"]:has(input[accept*=".zip"]) div[data-testid="stFileUploaderDropzoneInstructions"] {
         display: none !important;
         visibility: hidden !important;
         height: 0 !important;
@@ -163,26 +212,41 @@ st.markdown(
         margin: 0 !important;
         padding: 0 !important;
     }
-    div[data-testid="stFileUploader"]:has(input[accept*=".zip"]) div[data-testid="stFileUploaderDropzoneInstructions"] * {
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stFileUploader"]:has(input[accept*=".zip"]) div[data-testid="stFileUploaderDropzoneInstructions"] * {
         display: none !important;
     }
-    div[data-testid="stFileUploader"]:has(input[accept*=".zip"]) button[data-testid="stBaseButton-secondary"] {
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stFileUploader"]:has(input[accept*=".zip"]) button[data-testid="stBaseButton-secondary"] {
         width: 100%;
-        height: 36px;
-        min-height: 36px;
+        height: 46px;
+        min-height: 46px;
         margin: 0;
         border: 0;
         background: transparent;
         box-shadow: none;
-        color: #4b5563;
+        color: transparent;
+        font-size: 0;
+        font-weight: 400;
     }
-    div[data-testid="stFileUploader"]:has(input[accept*=".zip"]) button[data-testid="stBaseButton-secondary"] > div {
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stFileUploader"]:has(input[accept*=".zip"]) button[data-testid="stBaseButton-secondary"] * {
         display: none;
     }
-    div[data-testid="stFileUploader"]:has(input[accept*=".zip"]) button[data-testid="stBaseButton-secondary"]::after {
-        content: "导入 ZIP";
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stFileUploader"]:has(input[accept*=".zip"]) button[data-testid="stBaseButton-secondary"]::after {
+        content: "⬆  导入 ZIP";
+        color: #303544;
         font-size: 14px;
         font-weight: 400;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stButton"] > button,
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stDownloadButton"] > button {
+        border-radius: 8px;
+        min-height: 48px;
+        height: 48px;
+        font-size: 14px;
+        font-weight: 400;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stButton"] > button[kind="primary"] {
+        font-size: 15px;
+        font-weight: 600;
     }
     div[data-testid="stButton"] > button {
         border-radius: 8px;
@@ -205,6 +269,7 @@ st.markdown(
 def main() -> None:
     title_col, action_col = st.columns([0.45, 0.55], gap="large", vertical_alignment="top")
     with title_col:
+        st.markdown("<span class='talk-hero-title-marker'></span>", unsafe_allow_html=True)
         st.title("话术 RAG 管理台")
         st.caption("实时话术规则、品牌/品类识别和开团日期知识维护。")
     with action_col:
@@ -240,22 +305,25 @@ def render_config_transfer() -> None:
             use_container_width=True,
             help="导出实时话术、固定话术、品牌回复、开团日期、素材文案/图片和回复规则。",
             disabled=not include_realtime and not selected_fixed_titles and not include_combined,
+            icon=":material/upload:",
         )
     with action_cols[1]:
+        import_upload_version = st.session_state.get(CONFIG_IMPORT_UPLOAD_VERSION_KEY, 0)
         uploaded_zip = st.file_uploader(
             "导入 ZIP",
             type=["zip"],
             accept_multiple_files=False,
             label_visibility="collapsed",
-            key="talk_rag_config_import_zip",
+            key=f"talk_rag_config_import_zip_{import_upload_version}",
         )
     with action_cols[2]:
-        if uploaded_zip is not None and st.button(
+        confirm_import = st.button(
             "确认导入并覆盖所选板块",
             type="primary",
             use_container_width=True,
             disabled=not include_realtime and not selected_fixed_titles and not include_combined,
-        ):
+        )
+        if uploaded_zip is not None and confirm_import:
             try:
                 summary = STORE.import_config_zip(
                     uploaded_zip.getvalue(),
@@ -267,6 +335,7 @@ def render_config_transfer() -> None:
                 st.error(str(exc))
             else:
                 clear_talk_config_editor_cache()
+                st.session_state[CONFIG_IMPORT_UPLOAD_VERSION_KEY] = import_upload_version + 1
                 st.success(
                     f"导入完成：实时话术 {'已覆盖' if summary['imported_realtime'] else '未覆盖'}，"
                     f"组合话术 {'已覆盖' if summary['imported_combined'] else '未覆盖'}，"
@@ -278,14 +347,29 @@ def render_config_transfer() -> None:
 
 def render_config_transfer_scope() -> tuple[bool, list[str], bool]:
     st.markdown("<div class='compact-transfer-note'>勾选导入/导出范围，默认全部板块。</div>", unsafe_allow_html=True)
-    options = TALK_SHORTCUT_TITLES
+    fixed_aliases = STORE.load_fixed_aliases()
+    options = [
+        REALTIME_TALK_TITLE,
+        FIXED_TALK_TITLES[0],
+        FIXED_TALK_TITLES[1],
+        FIXED_TALK_TITLES[2],
+        FIXED_TALK_TITLES[3],
+        FIXED_TALK_TITLES[4],
+        FIXED_TALK_TITLES[5],
+        COMBINED_TALK_TITLE,
+    ]
     selected_fixed_titles: list[str] = []
     include_realtime = False
     include_combined = False
     option_cols = st.columns(4, gap="small")
     for index, title in enumerate(options):
+        display_title = "自定义" if title == COMBINED_TALK_TITLE else talk_shortcut_display_title(title, fixed_aliases)
         with option_cols[index % 4]:
-            checked = st.checkbox(title, value=True, key=f"config_transfer_scope_{title}")
+            checked = st.checkbox(
+                display_title,
+                value=True,
+                key=f"config_transfer_scope_{title}",
+            )
         if title == REALTIME_TALK_TITLE:
             include_realtime = checked
         elif title == COMBINED_TALK_TITLE:
@@ -298,10 +382,16 @@ def render_config_transfer_scope() -> tuple[bool, list[str], bool]:
 
 
 def render_match_test() -> None:
+    fixed_aliases = STORE.load_fixed_aliases()
     left, right = st.columns([0.64, 0.36], gap="large")
     with left:
         st.subheader("对话测试")
-        selected_entry = st.selectbox("话术入口", TALK_ENTRY_OPTIONS, index=0)
+        selected_entry = st.selectbox(
+            "话术入口",
+            TALK_ENTRY_OPTIONS,
+            index=0,
+            format_func=lambda title: talk_shortcut_display_title(str(title), fixed_aliases),
+        )
         question = st.text_input("问题", value="今日清单是什么", placeholder="例如：美的还有卖吗？空气炸锅有吗？源氏木语什么时候开团？")
         try:
             result = ENGINE.ask(question or "", selected_entry)
@@ -448,9 +538,31 @@ def render_realtime_talk() -> None:
 def render_fixed_talk() -> None:
     entries = STORE.load_fixed_entries()
     assets = STORE.load_assets()
-    title_col, _ = st.columns([0.38, 0.62], gap="large")
+    fixed_aliases = STORE.load_fixed_aliases()
+    title_col, alias_col, alias_button_col, _ = st.columns([0.38, 0.11, 0.13, 0.38], gap="large", vertical_alignment="bottom")
     with title_col:
-        selected_title = st.selectbox("标题", FIXED_TALK_TITLES, key="fixed_talk_title")
+        selected_page_label = st.selectbox("名称", FIXED_TALK_PAGE_LABELS, key="fixed_talk_page_label")
+    selected_title = FIXED_TALK_TITLES[FIXED_TALK_PAGE_LABELS.index(selected_page_label)]
+    alias_key = f"fixed_talk_alias_{selected_title}"
+    with alias_col:
+        st.text_input(
+            "别名",
+            value=fixed_aliases.get(selected_title, selected_title),
+            placeholder=selected_page_label,
+            max_chars=4,
+            key=alias_key,
+        )
+    with alias_button_col:
+        st.button(
+            "保存",
+            type="primary",
+            use_container_width=True,
+            key=f"save_fixed_alias_{selected_title}",
+            on_click=save_fixed_alias,
+            args=(selected_title, alias_key),
+        )
+    if st.session_state.pop("fixed_alias_saved", False):
+        st.toast("别名已保存。", icon="✅")
     entry = next(item for item in entries if item.title == selected_title)
     scoped_assets = assets_for_title(assets, selected_title)
 
@@ -523,43 +635,56 @@ def render_fixed_talk() -> None:
     st.divider()
     st.subheader("素材库管理")
     list_col, add_col = st.columns([0.38, 0.62], gap="large", vertical_alignment="top")
+    selected_asset_id_key = f"selected_asset_id_{selected_title}"
+    delete_asset_ids_key = f"asset_list_delete_ids_{selected_title}"
+    asset_list_table_version_key = f"asset_list_table_version_{selected_title}"
     with list_col:
         st.markdown("##### 素材库 List")
         if not scoped_assets:
+            st.session_state.pop(selected_asset_id_key, None)
+            st.session_state.pop(delete_asset_ids_key, None)
             st.caption("暂无素材。")
         else:
-            asset_rows_key = f"asset_list_editor_rows_{selected_title}"
-            asset_ids_key = f"asset_list_editor_ids_{selected_title}"
             current_asset_ids = [asset.id for asset in scoped_assets]
-            if (
-                asset_rows_key not in st.session_state
-                or st.session_state.get(asset_ids_key) != current_asset_ids
-            ):
-                st.session_state[asset_rows_key] = asset_items_to_rows(scoped_assets)
-                st.session_state[asset_ids_key] = current_asset_ids
-            asset_editor_version_key = f"asset_list_editor_version_{selected_title}"
-            asset_editor_key = f"asset_list_editor_{selected_title}_{st.session_state.get(asset_editor_version_key, 0)}"
-            current_asset_rows = st.data_editor(
-                asset_list_dataframe(st.session_state[asset_rows_key]),
-                hide_index=True,
-                use_container_width=True,
-                height=ASSET_LIST_EDITOR_HEIGHT,
-                column_config={
-                    "删除": st.column_config.CheckboxColumn("删除", width=DELETE_COLUMN_WIDTH, help="勾选后保存会删除素材。"),
-                    "素材名称": st.column_config.TextColumn("素材名称", width=440, disabled=True),
+            if st.session_state.get(selected_asset_id_key, "") not in current_asset_ids:
+                st.session_state.pop(selected_asset_id_key, None)
+            delete_asset_ids = [
+                asset_id
+                for asset_id in st.session_state.get(delete_asset_ids_key, [])
+                if asset_id in current_asset_ids
+            ]
+            component_value = ASSET_LIST_TABLE_COMPONENT(
+                rows=[{"id": asset.id, "title": asset.title} for asset in scoped_assets],
+                selected_id=st.session_state.get(selected_asset_id_key, ""),
+                delete_ids=delete_asset_ids,
+                key=f"asset_list_table_{selected_title}_{st.session_state.get(asset_list_table_version_key, 0)}",
+                default={
+                    "selected_id": st.session_state.get(selected_asset_id_key, ""),
+                    "delete_ids": delete_asset_ids,
                 },
-                key=asset_editor_key,
-                on_change=sync_data_editor_rows,
-                args=(asset_rows_key, asset_editor_key),
             )
+            if isinstance(component_value, dict):
+                selected_asset_id = str(component_value.get("selected_id", "") or "")
+                if selected_asset_id in current_asset_ids:
+                    st.session_state[selected_asset_id_key] = selected_asset_id
+                st.session_state[delete_asset_ids_key] = [
+                    str(asset_id)
+                    for asset_id in component_value.get("delete_ids", [])
+                    if str(asset_id) in current_asset_ids
+                ]
+            if st.session_state.get(selected_asset_id_key, ""):
+                st.markdown(
+                    f"<div style='height:{ASSET_LIST_SAVE_BUTTON_SPACER_HEIGHT}px'></div>",
+                    unsafe_allow_html=True,
+                )
             save_asset_list = st.button(
                 "保存素材库 List",
                 type="primary",
                 use_container_width=True,
                 key=f"save_asset_list_{selected_title}",
-                on_click=save_asset_list_editor,
-                args=(selected_title, asset_rows_key, asset_editor_key, asset_editor_version_key, asset_ids_key),
             )
+            if save_asset_list:
+                delete_asset_ids_for_title(selected_title, set(st.session_state.get(delete_asset_ids_key, [])))
             blocked_asset_delete_message = st.session_state.pop(f"asset_delete_blocked_message_{selected_title}", "")
             if blocked_asset_delete_message:
                 st.error(blocked_asset_delete_message)
@@ -567,14 +692,26 @@ def render_fixed_talk() -> None:
                 st.toast("素材库 List 已保存。", icon="✅")
 
     with add_col:
-        st.markdown("##### 添加素材")
+        if st.session_state.pop(f"asset_saved_message_{selected_title}", False):
+            st.toast("素材已保存。", icon="✅")
+        selected_asset = next(
+            (asset for asset in STORE.load_assets() if asset.id == st.session_state.get(selected_asset_id_key, "")),
+            None,
+        )
+        editing_asset = selected_asset is not None and selected_title in selected_asset.categories
+        st.markdown("##### 编辑素材" if editing_asset else "##### 添加素材")
         asset_form_version_key = f"new_asset_form_version_{selected_title}"
         asset_form_version = st.session_state.get(asset_form_version_key, 0)
-        name_key = f"new_asset_name_{selected_title}_{asset_form_version}"
-        files_key = f"new_asset_files_{selected_title}_{asset_form_version}"
-        copy_key = f"new_asset_copy_{selected_title}_{asset_form_version}"
-        current_copy = str(st.session_state.get(copy_key, "")).strip()
-        asset_name = st.text_input("名称", key=name_key)
+        form_mode_key = selected_asset.id if editing_asset else "new"
+        name_key = f"asset_name_{selected_title}_{form_mode_key}_{asset_form_version}"
+        files_key = f"asset_files_{selected_title}_{form_mode_key}_{asset_form_version}"
+        copy_key = f"asset_copy_{selected_title}_{form_mode_key}_{asset_form_version}"
+        current_copy_default = selected_asset.description if editing_asset else ""
+        current_copy = str(st.session_state.get(copy_key, current_copy_default)).strip()
+        asset_name = st.text_input("名称", value=selected_asset.title if editing_asset else "", key=name_key)
+        if editing_asset and selected_asset.paths:
+            image_names = "、".join(Path(path).name for path in selected_asset.paths if path)
+            st.caption(f"当前图片：{image_names}。重新上传后会替换当前图片。")
         uploaded_files = st.file_uploader(
             "上传图片",
             type=["png", "jpg", "jpeg", "gif", "webp", "bmp"],
@@ -584,6 +721,7 @@ def render_fixed_talk() -> None:
         )
         asset_copy = st.text_area(
             "文案",
+            value=selected_asset.description if editing_asset else "",
             height=140,
             disabled=bool(uploaded_files),
             key=copy_key,
@@ -592,19 +730,26 @@ def render_fixed_talk() -> None:
             st.caption("已上传图片，文案输入已禁用。")
         elif asset_copy.strip():
             st.caption("已输入文案，图片上传已禁用。")
-        if st.button("保存素材", type="primary", use_container_width=True, key=f"save_new_asset_{selected_title}"):
-            if not asset_name.strip():
-                st.error("请填写素材名称。")
-            elif not uploaded_files and not asset_copy.strip():
-                st.error("请上传图片或填写文案。")
-            elif any(asset.title == asset_name.strip() for asset in scoped_assets):
-                st.error("素材名称不能重复。")
-            else:
-                STORE.save_uploaded_assets(uploaded_files, asset_name, [selected_title], asset_copy)
-                st.success("素材已保存。")
-                st.session_state[asset_form_version_key] = asset_form_version + 1
-                clear_asset_list_editor_cache(selected_title)
-                st.rerun()
+        st.button(
+            "保存素材",
+            type="primary",
+            use_container_width=True,
+            key=f"save_asset_{selected_title}",
+            on_click=save_asset_form,
+            args=(
+                selected_title,
+                selected_asset.id if editing_asset else "",
+                name_key,
+                files_key,
+                copy_key,
+                asset_form_version_key,
+                selected_asset_id_key,
+                asset_list_table_version_key,
+            ),
+        )
+        asset_save_error = st.session_state.pop(f"asset_save_error_{selected_title}", "")
+        if asset_save_error:
+            st.error(asset_save_error)
 
 
 def render_combined_talk() -> None:
@@ -781,6 +926,88 @@ def save_asset_list_editor(
     st.session_state[asset_ids_key] = [asset.id for asset in remaining_scoped_assets]
     st.session_state[asset_editor_version_key] = st.session_state.get(asset_editor_version_key, 0) + 1
     st.session_state[f"asset_list_saved_{selected_title}"] = True
+
+
+def delete_asset_ids_for_title(selected_title: str, asset_ids: set[str]) -> None:
+    if not asset_ids:
+        st.session_state[f"asset_list_saved_{selected_title}"] = True
+        return
+    assets = STORE.load_assets()
+    referenced_assets = referenced_asset_titles(asset_ids, STORE.load_fixed_entries(), assets)
+    if referenced_assets:
+        st.session_state[f"asset_delete_blocked_message_{selected_title}"] = (
+            "素材已被回复内容引用，请先解除回复内容的绑定方可删除：" + "、".join(referenced_assets)
+        )
+        return
+
+    for asset in assets:
+        if asset.id in asset_ids:
+            STORE.delete_asset_files(asset)
+            remove_asset_from_fixed_entries(asset.id)
+    STORE.save_assets([item for item in assets if item.id not in asset_ids])
+    if st.session_state.get(f"selected_asset_id_{selected_title}", "") in asset_ids:
+        st.session_state.pop(f"selected_asset_id_{selected_title}", None)
+    st.session_state.pop(f"asset_list_delete_ids_{selected_title}", None)
+    clear_asset_list_editor_cache(selected_title)
+    st.session_state[f"asset_list_saved_{selected_title}"] = True
+    st.rerun()
+
+
+def save_fixed_alias(selected_title: str, alias_key: str) -> None:
+    aliases = STORE.load_fixed_aliases()
+    aliases[selected_title] = str(st.session_state.get(alias_key, ""))[:4]
+    STORE.save_fixed_aliases(aliases)
+    st.session_state["fixed_alias_saved"] = True
+
+
+def save_asset_form(
+    selected_title: str,
+    editing_asset_id: str,
+    name_key: str,
+    files_key: str,
+    copy_key: str,
+    asset_form_version_key: str,
+    selected_asset_id_key: str,
+    asset_list_table_version_key: str,
+) -> None:
+    st.session_state.pop(f"asset_save_error_{selected_title}", None)
+    st.session_state.pop(f"asset_saved_message_{selected_title}", None)
+
+    asset_name = str(st.session_state.get(name_key, "") or "").strip()
+    uploaded_files = st.session_state.get(files_key) or []
+    asset_copy = str(st.session_state.get(copy_key, "") or "").strip()
+    scoped_assets = assets_for_title(STORE.load_assets(), selected_title)
+    editing_asset = next((asset for asset in scoped_assets if asset.id == editing_asset_id), None)
+
+    if not asset_name:
+        st.session_state[f"asset_save_error_{selected_title}"] = "请填写素材名称。"
+        return
+    if editing_asset is None and not uploaded_files and not asset_copy:
+        st.session_state[f"asset_save_error_{selected_title}"] = "请上传图片或填写文案。"
+        return
+    if editing_asset is not None and not uploaded_files and not asset_copy and not editing_asset.paths:
+        st.session_state[f"asset_save_error_{selected_title}"] = "请上传图片或填写文案。"
+        return
+    if any(asset.title == asset_name and (editing_asset is None or asset.id != editing_asset.id) for asset in scoped_assets):
+        st.session_state[f"asset_save_error_{selected_title}"] = "素材名称不能重复。"
+        return
+
+    if editing_asset is not None:
+        STORE.update_asset(
+            editing_asset.id,
+            title=asset_name,
+            categories=[selected_title],
+            description=asset_copy,
+            files=uploaded_files,
+        )
+    else:
+        STORE.save_uploaded_assets(uploaded_files, asset_name, [selected_title], asset_copy)
+
+    st.session_state[f"asset_saved_message_{selected_title}"] = True
+    st.session_state.pop(selected_asset_id_key, None)
+    st.session_state[asset_list_table_version_key] = st.session_state.get(asset_list_table_version_key, 0) + 1
+    st.session_state[asset_form_version_key] = st.session_state.get(asset_form_version_key, 0) + 1
+    clear_asset_list_editor_cache(selected_title)
 
 
 def fixed_reply_rules_to_rows(

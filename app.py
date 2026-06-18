@@ -46,7 +46,7 @@ from customer_rag.tencent_docs import (
 APP_ICON_PATH = Path(__file__).resolve().parent / "customer_rag" / "assets" / "app_icon.png"
 PROJECT_ROOT = Path(__file__).resolve().parent
 
-st.set_page_config(page_title="本地腾讯文档 RAG", page_icon=str(APP_ICON_PATH), layout="wide")
+st.set_page_config(page_title="货盘RAG管理台", page_icon=str(APP_ICON_PATH), layout="wide")
 LOCAL_TASK_API_URL = ensure_local_task_api()
 st.markdown(
     """
@@ -286,12 +286,24 @@ def get_pipeline(cache_version: str = "llama-server-v1") -> RagPipeline:
 
 
 @st.cache_data(show_spinner=False)
-def cached_corpus_item_payloads(signature: tuple[int, int]) -> list[dict]:
-    return [asdict(item) for item in get_pipeline().list_corpus()]
+def cached_corpus_item_payloads_from_file(signature: tuple[int, int]) -> list[dict]:
+    path = cfg.index_dir / "corpus.jsonl"
+    if not path.exists():
+        return []
+    payloads: list[dict] = []
+    with path.open("r", encoding="utf-8") as fp:
+        for line in fp:
+            if line.strip():
+                payload = json.loads(line)
+                payload.setdefault("image_paths", [])
+                payload.setdefault("tags", [])
+                payload.setdefault("attributes", {})
+                payloads.append(payload)
+    return payloads
 
 
 def cached_corpus_items(signature: tuple[int, int]) -> list:
-    return [corpus_module.CorpusItem(**payload) for payload in cached_corpus_item_payloads(signature)]
+    return [corpus_module.CorpusItem(**payload) for payload in cached_corpus_item_payloads_from_file(signature)]
 
 
 def corpus_signature() -> tuple[int, int]:
@@ -824,7 +836,7 @@ def render_subscription_header(api_url: str) -> None:
               }}
               if(state.cookie_refresh_required&&lastCookieError!==state.job_id){{
                 lastCookieError=state.job_id;
-                try {{const key="customer-rag-cookie-error-job";if(window.localStorage.getItem(key)!==state.job_id){{window.localStorage.setItem(key,state.job_id);showToast("订阅下载失败，请重新获取 Cookie","error")}}}} catch(error){{showToast("订阅下载失败，请重新获取 Cookie","error")}}
+                try {{const key="customer-rag-cookie-error-job";if(window.localStorage.getItem(key)!==state.job_id){{window.localStorage.setItem(key,state.job_id);showToast("腾讯文档鉴权过期，请打开RAG页面-导入文件-获取Cookie","error")}}}} catch(error){{showToast("腾讯文档鉴权过期，请打开RAG页面-导入文件-获取Cookie","error")}}
               }}
             }}
             auto.addEventListener("change",async()=>{{await fetch(`${{api}}/auto/set?enabled=${{auto.checked?1:0}}&interval=20`,{{cache:"no-store"}});await refresh()}});
@@ -1265,7 +1277,7 @@ def render_subscription_task_panel(api_url: str) -> None:
                 showCompletionToast(state);
               }}
               if (state.cookie_refresh_required) {{
-                showErrorToast("订阅下载失败，请重新获取 Cookie。腾讯文档登录页已打开。", state.job_id);
+                showErrorToast("腾讯文档鉴权过期，请打开RAG页面-导入文件-获取Cookie", state.job_id);
               }}
             }}
             function formatDuration(seconds) {{
@@ -1736,14 +1748,23 @@ def delete_selected_subscriptions() -> int:
         stats = get_pipeline().delete_sources(removed_paths, rebuild_index=True)
         if stats.get("index_error"):
             queue_ui_notice("warning", f"订阅已删除，但向量索引重建失败：{stats['index_error']}")
-        cached_corpus_item_payloads.clear()
+        cached_corpus_item_payloads_from_file.clear()
     save_subscription_delete_selection(set())
     return removed
 
 
 def export_subscriptions_text(subscriptions: list[TencentDocSubscription]) -> str:
     lines: list[str] = []
+    last_group = object()
     for subscription in subscriptions:
+        group = subscription.tags[0] if subscription.tags else ""
+        if group and group != last_group:
+            if lines:
+                lines.append("")
+            lines.append(f"-{group}-")
+            last_group = group
+        elif not group:
+            last_group = group
         lines.append(subscription.name)
         lines.append(subscription.url)
     return "\n".join(lines) + ("\n" if lines else "")
@@ -1802,9 +1823,15 @@ def parse_batch_subscription_text(text: str, default_tags: str = "") -> tuple[li
     rows: list[dict] = []
     errors: list[str] = []
     lines = [line.strip() for line in text.splitlines() if line.strip()]
+    current_tags = tag_text(parse_tags(default_tags))
     index = 0
     while index < len(lines):
         line = lines[index]
+        group_tag = parse_subscription_group_tag(line)
+        if group_tag:
+            current_tags = group_tag
+            index += 1
+            continue
         name = ""
         url = ""
         bracket_match = re.fullmatch(r"[【\[](.+?)[】\]]", line)
@@ -1822,6 +1849,22 @@ def parse_batch_subscription_text(text: str, default_tags: str = "") -> tuple[li
             index += 1
             if index < len(lines):
                 url = lines[index].strip()
+                delayed_group_tag = parse_subscription_group_tag(url)
+                if delayed_group_tag and index + 1 < len(lines) and lines[index + 1].startswith("http"):
+                    url = lines[index + 1].strip()
+                    rows.append(
+                        {
+                            "": True,
+                            "名称": name,
+                            "最后修改": "",
+                            "状态": "待同步",
+                            "腾讯文档地址": url,
+                            "Tag": current_tags,
+                        }
+                    )
+                    current_tags = delayed_group_tag
+                    index += 2
+                    continue
 
         if not name or not url:
             errors.append(f"订阅信息不完整：{line}")
@@ -1838,20 +1881,29 @@ def parse_batch_subscription_text(text: str, default_tags: str = "") -> tuple[li
                 "最后修改": "",
                 "状态": "待同步",
                 "腾讯文档地址": url,
-                "Tag": default_tags,
+                "Tag": current_tags,
             }
         )
         index += 1
     return rows, errors
 
 
+def parse_subscription_group_tag(line: str) -> str:
+    value = line.strip()
+    if value.startswith("-") and len(value) > 1:
+        tag = value.strip("-").strip()
+        if tag and not tag.startswith("http") and "\t" not in tag:
+            return tag
+    return ""
+
+
 @st.dialog("批量增加订阅", width="large")
 def batch_add_subscription_dialog() -> None:
-    st.caption("按“名称 + 链接”的顺序粘贴；每个订阅占两行，第一行名称，第二行腾讯文档链接。")
+    st.caption("按“名称 + 链接”的顺序粘贴；可用“-家具-”这样的分组行设置其后订阅的初始 Tag。")
     pasted_text = st.text_area(
         "粘贴订阅清单",
         height=360,
-        placeholder="6月电视清单-26年618\nhttps://docs.qq.com/sheet/DVnZMQ055cnFHQmRL\n海尔清单-26年618\nhttps://docs.qq.com/sheet/DVkhVTWZmZ2t0U1Zo",
+        placeholder="-家电-\n6月电视清单-26年618\nhttps://docs.qq.com/sheet/DVnZMQ055cnFHQmRL\n海尔清单-26年618\nhttps://docs.qq.com/sheet/DVkhVTWZmZ2t0U1Zo\n-家具-\n喜临门京东&迷住专属清单-26年618\nhttps://docs.qq.com/sheet/DVkh2aG9nbm52bGVI",
     )
     st.markdown(
         """
@@ -2032,7 +2084,7 @@ def initialize_path_picker_state(current) -> None:
 def render_path_picker(label: str, state_key: str, button_key: str, picker) -> str:
     st.markdown(f"**{label}**")
     path_col, button_col = st.columns([0.78, 0.22], gap="small", vertical_alignment="center")
-    path_col.code(str(st.session_state.get(state_key, "")), language=None)
+    path_input = path_col.empty()
     if button_col.button("选择", key=button_key, use_container_width=True):
         try:
             selected = picker(str(st.session_state.get(state_key, "")))
@@ -2041,7 +2093,7 @@ def render_path_picker(label: str, state_key: str, button_key: str, picker) -> s
         else:
             if selected:
                 st.session_state[state_key] = selected
-                st.rerun()
+    path_input.text_input(label, key=state_key, label_visibility="collapsed")
     return str(st.session_state.get(state_key, ""))
 
 
@@ -2183,7 +2235,7 @@ def submit_qa_query() -> None:
 
 title_col, settings_col = st.columns([1, 0.16], vertical_alignment="center")
 with title_col:
-    st.title("本地腾讯文档 RAG")
+    st.title("货盘RAG管理台")
     st.caption("离线语料管理、向量检索和本地大模型问答")
 with settings_col:
     if st.button("设置", key="machine_settings_open", use_container_width=True):

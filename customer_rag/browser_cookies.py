@@ -26,6 +26,16 @@ class BrowserCookieResult:
 
 DEBUG_PORT = 9339
 LOGIN_URL = "https://docs.qq.com/"
+LOGIN_COOKIE_NAMES = {
+    "uid",
+    "uid_key",
+    "uin",
+    "luin",
+    "p_uin",
+    "p_skey",
+    "skey",
+    "pt4_token",
+}
 
 
 def open_tencent_docs_login_window(port: int = DEBUG_PORT) -> None:
@@ -62,14 +72,18 @@ def read_tencent_docs_cookie_from_login_window(port: int = DEBUG_PORT) -> Browse
         _restart_login_window(port)
         cookies = _read_cdp_cookies(port)
     parts: list[str] = []
+    names: list[str] = []
     for cookie in cookies:
         domain = str(cookie.get("domain", ""))
         name = str(cookie.get("name", ""))
         value = str(cookie.get("value", ""))
         if _domain_matches_docs(domain) and name and value:
             parts.append(f"{name}={value}")
+            names.append(name)
     if not parts:
         raise RuntimeError("专用登录窗口里还没有 docs.qq.com Cookie，请先完成腾讯文档登录")
+    if not _has_login_cookie_name(names):
+        raise RuntimeError("尚未检测到腾讯文档登录态 Cookie，请完成登录后再次点击获取 Cookie")
     return BrowserCookieResult(
         cookie="; ".join(parts),
         browser="专用登录窗口",
@@ -252,6 +266,7 @@ def _read_cookie_db(cookie_db: Path, master_key: bytes) -> tuple[str, int, int]:
             pass
 
     parts: list[str] = []
+    names: list[str] = []
     skipped = 0
     for host_key, name, value, encrypted_value in rows:
         if not _domain_matches_docs(str(host_key)):
@@ -265,7 +280,24 @@ def _read_cookie_db(cookie_db: Path, master_key: bytes) -> tuple[str, int, int]:
                 continue
         if name and cookie_value:
             parts.append(f"{name}={cookie_value}")
+            names.append(name)
+    if parts and not _has_login_cookie_name(names):
+        return "", 0, skipped
     return "; ".join(parts), len(parts), skipped
+
+
+def is_likely_logged_in_cookie(cookie: str) -> bool:
+    names = []
+    for item in cookie.split(";"):
+        name = item.split("=", 1)[0].strip()
+        if name:
+            names.append(name)
+    return _has_login_cookie_name(names)
+
+
+def _has_login_cookie_name(names: list[str]) -> bool:
+    normalized = {name.strip().lower() for name in names if name.strip()}
+    return bool(normalized & LOGIN_COOKIE_NAMES)
 
 
 def _query_cookie_rows(cookie_db: Path, immutable: bool = False) -> list[tuple[str, str, str, bytes]]:

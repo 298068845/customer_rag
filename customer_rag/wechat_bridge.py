@@ -48,6 +48,7 @@ def main() -> int:
     parser.add_argument("--filters-file", type=Path)
     parser.add_argument("--talk-only", action="store_true")
     parser.add_argument("--talk-shortcuts-file", type=Path)
+    parser.add_argument("--talk-shortcut-labels-file", type=Path)
     parser.add_argument("--query-id", default="")
     args = parser.parse_args()
 
@@ -105,6 +106,12 @@ def main() -> int:
                 shortcut_answers = [format_wechat_answer(item.answer) for item in engine.ask_shortcuts(question)]
                 args.talk_shortcuts_file.parent.mkdir(parents=True, exist_ok=True)
                 args.talk_shortcuts_file.write_text("\n__TALK_SHORTCUT__\n".join(shortcut_answers), encoding="utf-8")
+            if args.talk_shortcut_labels_file:
+                args.talk_shortcut_labels_file.parent.mkdir(parents=True, exist_ok=True)
+                args.talk_shortcut_labels_file.write_text(
+                    "\n__TALK_SHORTCUT__\n".join(engine.shortcut_labels()),
+                    encoding="utf-8",
+                )
             log_event(
                 "query",
                 "query_completed",

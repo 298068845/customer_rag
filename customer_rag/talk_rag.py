@@ -20,6 +20,8 @@ LinkType = Literal["fixed", "knowledge", "image"]
 REALTIME_TALK_TITLE = "实时话术"
 COMBINED_TALK_TITLE = "组合话术"
 FIXED_TALK_TITLES = ["领券链接", "常用话术", "对比图", "售前话术", "售后话术", "活动规则"]
+FIXED_TALK_PAGE_LABELS = [f"分页{index}" for index in range(1, len(FIXED_TALK_TITLES) + 1)]
+FIXED_TALK_PAGE_LABEL_BY_TITLE = dict(zip(FIXED_TALK_TITLES, FIXED_TALK_PAGE_LABELS))
 TALK_SHORTCUT_TITLES = [COMBINED_TALK_TITLE, REALTIME_TALK_TITLE, *FIXED_TALK_TITLES]
 COMBINED_REPLY_OPTIONS = [REALTIME_TALK_TITLE, *FIXED_TALK_TITLES]
 
@@ -165,6 +167,7 @@ class TalkRagStore:
         self.knowledge_path = self.root / "knowledge.json"
         self.assets_path = self.root / "assets.json"
         self.fixed_path = self.root / "fixed.json"
+        self.fixed_aliases_path = self.root / "fixed_aliases.json"
         self.combined_path = self.root / "combined.json"
         self.realtime_path = self.root / "realtime.json"
         self.asset_dir = self.root / "assets"
@@ -223,6 +226,25 @@ class TalkRagStore:
         self.root.mkdir(parents=True, exist_ok=True)
         _write_json_list(self.fixed_path, [asdict(entry) for entry in entries if entry.title in FIXED_TALK_TITLES])
 
+    def load_fixed_aliases(self) -> dict[str, str]:
+        defaults = default_fixed_aliases()
+        try:
+            payload = json.loads(self.fixed_aliases_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return defaults
+        if not isinstance(payload, dict):
+            return defaults
+        aliases = defaults.copy()
+        for title in FIXED_TALK_TITLES:
+            if title in payload:
+                aliases[title] = str(payload.get(title, ""))
+        return aliases
+
+    def save_fixed_aliases(self, aliases: dict[str, str]) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        payload = {title: str(aliases.get(title, "")) for title in FIXED_TALK_TITLES}
+        self.fixed_aliases_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
     def load_combined_config(self) -> CombinedTalkConfig:
         self.ensure_seed_data()
         try:
@@ -271,6 +293,45 @@ class TalkRagStore:
         assets.append(item)
         self.save_assets(assets)
         return item
+
+    def update_asset(
+        self,
+        asset_id: str,
+        *,
+        title: str,
+        categories: list[str],
+        description: str = "",
+        files: list | None = None,
+    ) -> AssetItem:
+        self.ensure_seed_data()
+        assets = self.load_assets()
+        existing = next((asset for asset in assets if asset.id == asset_id), None)
+        if existing is None:
+            raise ValueError("素材不存在，可能已被删除。")
+
+        paths = list(existing.paths)
+        if files:
+            self.delete_asset_files(existing)
+            target_dir = self.asset_dir / asset_id
+            target_dir.mkdir(parents=True, exist_ok=True)
+            paths = []
+            for file in files:
+                name = Path(getattr(file, "name", "image.png")).name
+                target = target_dir / name
+                with target.open("wb") as fp:
+                    fp.write(file.getbuffer())
+                paths.append(str(target))
+
+        updated = AssetItem(
+            id=asset_id,
+            title=title.strip() or existing.title,
+            paths=paths,
+            categories=clean_tags(categories),
+            description=description.strip(),
+            updated_at=now_text(),
+        )
+        self.save_assets([updated if asset.id == asset_id else asset for asset in assets])
+        return updated
 
     def delete_asset_files(self, item: AssetItem) -> None:
         for path in item.paths:
@@ -502,6 +563,14 @@ class TalkRagEngine:
 
     def ask_shortcuts(self, question: str) -> list[TalkMatch]:
         return [self.ask(question, title) for title in TALK_SHORTCUT_TITLES]
+
+    def shortcut_labels(self) -> list[str]:
+        aliases = self.store.load_fixed_aliases()
+        return [
+            COMBINED_TALK_TITLE,
+            REALTIME_TALK_TITLE,
+            *[fixed_talk_display_title(title, aliases) for title in FIXED_TALK_TITLES],
+        ]
 
     def ask_legacy(self, question: str) -> TalkMatch:
         links = [link for link in self.store.load_links() if link.enabled]
@@ -1504,6 +1573,25 @@ def clean_terms(values: list[str] | str) -> list[str]:
 def clean_tags(values: list[str] | str, default: str = "其他") -> list[str]:
     tags = [tag for tag in clean_terms(values) if tag not in {"全部", "所有"}]
     return tags or [default]
+
+
+def default_fixed_aliases() -> dict[str, str]:
+    return {title: title for title in FIXED_TALK_TITLES}
+
+
+def fixed_talk_page_label(title: str) -> str:
+    return FIXED_TALK_PAGE_LABEL_BY_TITLE.get(title, str(title))
+
+
+def fixed_talk_display_title(title: str, aliases: dict[str, str] | None = None) -> str:
+    alias = str((aliases or {}).get(title, "")).strip()
+    return alias or fixed_talk_page_label(title)
+
+
+def talk_shortcut_display_title(title: str, aliases: dict[str, str] | None = None) -> str:
+    if title in FIXED_TALK_TITLES:
+        return fixed_talk_display_title(title, aliases)
+    return title
 
 
 def normalize_text(value: str) -> str:

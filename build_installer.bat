@@ -5,8 +5,13 @@ cd /d "%~dp0"
 
 set "VERSION=0.1.0"
 set "INNO_COMPILER=D:\Inno Setup 6\ISCC.exe"
+set "BUILD_LOG=%~dp0logs\build-installer.log"
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\build_installer.ps1" -Version "%VERSION%" -InnoCompiler "%INNO_COMPILER%"
+echo Build log: %BUILD_LOG%
+echo If the window looks frozen, check this file or press Esc/Enter to leave text selection mode.
+echo.
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\build_installer.ps1" -Version "%VERSION%" -InnoCompiler "%INNO_COMPILER%" -InstallBuildDeps
 
 if errorlevel 1 (
     echo.

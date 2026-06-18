@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 
 from customer_rag.talk_rag import (
@@ -8,14 +9,25 @@ from customer_rag.talk_rag import (
     COMBINED_TALK_TITLE,
     CombinedReplyRule,
     CombinedTalkConfig,
+    FIXED_TALK_PAGE_LABELS,
     FixedReplyRule,
     FixedTalkEntry,
     RealtimeTalkConfig,
     TalkRagEngine,
     TalkRagStore,
+    fixed_talk_display_title,
     match_combined_talk,
     match_fixed_talk,
 )
+
+
+class UploadedFileStub:
+    def __init__(self, name: str, content: bytes):
+        self.name = name
+        self._content = BytesIO(content)
+
+    def getbuffer(self):
+        return self._content.getbuffer()
 
 
 class FixedTalkTests(unittest.TestCase):
@@ -163,6 +175,67 @@ class FixedTalkTests(unittest.TestCase):
 
             self.assertEqual(len(results), 8)
             self.assertIn("清单", results[1].answer)
+
+    def test_fixed_aliases_default_to_original_names_and_fallback_to_page_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = TalkRagStore(Path(temp_dir) / "talk_rag")
+
+            aliases = store.load_fixed_aliases()
+            self.assertEqual(aliases["领券链接"], "领券链接")
+            self.assertEqual(fixed_talk_display_title("领券链接", aliases), "领券链接")
+
+            aliases["领券链接"] = ""
+            store.save_fixed_aliases(aliases)
+            reloaded = store.load_fixed_aliases()
+
+            self.assertEqual(reloaded["领券链接"], "")
+            self.assertEqual(fixed_talk_display_title("领券链接", reloaded), FIXED_TALK_PAGE_LABELS[0])
+
+    def test_shortcut_labels_use_fixed_aliases_without_changing_shortcut_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = TalkRagStore(Path(temp_dir) / "talk_rag")
+            aliases = store.load_fixed_aliases()
+            aliases["领券链接"] = "优惠入口"
+            aliases["常用话术"] = ""
+            store.save_fixed_aliases(aliases)
+            engine = TalkRagEngine(store)
+
+            labels = engine.shortcut_labels()
+
+            self.assertEqual(labels[:4], ["组合话术", "实时话术", "优惠入口", "分页2"])
+
+    def test_store_updates_asset_text_and_replaces_uploaded_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = TalkRagStore(Path(temp_dir) / "talk_rag")
+            asset = store.save_uploaded_assets(
+                [UploadedFileStub("old.png", b"old image")],
+                "旧素材",
+                ["领券链接"],
+                "",
+            )
+
+            updated_text = store.update_asset(
+                asset.id,
+                title="新素材",
+                categories=["常用话术"],
+                description="新的文案",
+            )
+
+            self.assertEqual(updated_text.title, "新素材")
+            self.assertEqual(updated_text.categories, ["常用话术"])
+            self.assertEqual(updated_text.description, "新的文案")
+            self.assertEqual(Path(updated_text.paths[0]).read_bytes(), b"old image")
+
+            updated_file = store.update_asset(
+                asset.id,
+                title="新素材",
+                categories=["常用话术"],
+                files=[UploadedFileStub("new.png", b"new image")],
+            )
+
+            self.assertEqual(Path(updated_file.paths[0]).name, "new.png")
+            self.assertEqual(Path(updated_file.paths[0]).read_bytes(), b"new image")
+            self.assertFalse((store.asset_dir / asset.id / "old.png").exists())
 
     def test_store_exports_and_imports_config_zip_with_assets(self) -> None:
         with tempfile.TemporaryDirectory() as source_dir, tempfile.TemporaryDirectory() as target_dir:

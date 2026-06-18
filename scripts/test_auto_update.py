@@ -19,7 +19,7 @@ os.environ["CUSTOMER_RAG_INLINE_WORKER"] = "1"
 from customer_rag.auto_update import run_auto_update_check
 from customer_rag.browser_cookies import BrowserCookieResult
 from customer_rag.config import LlmConfig, RagConfig
-from customer_rag.cookie_login import CookieLoginState, _poll_cookie, capture_cookie, load_saved_cookie, open_cookie_login
+from customer_rag.cookie_login import CookieLoginState, _poll_cookie, capture_cookie, has_saved_cookie, load_saved_cookie, open_cookie_login, save_cookie
 from customer_rag import process_utils
 from customer_rag.raw_jobs import read_raw_job_state, start_raw_job
 from customer_rag.subscription_jobs import SubscriptionJobState, is_subscription_worker_alive, read_job_state, start_subscription_job
@@ -267,7 +267,7 @@ def test_subscription_import_scope(config: RagConfig) -> None:
 
 def test_cookie_poll_and_persistence(config: RagConfig) -> None:
     state = CookieLoginState(status="waiting", started_at=datetime.now().isoformat(timespec="seconds"))
-    result = BrowserCookieResult(cookie="a=1; b=2", browser="test", profile="test", count=2)
+    result = BrowserCookieResult(cookie="uid=123; uid_key=abc", browser="test", profile="test", count=2)
     with patch("customer_rag.cookie_login.read_tencent_docs_cookie_from_login_window", return_value=result), patch(
         "customer_rag.cookie_login.close_tencent_docs_login_window"
     ):
@@ -277,7 +277,7 @@ def test_cookie_poll_and_persistence(config: RagConfig) -> None:
 
 
 def test_web_cookie_two_click_flow(config: RagConfig) -> None:
-    result = BrowserCookieResult(cookie="web=ok", browser="test", profile="test", count=1)
+    result = BrowserCookieResult(cookie="uid=123; uid_key=abc", browser="test", profile="test", count=2)
     with patch("customer_rag.cookie_login.is_tencent_docs_login_window_open", return_value=False), patch(
         "customer_rag.cookie_login.open_tencent_docs_login_window"
     ) as opened:
@@ -289,7 +289,17 @@ def test_web_cookie_two_click_flow(config: RagConfig) -> None:
     ):
         state = capture_cookie(config)
     assert state.status == "completed", state
-    assert load_saved_cookie(config) == "web=ok"
+    assert load_saved_cookie(config) == "uid=123; uid_key=abc"
+
+
+def test_web_cookie_capture_rejects_logged_out_cookie(config: RagConfig) -> None:
+    result = BrowserCookieResult(cookie="fingerprint=guest; traceid=guest", browser="test", profile="test", count=2)
+    with patch("customer_rag.cookie_login.read_tencent_docs_cookie_from_login_window", return_value=result), patch(
+        "customer_rag.cookie_login.close_tencent_docs_login_window"
+    ):
+        state = capture_cookie(config)
+    assert state.status == "window_open"
+    assert not has_saved_cookie(config)
 
 
 def test_complete_subscription_flow(config: RagConfig) -> None:
@@ -378,6 +388,7 @@ def test_download_failure_requests_cookie(config: RagConfig) -> None:
     subscription = TencentDocSubscription(name="失败订阅", url="https://docs.qq.com/fail")
     subscriptions_path = config.index_dir / "tencent_doc_subscriptions.json"
     save_subscriptions(subscriptions_path, [subscription])
+    save_cookie(config, "uid=old; uid_key=old")
     downloaded = config.raw_data_dir / "tencent_docs" / "失败订阅.xlsx"
     downloaded.parent.mkdir(parents=True, exist_ok=True)
 
@@ -410,6 +421,7 @@ def test_download_failure_requests_cookie(config: RagConfig) -> None:
     state = read_job_state(config)
     assert state.status == "completed", state
     assert not state.cookie_refresh_required and state.failed == 0
+    assert not has_saved_cookie(config)
     login.assert_called_once()
 
 

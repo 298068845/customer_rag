@@ -14,6 +14,7 @@ global SEND_TEXT_PATH := A_ScriptDir "\send-text.txt"
 global LAST_SELECTED_PATH := A_ScriptDir "\last-selected.txt"
 global RAG_BRANDS_PATH := A_ScriptDir "\rag-brands.txt"
 global RAG_TALK_SHORTCUTS_PATH := A_ScriptDir "\rag-talk-shortcuts.txt"
+global RAG_TALK_SHORTCUT_LABELS_PATH := A_ScriptDir "\rag-talk-shortcut-labels.txt"
 global PREVIEW_TEST_PATH := A_ScriptDir "\preview-test-result.ini"
 global SEND_BOX_DEBUG_PATH := LOG_DIR "\sendbox-debug.log"
 global SEND_ERROR_LOG_PATH := LOG_DIR "\wechat.error.log"
@@ -302,7 +303,7 @@ CloseQueryDialog(*) {
 
 AskRagForSelection(tags := "", talkOnly := false, previewTalk := false) {
     global RAG_QUERY_PID, RAG_QUERY_ID, RAG_QUERY_STARTED_AT, RAG_TALK_ONLY_PENDING, RAG_TALK_PREVIEW_PENDING, RAG_SELECTED_BRAND
-    global RAG_TALK_SHORTCUTS_PATH
+    global RAG_TALK_SHORTCUTS_PATH, RAG_TALK_SHORTCUT_LABELS_PATH
 
     if !ReadBoolConfig("rag", "enabled", false) {
         return
@@ -336,6 +337,7 @@ AskRagForSelection(tags := "", talkOnly := false, previewTalk := false) {
     RAG_TALK_PREVIEW_PENDING := previewTalk
     FileDeleteSafe(SEND_TEXT_PATH)
     FileDeleteSafe(RAG_TALK_SHORTCUTS_PATH)
+    FileDeleteSafe(RAG_TALK_SHORTCUT_LABELS_PATH)
     if (Trim(RAG_SELECTED_BRAND) = "") {
         FileDeleteSafe(RAG_BRANDS_PATH)
     }
@@ -352,6 +354,7 @@ AskRagForSelection(tags := "", talkOnly := false, previewTalk := false) {
     }
     if (talkOnly) {
         command .= " --talk-only --talk-shortcuts-file " QuoteArg(RAG_TALK_SHORTCUTS_PATH)
+        command .= " --talk-shortcut-labels-file " QuoteArg(RAG_TALK_SHORTCUT_LABELS_PATH)
     }
     try {
         Run command, projectRoot, "Hide", &RAG_QUERY_PID
@@ -557,23 +560,24 @@ ShowSendPreview(text, mouseX := "", mouseY := "", mode := "query") {
 
     PREVIEW_SHORTCUTS := 0
     if PREVIEW_SHOW_SHORTCUTS {
+        shortcutLabels := BuildTalkShortcutLabels()
         PREVIEW_GUI.SetFont("s9 bold", "Microsoft YaHei")
         key1 := PREVIEW_GUI.AddText("xm y+14 w26 h28 Center 0x200 +0x100", "1")
-        label1 := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "组合话术")
+        label1 := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", shortcutLabels[1])
         key2 := PREVIEW_GUI.AddText("x+5 yp w26 h28 Center 0x200 +0x100", "2")
-        label2 := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "实时话术")
+        label2 := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", shortcutLabels[2])
         key3 := PREVIEW_GUI.AddText("x+5 yp w26 h28 Center 0x200 +0x100", "3")
-        label3 := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "领券链接")
+        label3 := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", shortcutLabels[3])
         key4 := PREVIEW_GUI.AddText("x+5 yp w26 h28 Center 0x200 +0x100", "4")
-        label4 := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "常用话术")
+        label4 := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", shortcutLabels[4])
         keyQ := PREVIEW_GUI.AddText("xm y+5 w26 h28 Center 0x200 +0x100", "Q")
-        labelQ := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "对比图")
+        labelQ := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", shortcutLabels[5])
         keyW := PREVIEW_GUI.AddText("x+5 yp w26 h28 Center 0x200 +0x100", "W")
-        labelW := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "售前话术")
+        labelW := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", shortcutLabels[6])
         keyE := PREVIEW_GUI.AddText("x+5 yp w26 h28 Center 0x200 +0x100", "E")
-        labelE := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "售后话术")
+        labelE := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", shortcutLabels[7])
         keyR := PREVIEW_GUI.AddText("x+5 yp w26 h28 Center 0x200 +0x100", "R")
-        labelR := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", "活动规则")
+        labelR := PREVIEW_GUI.AddText("x+1 yp w87 h28 Center 0x200 +0x100", shortcutLabels[8])
         PREVIEW_SHORTCUTS := [
             [key1, label1], [key2, label2], [key3, label3], [key4, label4],
             [keyQ, labelQ], [keyW, labelW], [keyE, labelE], [keyR, labelR]
@@ -2422,6 +2426,27 @@ BuildTalkShortcutTexts(realtimeText) {
     return ["", realtimeText, "", "", "", "", "", ""]
 }
 
+BuildTalkShortcutLabels() {
+    global RAG_TALK_SHORTCUT_LABELS_PATH
+
+    fallback := ["组合话术", "实时话术", "领券链接", "常用话术", "对比图", "售前话术", "售后话术", "活动规则"]
+    if FileExist(RAG_TALK_SHORTCUT_LABELS_PATH) {
+        text := StripBom(FileRead(RAG_TALK_SHORTCUT_LABELS_PATH, "UTF-8"))
+        text := StrReplace(text, "`r`n", "`n")
+        text := StrReplace(text, "`r", "`n")
+        parts := StrSplit(text, "`n__TALK_SHORTCUT__`n")
+        if (parts.Length = 8) {
+            labels := []
+            for index, part in parts {
+                label := Trim(part, "`r`n `t")
+                labels.Push(label = "" ? fallback[index] : label)
+            }
+            return labels
+        }
+    }
+    return fallback
+}
+
 ReadQueryBrands() {
     global RAG_BRANDS_PATH
 
@@ -2840,11 +2865,12 @@ RunPreviewSelfTest() {
 
 RunTalkPreviewSelfTest() {
     global PREVIEW_GUI, PREVIEW_SHORTCUTS, PREVIEW_ACTIVE_TAB
-    global RAG_TALK_SHORTCUTS_PATH
+    global RAG_TALK_SHORTCUTS_PATH, RAG_TALK_SHORTCUT_LABELS_PATH
 
     resultPath := A_ScriptDir "\talk-preview-test-result.ini"
     FileDeleteSafe(resultPath)
     FileDeleteSafe(RAG_TALK_SHORTCUTS_PATH)
+    FileDeleteSafe(RAG_TALK_SHORTCUT_LABELS_PATH)
     ShowSendPreview("", 360, 240, "talk_shortcuts")
     Sleep 150
     emptyChecked := CountCheckedRows()
@@ -2891,6 +2917,7 @@ RunTalkPreviewSelfTest() {
     FileAppend "coupon_checked=" couponChecked "`n", resultPath, "UTF-8"
     ClosePreview()
     FileDeleteSafe(RAG_TALK_SHORTCUTS_PATH)
+    FileDeleteSafe(RAG_TALK_SHORTCUT_LABELS_PATH)
 }
 
 JoinShortcutParts(parts) {

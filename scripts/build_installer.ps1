@@ -19,14 +19,35 @@ $distDir = Join-Path $root "dist\installer"
 $iconPng = Join-Path $root "customer_rag\assets\app_icon.png"
 $iconIco = Join-Path $stageDir "customer_rag\assets\app_icon.ico"
 $innoScript = Join-Path $root "installer\customer-rag.iss"
+$logDir = Join-Path $root "logs"
+$logPath = Join-Path $logDir "build-installer.log"
+
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+Start-Transcript -Path $logPath -Force | Out-Null
+trap {
+    Write-Host ""
+    Write-Host "Build failed. Log: $logPath"
+    try { Stop-Transcript | Out-Null } catch {}
+    break
+}
+
+function Write-Step {
+    param([Parameter(Mandatory = $true)][string]$Message)
+    $timestamp = Get-Date -Format "HH:mm:ss"
+    Write-Host "[$timestamp] $Message"
+}
+
+Write-Step "Build log: $logPath"
 
 if (-not (Test-Path $python)) {
     throw "Missing virtualenv Python: $python"
 }
 
 if (-not $Version) {
+    Write-Step "Resolving package version..."
     $Version = (& $python -c "from customer_rag import __version__; print(__version__)").Trim()
 }
+Write-Step "Building CustomerRAG version $Version"
 
 function Copy-Tree {
     param(
@@ -35,6 +56,7 @@ function Copy-Tree {
         [string[]]$ExcludeDirs = @(),
         [string[]]$ExcludeFiles = @()
     )
+    Write-Step "Copying $(Split-Path -Leaf $Source) -> $Destination"
     New-Item -ItemType Directory -Force -Path $Destination | Out-Null
     $args = @($Source, $Destination, "/E", "/NFL", "/NDL", "/NJH", "/NJS", "/NP")
     if ($ExcludeDirs.Count -gt 0) {
@@ -109,6 +131,7 @@ function Copy-RootReleaseFiles {
     }
 }
 
+Write-Step "Cleaning build folder..."
 Remove-Item -Recurse -Force -LiteralPath $buildRoot -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $stageDir, $distDir | Out-Null
 
@@ -122,10 +145,11 @@ Copy-Tree -Source (Join-Path $root "customer_rag") -Destination (Join-Path $stag
 
 Copy-Tree -Source (Join-Path $root "wechatExtension") -Destination (Join-Path $stageDir "wechatExtension") `
     -ExcludeDirs @("__pycache__") `
-    -ExcludeFiles @("rag-talk-shortcuts.txt", "send-text.txt", "last-selected.txt", "*.log", "*-test-result.ini", "preview-test-result.ini")
+    -ExcludeFiles @("rag-talk-shortcuts.txt", "rag-talk-shortcut-labels.txt", "send-text.txt", "last-selected.txt", "*.log", "*-test-result.ini", "preview-test-result.ini")
 
 Copy-RootReleaseFiles -SourceRoot $root -DestinationRoot $stageDir
 
+Write-Step "Writing default installer config..."
 $defaultConfig = @'
 raw_data_dir: ''
 index_dir: ''
@@ -159,16 +183,20 @@ llm:
 '@
 $defaultConfig | Set-Content -LiteralPath (Join-Path $stageDir "config.default.yaml") -Encoding utf8
 
+Write-Step "Generating Windows icon..."
 & $python -c "from pathlib import Path; from PIL import Image; src=Path(r'$iconPng'); dst=Path(r'$iconIco'); dst.parent.mkdir(parents=True, exist_ok=True); Image.open(src).save(dst, sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
 
 if ($StageOnly) {
     Write-Host "Staged app at: $stageDir"
+    Stop-Transcript | Out-Null
     exit 0
 }
 
-& $python -c "import PyInstaller" *> $null
+Write-Step "Checking PyInstaller..."
+& $python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('PyInstaller') else 1)"
 if ($LASTEXITCODE -ne 0) {
     if ($InstallBuildDeps) {
+        Write-Step "Installing PyInstaller into .venv..."
         & $python -m pip install pyinstaller
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to install pyinstaller."
@@ -179,6 +207,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $pyinstallerWork = Join-Path $buildRoot "pyinstaller"
+Write-Step "Building launcher executable with PyInstaller..."
 & $python -m PyInstaller `
     (Join-Path $root "launcher.py") `
     --name CustomerRAG `
@@ -196,14 +225,17 @@ if (-not (Test-Path (Join-Path $stageDir "CustomerRAG.exe"))) {
 
 if ($SkipInstaller) {
     Write-Host "Staged app at: $stageDir"
+    Stop-Transcript | Out-Null
     exit 0
 }
 
+Write-Step "Locating Inno Setup compiler..."
 $iscc = Find-InnoCompiler -PreferredPath $InnoCompiler
 if (-not $iscc) {
     throw "Inno Setup compiler ISCC.exe was not found. Install Inno Setup 6 or run with -SkipInstaller."
 }
 
+Write-Step "Building installer with Inno Setup. This can take several minutes..."
 & $iscc `
     "/DMyAppVersion=$Version" `
     "/DSourceDir=$stageDir" `
@@ -214,3 +246,5 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Installer output: $distDir"
+Write-Host "Build log: $logPath"
+Stop-Transcript | Out-Null

@@ -11,7 +11,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from customer_rag.config import RagConfig
-from customer_rag.cookie_login import load_saved_cookie, read_login_state, start_cookie_login
+from customer_rag.cookie_login import clear_saved_cookie, load_saved_cookie, read_login_state, start_cookie_login
 from customer_rag.logging_config import configure_logging, log_event, log_exception
 from customer_rag.process_utils import process_is_alive, start_worker_process
 from customer_rag.task_coordinator import read_state as read_coordinator_state, release, try_acquire
@@ -400,6 +400,7 @@ def _run_subscription_job(
                 update_download_percent()
                 failed_subscriptions.append(subscription)
                 if _is_cookie_error(exc):
+                    clear_saved_cookie(config)
                     state.cookie_refresh_required = True
                     cookie_failed_subscriptions.append(subscription)
                 save_status(subscription, f"失败：{exc}")
