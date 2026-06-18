@@ -62,6 +62,7 @@ ASSET_LIST_SAVE_BUTTON_SPACER_HEIGHT = 29
 COMBINED_TRIGGER_EDITOR_HEIGHT = 316
 COMBINED_REPLY_RULES_EDITOR_HEIGHT = 300
 CONFIG_IMPORT_UPLOAD_VERSION_KEY = "talk_rag_config_import_zip_version"
+CONFIG_TRANSFER_SCOPE_OPTIONS = [COMBINED_TALK_TITLE, REALTIME_TALK_TITLE, *FIXED_TALK_TITLES]
 TALK_ENTRY_OPTIONS = [
     REALTIME_TALK_TITLE,
     *FIXED_TALK_TITLES,
@@ -72,7 +73,12 @@ TALK_ENTRY_OPTIONS = [
 st.markdown(
     """
     <style>
-    .stApp { background: #ffffff; color: #303544; }
+    .stApp {
+        --talk-button-red: #ee5a55;
+        --talk-button-height: 40px;
+        background: #ffffff;
+        color: #303544;
+    }
     .talk-card {
         background: #fff;
         border: 1px solid #d9dee8;
@@ -185,10 +191,10 @@ st.markdown(
         margin: 0;
     }
     div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stFileUploader"]:has(input[accept*=".zip"]) section[data-testid="stFileUploaderDropzone"] {
-        min-height: 48px;
-        height: 48px;
+        min-height: var(--talk-button-height);
+        height: var(--talk-button-height);
         padding: 0;
-        border: 1px dashed #cfd5df;
+        border: 1px solid #cfd5df;
         border-radius: 8px;
         background: #ffffff;
         display: flex;
@@ -217,8 +223,8 @@ st.markdown(
     }
     div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stFileUploader"]:has(input[accept*=".zip"]) button[data-testid="stBaseButton-secondary"] {
         width: 100%;
-        height: 46px;
-        min-height: 46px;
+        height: var(--talk-button-height);
+        min-height: var(--talk-button-height);
         margin: 0;
         border: 0;
         background: transparent;
@@ -237,28 +243,66 @@ st.markdown(
         font-weight: 400;
     }
     div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stButton"] > button,
-    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stDownloadButton"] > button {
+    div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stDownloadButton"] button {
         border-radius: 8px;
-        min-height: 48px;
-        height: 48px;
+        min-height: var(--talk-button-height);
+        height: var(--talk-button-height);
+        background: #ffffff !important;
+        border-color: #cfd5df !important;
+        color: #303544 !important;
         font-size: 14px;
         font-weight: 400;
     }
     div[data-testid="stHorizontalBlock"]:has(.talk-hero-title-marker):has(.compact-transfer-title) div[data-testid="stButton"] > button[kind="primary"] {
+        background: var(--talk-button-red) !important;
+        border-color: var(--talk-button-red) !important;
+        color: #ffffff !important;
         font-size: 15px;
         font-weight: 600;
     }
-    div[data-testid="stButton"] > button {
-        border-radius: 8px;
-        min-height: 38px;
+    div[role="tooltip"]:has([data-testid="stTooltipErrorContent"]) {
+        pointer-events: none !important;
     }
-    div[data-testid="stDownloadButton"] > button {
-        border-radius: 8px;
-        min-height: 38px;
+    div[data-testid="stElementContainer"]:has(.fixed-alias-row-marker) {
+        display: none;
     }
-    div[data-testid="stButton"] > button[kind="primary"] {
-        background: #ee5a55;
-        border-color: #ee5a55;
+    div[data-testid="stElementContainer"]:has(.asset-form-marker) {
+        display: none;
+    }
+    div[data-testid="stColumn"]:has(.asset-form-marker) div[data-testid="stButton"] {
+        margin-top: 8px;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.fixed-alias-row-marker):not(:has(div[data-testid="stHorizontalBlock"] .fixed-alias-row-marker)) {
+        gap: 16px;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.fixed-alias-row-marker):not(:has(div[data-testid="stHorizontalBlock"] .fixed-alias-row-marker)) > div[data-testid="stColumn"]:nth-child(3) {
+        padding-left: 3px;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.fixed-alias-row-marker):not(:has(div[data-testid="stHorizontalBlock"] .fixed-alias-row-marker)) [data-testid="stWidgetLabel"] p {
+        font-weight: 700;
+    }
+    div[data-testid="stButton"] > button,
+    div[data-testid="stDownloadButton"] button,
+    div[data-testid="stFormSubmitButton"] > button {
+        border-radius: 8px;
+        min-height: var(--talk-button-height);
+        height: var(--talk-button-height);
+        background: var(--talk-button-red) !important;
+        border-color: var(--talk-button-red) !important;
+        color: #ffffff !important;
+    }
+    div[data-testid="stButton"] > button:hover,
+    div[data-testid="stButton"] > button:focus,
+    div[data-testid="stButton"] > button:active,
+    div[data-testid="stDownloadButton"] button:hover,
+    div[data-testid="stDownloadButton"] button:focus,
+    div[data-testid="stDownloadButton"] button:active,
+    div[data-testid="stFormSubmitButton"] > button:hover,
+    div[data-testid="stFormSubmitButton"] > button:focus,
+    div[data-testid="stFormSubmitButton"] > button:active {
+        background: var(--talk-button-red) !important;
+        border-color: var(--talk-button-red) !important;
+        color: #ffffff !important;
     }
     </style>
     """,
@@ -309,38 +353,54 @@ def render_config_transfer() -> None:
         )
     with action_cols[1]:
         import_upload_version = st.session_state.get(CONFIG_IMPORT_UPLOAD_VERSION_KEY, 0)
-        uploaded_zip = st.file_uploader(
+        uploaded_zips = st.file_uploader(
             "导入 ZIP",
             type=["zip"],
-            accept_multiple_files=False,
+            accept_multiple_files=True,
             label_visibility="collapsed",
             key=f"talk_rag_config_import_zip_{import_upload_version}",
         )
     with action_cols[2]:
-        confirm_import = st.button(
-            "确认导入并覆盖所选板块",
-            type="primary",
-            use_container_width=True,
-            disabled=not include_realtime and not selected_fixed_titles and not include_combined,
-        )
-        if uploaded_zip is not None and confirm_import:
-            try:
-                summary = STORE.import_config_zip(
-                    uploaded_zip.getvalue(),
-                    include_realtime=include_realtime,
-                    fixed_titles=selected_fixed_titles,
-                    include_combined=include_combined,
-                )
-            except ValueError as exc:
-                st.error(str(exc))
+        confirm_import = False
+        if uploaded_zips:
+            confirm_import = st.button(
+                "确认导入并覆盖所选板块",
+                type="primary",
+                use_container_width=True,
+                disabled=not include_realtime and not selected_fixed_titles and not include_combined,
+            )
+        if confirm_import:
+            imported_summaries: list[dict[str, int]] = []
+            import_errors: list[str] = []
+            for uploaded_zip in uploaded_zips:
+                try:
+                    imported_summaries.append(
+                        STORE.import_config_zip(
+                            uploaded_zip.getvalue(),
+                            include_realtime=include_realtime,
+                            fixed_titles=selected_fixed_titles,
+                            include_combined=include_combined,
+                        )
+                    )
+                except ValueError as exc:
+                    import_errors.append(f"{uploaded_zip.name}：{exc}")
+
+            if import_errors:
+                for error in import_errors:
+                    st.error(error)
             else:
+                imported_realtime = any(summary["imported_realtime"] for summary in imported_summaries)
+                imported_combined = any(summary["imported_combined"] for summary in imported_summaries)
+                imported_fixed_entries = sum(summary["imported_fixed_entries"] for summary in imported_summaries)
+                imported_assets = sum(summary["imported_assets"] for summary in imported_summaries)
                 clear_talk_config_editor_cache()
                 st.session_state[CONFIG_IMPORT_UPLOAD_VERSION_KEY] = import_upload_version + 1
                 st.success(
-                    f"导入完成：实时话术 {'已覆盖' if summary['imported_realtime'] else '未覆盖'}，"
-                    f"组合话术 {'已覆盖' if summary['imported_combined'] else '未覆盖'}，"
-                    f"固定话术覆盖 {summary['imported_fixed_entries']} 个模块，"
-                    f"素材导入 {summary['imported_assets']} 个。"
+                    f"导入完成：共 {len(imported_summaries)} 个配置包，"
+                    f"实时话术 {'已覆盖' if imported_realtime else '未覆盖'}，"
+                    f"组合话术 {'已覆盖' if imported_combined else '未覆盖'}，"
+                    f"固定话术覆盖 {imported_fixed_entries} 个模块，"
+                    f"素材导入 {imported_assets} 个。"
                 )
                 st.rerun()
 
@@ -348,37 +408,30 @@ def render_config_transfer() -> None:
 def render_config_transfer_scope() -> tuple[bool, list[str], bool]:
     st.markdown("<div class='compact-transfer-note'>勾选导入/导出范围，默认全部板块。</div>", unsafe_allow_html=True)
     fixed_aliases = STORE.load_fixed_aliases()
-    options = [
-        REALTIME_TALK_TITLE,
-        FIXED_TALK_TITLES[0],
-        FIXED_TALK_TITLES[1],
-        FIXED_TALK_TITLES[2],
-        FIXED_TALK_TITLES[3],
-        FIXED_TALK_TITLES[4],
-        FIXED_TALK_TITLES[5],
-        COMBINED_TALK_TITLE,
-    ]
-    selected_fixed_titles: list[str] = []
-    include_realtime = False
-    include_combined = False
+    selected_titles: list[str] = []
     option_cols = st.columns(4, gap="small")
-    for index, title in enumerate(options):
-        display_title = "自定义" if title == COMBINED_TALK_TITLE else talk_shortcut_display_title(title, fixed_aliases)
+    for index, title in enumerate(CONFIG_TRANSFER_SCOPE_OPTIONS):
         with option_cols[index % 4]:
             checked = st.checkbox(
-                display_title,
+                talk_shortcut_display_title(title, fixed_aliases),
                 value=True,
                 key=f"config_transfer_scope_{title}",
             )
-        if title == REALTIME_TALK_TITLE:
-            include_realtime = checked
-        elif title == COMBINED_TALK_TITLE:
-            include_combined = checked
-        elif checked:
-            selected_fixed_titles.append(title)
+        if checked:
+            selected_titles.append(title)
+    include_realtime, selected_fixed_titles, include_combined = config_transfer_scope_selection(selected_titles)
     if not include_realtime and not selected_fixed_titles and not include_combined:
         st.warning("请至少勾选一个板块。")
     return include_realtime, selected_fixed_titles, include_combined
+
+
+def config_transfer_scope_selection(selected_titles: list[str]) -> tuple[bool, list[str], bool]:
+    selected = set(selected_titles)
+    return (
+        REALTIME_TALK_TITLE in selected,
+        [title for title in FIXED_TALK_TITLES if title in selected],
+        COMBINED_TALK_TITLE in selected,
+    )
 
 
 def render_match_test() -> None:
@@ -502,7 +555,13 @@ def render_realtime_talk() -> None:
     st.subheader("三、开团日期")
     open_left, open_mid, open_right = st.columns([0.32, 0.33, 0.35], gap="large")
     with open_left:
-        open_group_triggers_text = st.text_area("触发词 / 同义问法", value="\n".join(config.open_group_triggers), height=184)
+        st.markdown("##### 触发词 / 同义问法")
+        open_group_triggers_text = st.text_area(
+            "触发词 / 同义问法",
+            value="\n".join(config.open_group_triggers),
+            height=184,
+            label_visibility="collapsed",
+        )
         if st.button("保存开团日期触发词", type="primary", use_container_width=True):
             STORE.save_realtime_config(replace(config, open_group_triggers=clean_terms(open_group_triggers_text)))
             st.success("开团日期触发词已保存。")
@@ -539,28 +598,35 @@ def render_fixed_talk() -> None:
     entries = STORE.load_fixed_entries()
     assets = STORE.load_assets()
     fixed_aliases = STORE.load_fixed_aliases()
-    title_col, alias_col, alias_button_col, _ = st.columns([0.38, 0.11, 0.13, 0.38], gap="large", vertical_alignment="bottom")
-    with title_col:
-        selected_page_label = st.selectbox("名称", FIXED_TALK_PAGE_LABELS, key="fixed_talk_page_label")
-    selected_title = FIXED_TALK_TITLES[FIXED_TALK_PAGE_LABELS.index(selected_page_label)]
-    alias_key = f"fixed_talk_alias_{selected_title}"
-    with alias_col:
-        st.text_input(
-            "别名",
-            value=fixed_aliases.get(selected_title, selected_title),
-            placeholder=selected_page_label,
-            max_chars=4,
-            key=alias_key,
+    header_left, _ = st.columns([0.38, 0.62], gap="large")
+    with header_left:
+        title_col, alias_col, alias_button_col = st.columns(
+            [0.70, 0.164, 0.136],
+            gap="small",
+            vertical_alignment="bottom",
         )
-    with alias_button_col:
-        st.button(
-            "保存",
-            type="primary",
-            use_container_width=True,
-            key=f"save_fixed_alias_{selected_title}",
-            on_click=save_fixed_alias,
-            args=(selected_title, alias_key),
-        )
+        with title_col:
+            st.markdown("<span class='fixed-alias-row-marker'></span>", unsafe_allow_html=True)
+            selected_page_label = st.selectbox("名称", FIXED_TALK_PAGE_LABELS, key="fixed_talk_page_label")
+        selected_title = FIXED_TALK_TITLES[FIXED_TALK_PAGE_LABELS.index(selected_page_label)]
+        alias_key = f"fixed_talk_alias_{selected_title}"
+        if alias_key not in st.session_state:
+            st.session_state[alias_key] = fixed_aliases.get(selected_title, selected_title)
+        with alias_col:
+            st.text_input(
+                "别名",
+                placeholder=selected_page_label,
+                key=alias_key,
+            )
+        with alias_button_col:
+            st.button(
+                "保存",
+                type="primary",
+                use_container_width=True,
+                key=f"save_fixed_alias_{selected_title}",
+                on_click=save_fixed_alias,
+                args=(selected_title, alias_key),
+            )
     if st.session_state.pop("fixed_alias_saved", False):
         st.toast("别名已保存。", icon="✅")
     entry = next(item for item in entries if item.title == selected_title)
@@ -692,6 +758,7 @@ def render_fixed_talk() -> None:
                 st.toast("素材库 List 已保存。", icon="✅")
 
     with add_col:
+        st.markdown("<span class='asset-form-marker'></span>", unsafe_allow_html=True)
         if st.session_state.pop(f"asset_saved_message_{selected_title}", False):
             st.toast("素材已保存。", icon="✅")
         selected_asset = next(
@@ -957,6 +1024,7 @@ def save_fixed_alias(selected_title: str, alias_key: str) -> None:
     aliases = STORE.load_fixed_aliases()
     aliases[selected_title] = str(st.session_state.get(alias_key, ""))[:4]
     STORE.save_fixed_aliases(aliases)
+    st.session_state[alias_key] = aliases[selected_title]
     st.session_state["fixed_alias_saved"] = True
 
 

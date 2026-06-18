@@ -13,13 +13,13 @@ import zipfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 from uuid import uuid4
 
 from customer_rag.time_format import display_datetime
 
 
-DownloadProgressCallback = Callable[[int, int | None], None]
+DownloadProgressCallback = Callable[[int, Optional[int]], None]
 
 
 @dataclass(frozen=True)

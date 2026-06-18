@@ -1,0 +1,24 @@
+# Windows 7 SP1 / Windows 10 compatibility baseline.
+#
+# Keep this file pinned. Newer releases of several packages have dropped
+# Python 3.8, which is the last CPython line that supports Windows 7.
+faiss-cpu==1.8.0
+cryptography==42.0.8
+numpy==1.24.4
+openpyxl==3.1.5
+pandas==2.0.3
+pyarrow==11.0.0
+pywin32==306
+python-docx==1.1.2
+PyYAML==6.0.2
+pypdf==4.3.1
+sentence-transformers==3.0.1
+transformers==4.44.2
+huggingface-hub==0.24.7
+torch==1.13.1
+torchvision==0.14.1
+streamlit==1.39.0
+websocket-client==1.8.0
+xlrd==2.0.1
+pystray==0.19.5
+Pillow==10.4.0

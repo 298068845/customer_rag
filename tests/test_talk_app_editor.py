@@ -1,12 +1,14 @@
 import unittest
 
 from talk_app import (
+    CONFIG_TRANSFER_SCOPE_OPTIONS,
     apply_data_editor_changes,
     apply_data_editor_changes_preserve_values,
     attach_asset_ids_to_rows,
     asset_list_dataframe,
     assets_for_title,
     combined_reply_rules_dataframe,
+    config_transfer_scope_selection,
     rows_to_combined_reply_rules,
     fixed_reply_rules_dataframe,
     normalize_selected_asset_titles,
@@ -16,10 +18,20 @@ from talk_app import (
     validate_fixed_reply_asset_bindings,
     validate_persisted_fixed_reply_rules,
 )
-from customer_rag.talk_rag import AssetItem, FixedReplyRule, FixedTalkEntry
+from customer_rag.talk_rag import COMBINED_TALK_TITLE, FIXED_TALK_TITLES, REALTIME_TALK_TITLE, AssetItem, FixedReplyRule, FixedTalkEntry
 
 
 class TalkAppEditorTests(unittest.TestCase):
+    def test_config_transfer_scope_starts_with_combined_and_maps_it_separately(self) -> None:
+        self.assertEqual(
+            CONFIG_TRANSFER_SCOPE_OPTIONS,
+            [COMBINED_TALK_TITLE, REALTIME_TALK_TITLE, *FIXED_TALK_TITLES],
+        )
+        self.assertEqual(
+            config_transfer_scope_selection([COMBINED_TALK_TITLE]),
+            (False, [], True),
+        )
+
     def test_apply_data_editor_changes_merges_edit_add_and_delete(self) -> None:
         rows = [
             {"品牌": "品牌A", "回复内容": "旧回复", "补充回复": ""},

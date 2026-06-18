@@ -40,6 +40,17 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+; Clean binary Python packages that are sensitive to stale files when upgrading
+; between the modern and Win7/Win10 compatibility runtimes.
+Type: filesandordirs; Name: "{app}\.venv\Lib\site-packages\numpy"
+Type: filesandordirs; Name: "{app}\.venv\Lib\site-packages\numpy.libs"
+Type: filesandordirs; Name: "{app}\.venv\Lib\site-packages\numpy-*.dist-info"
+Type: filesandordirs; Name: "{app}\.venv\Lib\site-packages\pandas"
+Type: filesandordirs; Name: "{app}\.venv\Lib\site-packages\pandas-*.dist-info"
+Type: filesandordirs; Name: "{app}\.venv\Lib\site-packages\pyarrow"
+Type: filesandordirs; Name: "{app}\.venv\Lib\site-packages\pyarrow-*.dist-info"
+
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\customer_rag\assets\app_icon.ico"; WorkingDir: "{app}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\customer_rag\assets\app_icon.ico"; WorkingDir: "{app}"; Tasks: desktopicon

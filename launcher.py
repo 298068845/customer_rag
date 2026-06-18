@@ -29,7 +29,27 @@ from customer_rag.logging_config import (
     logs_dir,
 )
 
-ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+def frozen_application_root() -> Path:
+    """Return the installed EXE directory without trusting sys.executable."""
+    if sys.platform == "win32":
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        get_module_filename = kernel32.GetModuleFileNameW
+        get_module_filename.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32]
+        get_module_filename.restype = ctypes.c_uint32
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = get_module_filename(None, buffer, len(buffer))
+        if 0 < length < len(buffer):
+            executable = Path(buffer.value)
+            if executable.is_absolute():
+                return executable.parent
+
+    # The installer and shortcuts set their working directory to the app
+    # folder. Keep this absolute fallback for old Windows systems where the
+    # process image path cannot be queried.
+    return Path.cwd()
+
+
+ROOT = frozen_application_root() if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 LOG_DIR = logs_dir(ROOT)
 STREAMLIT_LOG = LOG_DIR / "streamlit.log"

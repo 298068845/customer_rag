@@ -19,6 +19,7 @@ global PREVIEW_TEST_PATH := A_ScriptDir "\preview-test-result.ini"
 global SEND_BOX_DEBUG_PATH := LOG_DIR "\sendbox-debug.log"
 global SEND_ERROR_LOG_PATH := LOG_DIR "\wechat.error.log"
 global UNHANDLED_ERROR_LOG_PATH := LOG_DIR "\wechat.unhandled.error.log"
+global SEND_TRACE_LOG_PATH := LOG_DIR "\send.trace.log"
 global CUSTOM_TAB_PATHS := [
     A_ScriptDir "\custom-tab-1.txt",
     A_ScriptDir "\custom-tab-2.txt",
@@ -892,71 +893,96 @@ SendPreviewNow(*) {
 
 SendNextPreviewPart() {
     global PREVIEW_LIST, SEND_IN_PROGRESS
+    previewTraceId := GenerateQueryId()
+    TraceSendStep(previewTraceId, "preview_send_enter", "send_in_progress=" (SEND_IN_PROGRESS ? "1" : "0"))
 
     if SEND_IN_PROGRESS {
+        TraceSendStep(previewTraceId, "preview_send_skip_busy")
         return
     }
 
     try {
         if !IsObject(PREVIEW_LIST) {
+            TraceSendStep(previewTraceId, "preview_list_missing")
             ClosePreview()
             return
         }
 
         row := PREVIEW_LIST.GetNext(0, "Checked")
         if row = 0 {
+            TraceSendStep(previewTraceId, "preview_no_checked_row")
             ClosePreview()
             return
         }
 
         text := PREVIEW_LIST.GetText(row, 2)
+        TraceSendStep(previewTraceId, "preview_row_selected", "row=" row "`ntext_len=" StrLen(text))
         SEND_IN_PROGRESS := true
         if !PasteTextToWeChat(text) {
+            TraceSendStep(previewTraceId, "preview_send_aborted")
             return
         }
+        TraceSendStep(previewTraceId, "preview_send_ok")
         if !IsObject(PREVIEW_LIST) {
+            TraceSendStep(previewTraceId, "preview_list_gone_after_send")
             SEND_IN_PROGRESS := false
             return
         }
-        DeletePreviewRow(row)
+        if !DeletePreviewRow(row, previewTraceId) {
+            TraceSendStep(previewTraceId, "preview_delete_failed")
+            ClosePreview()
+            return
+        }
+        TraceSendStep(previewTraceId, "preview_delete_ok")
 
-        if CountCheckedRows() = 0 {
+        checkedRows := CountCheckedRows()
+        TraceSendStep(previewTraceId, "preview_checked_rows", "count=" checkedRows)
+        if checkedRows = 0 {
             SEND_IN_PROGRESS := false
+            TraceSendStep(previewTraceId, "preview_close_after_last_row")
             ClosePreview()
             return
         }
     } catch as exc {
-        LogSendErrorWithContext(exc, "entry=SendNextPreviewPart")
+        LogSendErrorWithContext(exc, "entry=SendNextPreviewPart`ntrace_id=" previewTraceId)
         TryShowTip("发送失败，请重试")
     } finally {
         SEND_IN_PROGRESS := false
+        TraceSendStep(previewTraceId, "preview_send_finally")
     }
 }
 
-DeletePreviewRow(row) {
+DeletePreviewRow(row, traceId := "") {
     global PREVIEW_GUI, PREVIEW_LIST
 
     if !IsObject(PREVIEW_LIST) {
-        return
+        if (traceId != "") {
+            TraceSendStep(traceId, "delete_row_skip_missing_list")
+        }
+        return false
     }
 
     redrawDisabled := false
     try {
+        TraceSendStep(traceId, "delete_row_begin", "row=" row)
         SendMessage 0x000B, 0, 0,, "ahk_id " PREVIEW_LIST.Hwnd
         redrawDisabled := true
-    }
-    try {
         PREVIEW_LIST.Delete(row)
         PREVIEW_LIST.ModifyCol(1, CalculatePreviewColumnWidth())
+        RedrawPreviewList()
+        if IsObject(PREVIEW_GUI) {
+            DllCall("RedrawWindow", "ptr", PREVIEW_GUI.Hwnd, "ptr", 0, "ptr", 0, "uint", 0x185)
+        }
+        TraceSendStep(traceId, "delete_row_done", "row=" row)
+        return true
+    } catch as exc {
+        LogSendErrorWithContext(exc, "entry=DeletePreviewRow`ntrace_id=" traceId "`nrow=" row)
+        TraceSendStep(traceId, "delete_row_exception", "row=" row)
+        return false
     } finally {
         if redrawDisabled {
             try SendMessage 0x000B, 1, 0,, "ahk_id " PREVIEW_LIST.Hwnd
         }
-    }
-
-    RedrawPreviewList()
-    if IsObject(PREVIEW_GUI) {
-        try DllCall("RedrawWindow", "ptr", PREVIEW_GUI.Hwnd, "ptr", 0, "ptr", 0, "uint", 0x185)
     }
 }
 
@@ -1026,12 +1052,7 @@ ClosePreview(*) {
 PasteTextToWeChat(text) {
     global LAST_SEND_TICK, MIN_SEND_INTERVAL_MS, PASTE_ONLY_MODE
     static pasteActive := false
-
-    if pasteActive {
-        ShowTip("上一条消息仍在发送，请稍候")
-        return false
-    }
-    pasteActive := true
+    static pasteActiveSince := 0
 
     restoreClipboard := false
     oldClipboard := 0
@@ -1040,16 +1061,36 @@ PasteTextToWeChat(text) {
     textToSend := ""
     imagePath := ""
     clipboardImagePath := ""
+    sendTraceId := GenerateQueryId()
+    TraceSendStep(sendTraceId, "enter", "raw_text_len=" StrLen(text))
     try {
+        if pasteActive {
+            activeForMs := pasteActiveSince ? (A_TickCount - pasteActiveSince) : -1
+            TraceSendStep(sendTraceId, "reentry_detected", "active_for_ms=" activeForMs)
+            if (pasteActiveSince && activeForMs > 15000) {
+                TraceSendStep(sendTraceId, "reentry_reset_stale", "active_for_ms=" activeForMs)
+                pasteActive := false
+                pasteActiveSince := 0
+            } else {
+                TryShowTip("上一条消息仍在发送，请稍候")
+                return false
+            }
+        }
+        pasteActive := true
+        pasteActiveSince := A_TickCount
+
         testMode := PASTE_ONLY_MODE || ReadBoolConfig("send", "test_mode", false)
         imagePath := ExtractImagePath(text)
         textToSend := RemoveMediaMetadataLines(text)
+        TraceSendStep(sendTraceId, "parsed", "test_mode=" (testMode ? "1" : "0") "`ntext_len=" StrLen(textToSend) "`nimage_path=" imagePath)
         if (Trim(textToSend) = "" && imagePath = "") {
-            ShowTip("消息为空")
+            TryShowTip("消息为空")
+            TraceSendStep(sendTraceId, "empty_payload")
             return false
         }
 
         WaitForSendInterval()
+        TraceSendStep(sendTraceId, "wait_interval_done")
         restoreClipboard := ReadBoolConfig("send", "restore_clipboard_after_paste", false)
         if restoreClipboard {
             try oldClipboard := ClipboardAll()
@@ -1058,17 +1099,21 @@ PasteTextToWeChat(text) {
                 restoreClipboard := false
             }
         }
+        TraceSendStep(sendTraceId, "clipboard_ready", "restore=" (restoreClipboard ? "1" : "0"))
 
         if !FocusSendBox() {
-            ShowTip("未能自动定位微信发送框，已取消粘贴")
+            TryShowTip("未能自动定位微信发送框，已取消粘贴")
+            TraceSendStep(sendTraceId, "focus_failed")
             return false
         }
+        TraceSendStep(sendTraceId, "focus_ok")
         if (Trim(textToSend) != "") {
             A_Clipboard := textToSend
             Sleep ReadIntConfig("send", "clipboard_settle_ms", 80)
             Send "^v"
             Sleep ReadIntConfig("send", "after_text_paste_ms", 180)
             sentSomething := true
+            TraceSendStep(sendTraceId, "text_pasted")
         }
 
         if (imagePath != "" && FileExist(imagePath)) {
@@ -1078,13 +1123,16 @@ PasteTextToWeChat(text) {
                 Send "^v"
                 Sleep ImagePasteWaitMs(clipboardImagePath)
                 sentSomething := true
+                TraceSendStep(sendTraceId, "image_pasted", "clipboard_image_path=" clipboardImagePath)
                 if !testMode && ReadBoolConfig("send", "send_image_before_text", false) {
                     PrepareImageEnter()
                     PressSendShortcut()
                     Sleep ReadIntConfig("send", "after_image_enter_ms", 500)
+                    TraceSendStep(sendTraceId, "image_sent_early")
                 }
             } else {
-                ShowTip("图片复制失败")
+                TryShowTip("图片复制失败")
+                TraceSendStep(sendTraceId, "image_copy_failed", "image_path=" imagePath)
                 return false
             }
         }
@@ -1095,13 +1143,16 @@ PasteTextToWeChat(text) {
                 PrepareImageEnter()
             }
             PressSendShortcut()
+            TraceSendStep(sendTraceId, "send_shortcut_pressed")
         }
 
         LAST_SEND_TICK := A_TickCount
-        ShowTip(testMode ? "测试模式：已粘贴，未发送" : "已粘贴到发送框")
+        TryShowTip(testMode ? "测试模式：已粘贴，未发送" : "已粘贴到发送框")
+        TraceSendStep(sendTraceId, "success", "sent_something=" (sentSomething ? "1" : "0"))
         return true
     } catch as exc {
         details := "text_len=" StrLen(textToSend) "`nimage_path=" imagePath "`nclipboard_image_path=" clipboardImagePath
+        TraceSendStep(sendTraceId, "exception", details)
         LogSendErrorWithContext(exc, details)
         TryShowTip("发送失败，请重试")
         return false
@@ -1110,6 +1161,8 @@ PasteTextToWeChat(text) {
             try A_Clipboard := oldClipboard
         }
         pasteActive := false
+        pasteActiveSince := 0
+        TraceSendStep(sendTraceId, "finally_exit", "restore=" (restoreClipboard ? "1" : "0"))
     }
 }
 
@@ -2229,16 +2282,29 @@ TryShowTip(message) {
     try ShowTip(message)
 }
 
-LogUnhandledRuntimeError(exc, mode := "") {
-    global UNHANDLED_ERROR_LOG_PATH
+TraceSendStep(sendTraceId, step, details := "") {
+    global SEND_TRACE_LOG_PATH
 
-    context := "unhandled=1"
-    if (mode != "") {
-        context .= "`nmode=" mode
+    message := "[" A_Now "." A_MSec "] id=" sendTraceId " step=" step
+    if (details != "") {
+        message .= "`n" details
     }
-    details := BuildErrorDetails(exc, context)
-    SafeAppendLog(UNHANDLED_ERROR_LOG_PATH, details "`n`n")
-    SafeAppendLog(SEND_ERROR_LOG_PATH, details "`n`n")
+    SafeAppendLog(SEND_TRACE_LOG_PATH, message "`n`n")
+}
+
+LogUnhandledRuntimeError(exc, mode := "") {
+    global UNHANDLED_ERROR_LOG_PATH, SEND_ERROR_LOG_PATH
+
+    try {
+        context := "unhandled=1"
+        if (mode != "") {
+            context .= "`nmode=" mode
+        }
+        details := BuildErrorDetails(exc, context)
+        SafeAppendLog(UNHANDLED_ERROR_LOG_PATH, details "`n`n")
+        SafeAppendLog(SEND_ERROR_LOG_PATH, details "`n`n")
+    } catch {
+    }
     return true
 }
 
@@ -2769,7 +2835,7 @@ bind_app=wechat
 exe_list=WeChat.exe,Weixin.exe
 
 [capture]
-timeout_seconds=0.3
+timeout_seconds=0.25
 
 [preview]
 send_mode=all
