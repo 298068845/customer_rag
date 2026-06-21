@@ -50,6 +50,10 @@ def build_llama_server_plan(config: RagConfig, root: Path | None = None) -> Llam
         str(llm.n_threads),
         "-b",
         str(llm.num_batch),
+        "--parallel",
+        str(llm.n_parallel),
+        "--cache-ram",
+        str(llm.prompt_cache_mb),
     ]
     if llm.n_gpu_layers:
         args.extend(["-ngl", str(llm.n_gpu_layers)])

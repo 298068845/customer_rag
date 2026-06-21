@@ -41,15 +41,16 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [InstallDelete]
-; Clean binary Python packages that are sensitive to stale files when upgrading
-; between the modern and Win7/Win10 compatibility runtimes.
-Type: filesandordirs; Name: "{app}\.venv\Lib\site-packages\numpy"
-Type: filesandordirs; Name: "{app}\.venv\Lib\site-packages\numpy.libs"
-Type: filesandordirs; Name: "{app}\.venv\Lib\site-packages\numpy-*.dist-info"
-Type: filesandordirs; Name: "{app}\.venv\Lib\site-packages\pandas"
-Type: filesandordirs; Name: "{app}\.venv\Lib\site-packages\pandas-*.dist-info"
-Type: filesandordirs; Name: "{app}\.venv\Lib\site-packages\pyarrow"
-Type: filesandordirs; Name: "{app}\.venv\Lib\site-packages\pyarrow-*.dist-info"
+; Runtime files must be replaced as a unit. Also remove the non-portable .venv
+; shipped by installer versions before the self-contained runtime migration.
+Type: filesandordirs; Name: "{app}\runtime"
+Type: filesandordirs; Name: "{app}\.venv"
+
+[UninstallDelete]
+; Remove logs, bytecode caches, and transient files created after installation.
+; User configuration and indexes live under %LocalAppData%\CustomerRAG, outside
+; {app}, and are intentionally preserved.
+Type: filesandordirs; Name: "{app}"
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\customer_rag\assets\app_icon.ico"; WorkingDir: "{app}"
@@ -66,7 +67,7 @@ begin
   Exec(ExpandConstant('{cmd}'), '/C taskkill /IM CustomerRAG.exe /T /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(
     ExpandConstant('{cmd}'),
-    '/C powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { ($_.Name -like ''python*.exe'' -or $_.Name -like ''pythonw*.exe'') -and ($_.CommandLine -like ''*customer_rag*'' -or $_.CommandLine -like ''*run_streamlit.py*'' -or $_.CommandLine -like ''*run_talk_streamlit.py*'') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"',
+    '/C powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { ((($_.Name -like ''python*.exe'' -or $_.Name -like ''pythonw*.exe'') -and ($_.CommandLine -like ''*customer_rag*'' -or $_.CommandLine -like ''*run_streamlit.py*'' -or $_.CommandLine -like ''*run_talk_streamlit.py*'')) -or ($_.Name -like ''AutoHotkey*.exe'' -and $_.CommandLine -like ''*WeChatQuickTool.ahk*'')) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"',
     '',
     SW_HIDE,
     ewWaitUntilTerminated,

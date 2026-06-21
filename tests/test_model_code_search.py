@@ -9,6 +9,7 @@ from customer_rag.pipeline import (
     RagPipeline,
     _dedupe_sources_by_product,
     _known_brand_terms,
+    _rank_strong_sources_by_sale_status,
     _rank_sources_for_requested_platform,
 )
 from customer_rag.vector_store import RetrievedChunk
@@ -62,6 +63,20 @@ def test_standalone_model_code_lookup_returns_fuzzy_match_as_fallback(tmp_path: 
     result = pipeline.ask("ABC-124")
 
     assert result.fallback
+    assert result.sources
+    assert result.sources[0].title == "Product ABC-123"
+
+
+def test_platform_specific_one_character_model_typo_is_defaultable(tmp_path: Path) -> None:
+    pipeline = RagPipeline(make_config(tmp_path))
+    pipeline.add_corpus(
+        title="Product ABC-123",
+        text="品牌: Test；产品信息: ABC-123；商品链接: https://u.jd.com/example",
+    )
+
+    result = pipeline.ask("JD ABC-124")
+
+    assert not result.fallback
     assert result.sources
     assert result.sources[0].title == "Product ABC-123"
 
@@ -143,3 +158,33 @@ def test_platform_ranking_applies_before_category_top_k_cutoff() -> None:
     ranked = _rank_sources_for_requested_platform("\u6dd8\u5b9d\u5806\u53e0\u51f3", [*jd_sources, taobao])
 
     assert ranked[0] is taobao
+
+
+def test_strong_matches_prefer_active_products_only_within_nearby_score_band() -> None:
+    sources = [
+        RetrievedChunk(text="品牌: A；产品信息: 高分截团；限制说明: 暂时截团", source="1.xlsx", title="高分截团", location="row 1", score=120),
+        RetrievedChunk(text="品牌: A；产品信息: 相近在售", source="2.xlsx", title="相近在售", location="row 2", score=115),
+        RetrievedChunk(text="品牌: A；产品信息: 低分在售", source="3.xlsx", title="低分在售", location="row 3", score=101),
+    ]
+
+    ranked = _rank_strong_sources_by_sale_status(sources)
+
+    assert [source.title for source in ranked] == ["相近在售", "高分截团", "低分在售"]
+
+
+def test_strong_match_closed_detection_does_not_treat_not_closed_as_closed() -> None:
+    closed = RetrievedChunk(text="暂时截团", source="1.xlsx", title="closed", location="row 1", score=120)
+    active = RetrievedChunk(text="还没截团", source="2.xlsx", title="active", location="row 2", score=119)
+
+    ranked = _rank_strong_sources_by_sale_status([closed, active])
+
+    assert [source.title for source in ranked] == ["active", "closed"]
+
+
+def test_confident_fuzzy_matches_also_prefer_active_product() -> None:
+    closed = RetrievedChunk(text="暂时截团", source="1.xlsx", title="closed", location="row 1", score=92)
+    active = RetrievedChunk(text="在售", source="2.xlsx", title="active", location="row 2", score=92)
+
+    ranked = _rank_strong_sources_by_sale_status([closed, active], minimum_score=92)
+
+    assert [source.title for source in ranked] == ["active", "closed"]

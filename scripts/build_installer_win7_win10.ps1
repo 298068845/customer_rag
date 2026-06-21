@@ -339,6 +339,8 @@ llm:
   llama_server_executable: ''
   llama_server_backend: auto
   n_gpu_layers: 0
+  n_parallel: 1
+  prompt_cache_mb: 1024
   n_ctx: 4096
   n_threads: 4
   temperature: 0.2

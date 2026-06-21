@@ -50,7 +50,13 @@ def frozen_application_root() -> Path:
 
 
 ROOT = frozen_application_root() if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
-PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
+RUNTIME_DIR = ROOT / "runtime"
+LEGACY_VENV_DIR = ROOT / ".venv"
+PYTHON = (
+    RUNTIME_DIR / "python.exe"
+    if (RUNTIME_DIR / "python.exe").exists()
+    else LEGACY_VENV_DIR / "Scripts" / "python.exe"
+)
 LOG_DIR = logs_dir(ROOT)
 STREAMLIT_LOG = LOG_DIR / "streamlit.log"
 STREAMLIT_ERR = LOG_DIR / "streamlit.error.log"
@@ -241,7 +247,6 @@ def start_all(icon: pystray.Icon) -> None:
     start_wechat_plugin(icon)
     log_event("app", "services_started", "services started", project_root=ROOT)
     set_status(icon, "运行中", "running")
-    open_app(icon)
 
 
 def start_streamlit() -> None:
@@ -254,8 +259,11 @@ def start_streamlit() -> None:
     with STREAMLIT_LOG.open("ab") as stdout, STREAMLIT_ERR.open("ab") as stderr:
         env = dict(os.environ)
         env["PYTHONDONTWRITEBYTECODE"] = "1"
-        env["VIRTUAL_ENV"] = str(ROOT / ".venv")
-        env["PATH"] = str(ROOT / ".venv" / "Scripts") + os.pathsep + env.get("PATH", "")
+        if PYTHON.parent.name.lower() == "scripts":
+            env["VIRTUAL_ENV"] = str(PYTHON.parent.parent)
+        else:
+            env.pop("VIRTUAL_ENV", None)
+        env["PATH"] = str(PYTHON.parent) + os.pathsep + env.get("PATH", "")
         streamlit_process = subprocess.Popen(
             [
                 str(PYTHON),
@@ -285,8 +293,11 @@ def start_talk_streamlit() -> None:
     with TALK_STREAMLIT_LOG.open("ab") as stdout, TALK_STREAMLIT_ERR.open("ab") as stderr:
         env = dict(os.environ)
         env["PYTHONDONTWRITEBYTECODE"] = "1"
-        env["VIRTUAL_ENV"] = str(ROOT / ".venv")
-        env["PATH"] = str(ROOT / ".venv" / "Scripts") + os.pathsep + env.get("PATH", "")
+        if PYTHON.parent.name.lower() == "scripts":
+            env["VIRTUAL_ENV"] = str(PYTHON.parent.parent)
+        else:
+            env.pop("VIRTUAL_ENV", None)
+        env["PATH"] = str(PYTHON.parent) + os.pathsep + env.get("PATH", "")
         talk_streamlit_process = subprocess.Popen(
             [
                 str(PYTHON),
@@ -807,7 +818,7 @@ def quote_ps(path: Path) -> str:
 
 def ensure_python() -> None:
     if not PYTHON.exists():
-        raise SystemExit(f"Missing virtualenv Python: {PYTHON}")
+        raise SystemExit(f"Missing bundled Python runtime: {PYTHON}")
 
 
 def set_status(icon: pystray.Icon, text: str, icon_kind: str) -> None:

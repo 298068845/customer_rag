@@ -31,6 +31,8 @@ from customer_rag.vector_store import RetrievedChunk, VectorStore
 
 FUZZY_FALLBACK_SECONDS = 4.0
 STRONG_KEYWORD_MATCH_SCORE = 100.0
+STRONG_MATCH_NEARBY_SCORE_DELTA = 10.0
+CONFIDENT_FUZZY_MODEL_CODE_SCORE = 92.0
 RAW_PARSE_CACHE_VERSION = "v1"
 MODEL_CODE_REMOVE_TRANS = str.maketrans("", "", " \t\r\n._-")
 QUICK_SEARCH_CACHE_VERSION = 1
@@ -388,6 +390,32 @@ class RagPipeline:
         if (
             precise_lookup
             and model_code_sources
+            and model_code_sources[0].score < STRONG_KEYWORD_MATCH_SCORE
+        ):
+            model_code_sources = _rank_strong_sources_by_sale_status(
+                model_code_sources,
+                minimum_score=CONFIDENT_FUZZY_MODEL_CODE_SCORE,
+            )
+            model_code_sources = _rank_sources_for_requested_platform(question, model_code_sources)
+            requested_platform = _requested_platform(question)
+            if (
+                requested_platform
+                and model_code_sources[0].score >= CONFIDENT_FUZZY_MODEL_CODE_SCORE
+                and any(_source_link_platform(source) == requested_platform for source in model_code_sources)
+            ):
+                confirmed_sources = _dedupe_sources_by_product(model_code_sources)
+                answer = build_structured_product_answer(
+                    question,
+                    confirmed_sources,
+                    system_prompt=system_prompt,
+                    require_question_match=False,
+                    max_products=max_answer_products,
+                )
+                if answer:
+                    return RagResult(answer=answer, sources=confirmed_sources[:max_answer_products])
+        if (
+            precise_lookup
+            and model_code_sources
             and _is_standalone_model_code_lookup(question)
             and model_code_sources[0].score < STRONG_KEYWORD_MATCH_SCORE
         ):
@@ -400,6 +428,7 @@ class RagPipeline:
                 deadline,
             )
         if precise_lookup and model_code_sources and model_code_sources[0].score >= STRONG_KEYWORD_MATCH_SCORE:
+            model_code_sources = _rank_strong_sources_by_sale_status(model_code_sources)
             model_code_sources = _rank_sources_for_requested_platform(question, model_code_sources)
             confirmed_sources = _dedupe_sources_by_product(model_code_sources)
             answer = build_structured_product_answer(
@@ -443,6 +472,7 @@ class RagPipeline:
             )
             keyword_sources = _merge_sources(fast_category_sources, keyword_sources)
         keyword_sources = _merge_sources(model_code_sources, keyword_sources)
+        keyword_sources = _rank_strong_sources_by_sale_status(keyword_sources)
         keyword_sources = _rank_sources_for_requested_platform(question, keyword_sources)
         strong_keyword_match = bool(
             keyword_sources and keyword_sources[0].score >= STRONG_KEYWORD_MATCH_SCORE
@@ -561,7 +591,7 @@ class RagPipeline:
         )
         if answer is None:
             if product_query:
-                return self._fuzzy_fallback_result(
+                fallback_result = self._fuzzy_fallback_result(
                     question,
                     keyword_sources,
                     system_prompt,
@@ -569,6 +599,31 @@ class RagPipeline:
                     None,
                     deadline,
                 )
+                requested_platform = _requested_platform(question)
+                if (
+                    requested_platform
+                    and model_code_sources
+                    and model_code_sources[0].score >= CONFIDENT_FUZZY_MODEL_CODE_SCORE
+                ):
+                    platform_sources = [
+                        source
+                        for source in fallback_result.sources
+                        if _source_link_platform(source) == requested_platform
+                    ]
+                    confirmed_answer = build_structured_product_answer(
+                        question,
+                        platform_sources,
+                        system_prompt=system_prompt,
+                        require_question_match=False,
+                        max_products=max_answer_products,
+                    )
+                    if confirmed_answer:
+                        return RagResult(
+                            answer=confirmed_answer,
+                            sources=platform_sources[:max_answer_products],
+                            warning=fallback_result.warning,
+                        )
+                return fallback_result
             else:
                 if time.monotonic() - started_at >= timeout_seconds:
                     return self._fuzzy_fallback_result(
@@ -1662,6 +1717,47 @@ def _dedupe_sources_by_product(sources: list[RetrievedChunk]) -> list[RetrievedC
         positions[key] = len(deduped)
         deduped.append(source)
     return deduped
+
+
+def _rank_strong_sources_by_sale_status(
+    sources: list[RetrievedChunk],
+    *,
+    minimum_score: float = STRONG_KEYWORD_MATCH_SCORE,
+) -> list[RetrievedChunk]:
+    """Prefer active products only when their match scores are close."""
+    strong = sorted(
+        (source for source in sources if source.score >= minimum_score),
+        key=lambda source: source.score,
+        reverse=True,
+    )
+    if len(strong) < 2 or not any(_is_closed_product_source(source) for source in strong):
+        return sources
+    if all(_is_closed_product_source(source) for source in strong):
+        return sources
+
+    ranked: list[RetrievedChunk] = []
+    index = 0
+    while index < len(strong):
+        band_top_score = strong[index].score
+        band_end = index + 1
+        while (
+            band_end < len(strong)
+            and band_top_score - strong[band_end].score <= STRONG_MATCH_NEARBY_SCORE_DELTA
+        ):
+            band_end += 1
+        band = strong[index:band_end]
+        ranked.extend(source for source in band if not _is_closed_product_source(source))
+        ranked.extend(source for source in band if _is_closed_product_source(source))
+        index = band_end
+
+    strong_ids = {id(source) for source in strong}
+    ranked.extend(source for source in sources if id(source) not in strong_ids)
+    return ranked
+
+
+def _is_closed_product_source(source: RetrievedChunk) -> bool:
+    text = f"{source.title}\n{source.text}"
+    return re.search(r"(?<![\u6ca1\u672a\u4e0d])\u622a\u56e2", text) is not None
 
 
 def _diversify_sources_by_brand(sources: list[RetrievedChunk]) -> list[RetrievedChunk]:

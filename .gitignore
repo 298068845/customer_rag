@@ -6,6 +6,7 @@ models/llm/**
 
 # Runtime data and generated indexes.
 category_aliases.yaml
+output/
 data/index/**
 data/raw/**
 data/browser_profile/**
@@ -32,6 +33,8 @@ wechatExtension/last-selected.txt
 wechatExtension/rag-bridge.log
 wechatExtension/rag-bridge-test.log
 wechatExtension/rag-brands.txt
+wechatExtension/rag-talk-shortcuts.txt
+wechatExtension/rag-talk-shortcut-labels.txt
 wechatExtension/sendbox-debug.log
 wechatExtension/preview-test-result.ini
 wechatExtension/*-test-result.ini

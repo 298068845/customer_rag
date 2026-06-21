@@ -31,6 +31,9 @@ global CUSTOM_TAB_PATHS := [
 global PREVIEW_GUI := 0
 global PREVIEW_VISIBLE := false
 global PREVIEW_TARGET_HWND := 0
+global REQUEST_SOURCE_HWND := 0
+global REQUEST_TARGET_HWND := 0
+global FOCUSED_SEND_TARGET_HWND := 0
 global PREVIEW_SOURCE_TEXT := ""
 global PREVIEW_PARTS := []
 global PREVIEW_TAB_TEXTS := []
@@ -154,6 +157,8 @@ Esc::ClosePreview()
 
 IsWeChatActive() {
     activeHwnd := WinExist("A")
+    ; Image/preview windows may be valid query sources, but are never assumed to
+    ; be valid send targets.
     return activeHwnd ? IsWeChatWindow(activeHwnd) : false
 }
 
@@ -184,11 +189,29 @@ HandleTabHotkey() {
         return
     }
 
+    if IsRagQueryPending() {
+        return
+    }
+
     CaptureSelectedText()
+}
+
+IsRagQueryPending() {
+    global RAG_QUERY_PID, RAG_QUERY_ID
+
+    return RAG_QUERY_ID != "" || (RAG_QUERY_PID && ProcessExist(RAG_QUERY_PID))
 }
 
 CaptureSelectedText() {
     global RAG_ORIGINAL_QUESTION, RAG_SELECTED_BRAND, RAG_PREVIEW_X, RAG_PREVIEW_Y
+    global REQUEST_SOURCE_HWND, REQUEST_TARGET_HWND, FOCUSED_SEND_TARGET_HWND
+
+    if IsRagQueryPending() {
+        return
+    }
+    REQUEST_SOURCE_HWND := WinExist("A")
+    REQUEST_TARGET_HWND := 0
+    FOCUSED_SEND_TARGET_HWND := 0
 
     oldClipboard := ClipboardAll()
     A_Clipboard := ""
@@ -248,7 +271,7 @@ StartRagFromQueryDialog(*) {
         return
     }
 
-    if (RAG_QUERY_PID && ProcessExist(RAG_QUERY_PID)) {
+    if IsRagQueryPending() {
         ShowStatus("loading", "RAG 查询中", "当前查询还在进行，请稍等...")
         return
     }
@@ -316,7 +339,12 @@ AskRagForSelection(tags := "", talkOnly := false, previewTalk := false) {
     }
 
     projectRoot := A_ScriptDir "\.."
-    python := projectRoot "\.venv\Scripts\python.exe"
+    python := projectRoot "\runtime\python.exe"
+    if !FileExist(python) {
+        ; Keep direct source-tree use working for developers. Release builds always
+        ; provide the self-contained runtime above.
+        python := projectRoot "\.venv\Scripts\python.exe"
+    }
     bridge := projectRoot "\customer_rag\wechat_bridge.py"
     EnsureLogDir()
     logPath := LOG_DIR "\rag-bridge.last.log"
@@ -363,6 +391,7 @@ AskRagForSelection(tags := "", talkOnly := false, previewTalk := false) {
         SetTimer CheckRagQueryDone, 250
     } catch as exc {
         RAG_QUERY_PID := 0
+        RAG_QUERY_ID := ""
         RAG_QUERY_STARTED_AT := 0
         RAG_TALK_ONLY_PENDING := false
         RAG_TALK_PREVIEW_PENDING := false
@@ -448,6 +477,7 @@ ShowRagResultPreview() {
     }
 
     CloseStatus()
+    CloseQueryDialog()
     if (RAG_PREVIEW_X != "" && RAG_PREVIEW_Y != "") {
         ShowSendPreview(text, RAG_PREVIEW_X, RAG_PREVIEW_Y, "query_fixed")
     } else {
@@ -468,11 +498,23 @@ PreviewOrSendNext() {
         return
     }
 
+    if IsRagQueryPending() {
+        return
+    }
+
     CaptureSelectedTextForTalk()
 }
 
 CaptureSelectedTextForTalk() {
     global RAG_ORIGINAL_QUESTION, RAG_SELECTED_BRAND, RAG_PREVIEW_X, RAG_PREVIEW_Y
+    global REQUEST_SOURCE_HWND, REQUEST_TARGET_HWND, FOCUSED_SEND_TARGET_HWND
+
+    if IsRagQueryPending() {
+        return
+    }
+    REQUEST_SOURCE_HWND := WinExist("A")
+    REQUEST_TARGET_HWND := 0
+    FOCUSED_SEND_TARGET_HWND := 0
 
     oldClipboard := ClipboardAll()
     A_Clipboard := ""
@@ -494,6 +536,7 @@ CaptureSelectedTextForTalk() {
 
 ShowSendPreview(text, mouseX := "", mouseY := "", mode := "query") {
     global PREVIEW_GUI, PREVIEW_VISIBLE, PREVIEW_TARGET_HWND, PREVIEW_SOURCE_TEXT
+    global REQUEST_TARGET_HWND
     global PREVIEW_EDIT, PREVIEW_LIST, PREVIEW_STATUS, PREVIEW_MODE_ALL, PREVIEW_MODE_SPLIT
     global PREVIEW_CLOSE_BUTTON, PREVIEW_TABS, PREVIEW_TAB_TEXTS, PREVIEW_ACTIVE_TAB, PREVIEW_SHOW_TABS
     global PREVIEW_SHORTCUTS, PREVIEW_SHOW_SHORTCUTS
@@ -501,11 +544,12 @@ ShowSendPreview(text, mouseX := "", mouseY := "", mode := "query") {
     global PREVIEW_BRANDS, PREVIEW_SELECTED_BRAND, PREVIEW_FORCE_SPLIT
     global RAG_SELECTED_BRAND
 
+    CloseQueryDialog()
     ClosePreview()
     DebugPreviewTest("show_after_close")
 
     text := PreparePreviewSourceText(text)
-    PREVIEW_TARGET_HWND := GetAvailableWeChatWindow()
+    PREVIEW_TARGET_HWND := ResolveRequestSendTarget()
     PREVIEW_SOURCE_TEXT := text
     PREVIEW_SHOW_TABS := mode = "custom"
     PREVIEW_SHOW_SHORTCUTS := mode = "talk_shortcuts"
@@ -1508,66 +1552,139 @@ WaitForSendInterval() {
 }
 
 FocusSendBox() {
-    global PREVIEW_TARGET_HWND
+    global PREVIEW_TARGET_HWND, REQUEST_TARGET_HWND, FOCUSED_SEND_TARGET_HWND
 
     targetHwnd := PREVIEW_TARGET_HWND
-    if !targetHwnd || !WinExist("ahk_id " targetHwnd) || !IsWeChatWindow(targetHwnd) {
-        targetHwnd := FindWeChatWindow()
-        PREVIEW_TARGET_HWND := targetHwnd
+    if !IsUsableWeChatChatWindow(targetHwnd) {
+        targetHwnd := ResolveRequestSendTarget()
     }
     if !targetHwnd {
         return false
     }
-    try WinActivate "ahk_id " targetHwnd
-    catch as exc {
+    PREVIEW_TARGET_HWND := targetHwnd
+    if FOCUSED_SEND_TARGET_HWND = targetHwnd && IsTargetWindowActive(targetHwnd) {
+        ResetSendBoxDebug()
+        SendBoxDebug("target_hwnd=" targetHwnd)
+        SendBoxDebug("focus=reused")
+        return true
+    }
+    FOCUSED_SEND_TARGET_HWND := 0
+    ResetSendBoxDebug()
+    SendBoxDebug("target_hwnd=" targetHwnd)
+    switchedWindow := false
+    if !BringSendTargetToFront(targetHwnd, &switchedWindow) {
+        return false
+    }
+    stableMs := ReadIntConfig("send", "foreground_stable_ms", 160)
+        stableTimeoutMs := ReadIntConfig("send", "foreground_stable_timeout_ms", 1600)
+        if !WaitForTargetForegroundStable(targetHwnd, stableMs, stableTimeoutMs) {
+            SendBoxDebug("foreground=not_stable")
+            return false
+        }
+        settleMs := switchedWindow
+            ? ReadIntConfig("send", "after_foreground_switch_ms", 500)
+            : ReadIntConfig("send", "after_foreground_reactivate_ms", 100)
+        SendBoxDebug("foreground_settle_ms=" settleMs ",switched=" (switchedWindow ? "1" : "0"))
+        Sleep settleMs
+        if !IsTargetWindowActive(targetHwnd) {
+            SendBoxDebug("foreground=lost_after_settle")
+            return false
+        }
+        try {
+            WinGetPos &debugX, &debugY, &debugW, &debugH, "ahk_id " targetHwnd
+            SendBoxDebug("window_rect=" debugX "," debugY "," debugW "," debugH)
+            SendBoxDebug("window_dpi=" DllCall("GetDpiForWindow", "ptr", targetHwnd, "uint"))
+            SendBoxDebug("window_title=" WinGetTitle("ahk_id " targetHwnd))
+            SendBoxDebug("window_class=" WinGetClass("ahk_id " targetHwnd))
+        }
+
+        if !ReadBoolConfig("send", "click_before_paste", true) {
+            SendBoxDebug("skip_focus=click_before_paste_disabled")
+            return RememberFocusedSendTarget(targetHwnd, IsTargetWindowActive(targetHwnd))
+        }
+
+        locatorMode := NormalizeLocatorMode(IniRead(CONFIG_PATH, "send", "locator_mode", "uia"))
+        SendBoxDebug("locator_mode=" locatorMode)
+        if (locatorMode = "f8") {
+            SendBoxDebug("locator=f8_saved_point")
+            GetInputAnchor(targetHwnd, &anchorX, &anchorY)
+            Click anchorX, anchorY
+            Sleep ReadIntConfig("send", "after_click_ms", 100)
+            return RememberFocusedSendTarget(targetHwnd, IsTargetWindowActive(targetHwnd))
+        }
+
+        if TryFocusSendBoxByUIAutomation(targetHwnd) || TryFocusSendBoxByControl(targetHwnd) {
+            Sleep ReadIntConfig("send", "after_click_ms", 100)
+            return RememberFocusedSendTarget(targetHwnd, IsTargetWindowActive(targetHwnd))
+        }
+
+        if ReadBoolConfig("send", "allow_safe_geometry_fallback", true) && TryFocusSendBoxBySafeGeometry(targetHwnd) {
+            Sleep ReadIntConfig("send", "after_click_ms", 100)
+            return RememberFocusedSendTarget(targetHwnd, IsTargetWindowActive(targetHwnd))
+        }
+
+        if ReadBoolConfig("send", "allow_saved_point_fallback", false) {
+            SendBoxDebug("fallback=saved_point")
+            GetInputAnchor(targetHwnd, &anchorX, &anchorY)
+            Click anchorX, anchorY
+            Sleep ReadIntConfig("send", "after_click_ms", 100)
+            return RememberFocusedSendTarget(targetHwnd, IsTargetWindowActive(targetHwnd))
+        }
+
+        SendBoxDebug("result=not_found")
+        FOCUSED_SEND_TARGET_HWND := 0
+        return false
+}
+
+RememberFocusedSendTarget(hwnd, focused) {
+    global FOCUSED_SEND_TARGET_HWND
+
+    FOCUSED_SEND_TARGET_HWND := focused ? hwnd : 0
+    return focused
+}
+
+BringSendTargetToFront(hwnd, &switchedWindow) {
+    switchedWindow := !IsTargetWindowActive(hwnd)
+    if !switchedWindow {
+        SendBoxDebug("activate=already_foreground")
+        return true
+    }
+    try {
+        WinShow "ahk_id " hwnd
+        WinActivate "ahk_id " hwnd
+        DllCall("BringWindowToTop", "ptr", hwnd)
+        DllCall("SetForegroundWindow", "ptr", hwnd)
+        activationTimeoutMs := ReadIntConfig("send", "foreground_activation_timeout_ms", 1600)
+        if !WinWaitActive("ahk_id " hwnd,, Max(0.1, activationTimeoutMs / 1000)) {
+            SendBoxDebug("activate=timeout")
+            return false
+        }
+        SendBoxDebug("activate=foreground")
+        return true
+    } catch as exc {
         LogSendError(exc)
         return false
     }
-    Sleep 80
-    ResetSendBoxDebug()
-    SendBoxDebug("target_hwnd=" targetHwnd)
-    try {
-        WinGetPos &debugX, &debugY, &debugW, &debugH, "ahk_id " targetHwnd
-        SendBoxDebug("window_rect=" debugX "," debugY "," debugW "," debugH)
-        SendBoxDebug("window_dpi=" DllCall("GetDpiForWindow", "ptr", targetHwnd, "uint"))
-        SendBoxDebug("window_title=" WinGetTitle("ahk_id " targetHwnd))
-        SendBoxDebug("window_class=" WinGetClass("ahk_id " targetHwnd))
-    }
+}
 
-    if !ReadBoolConfig("send", "click_before_paste", true) {
-        SendBoxDebug("skip_focus=click_before_paste_disabled")
-        return true
+WaitForTargetForegroundStable(hwnd, stableMs, timeoutMs) {
+    stableMs := Max(0, stableMs)
+    timeoutMs := Max(stableMs, timeoutMs)
+    startedAt := A_TickCount
+    stableSince := 0
+    while A_TickCount - startedAt <= timeoutMs {
+        if IsTargetWindowActive(hwnd) {
+            if !stableSince {
+                stableSince := A_TickCount
+            }
+            if A_TickCount - stableSince >= stableMs {
+                return true
+            }
+        } else {
+            stableSince := 0
+        }
+        Sleep 25
     }
-
-    locatorMode := NormalizeLocatorMode(IniRead(CONFIG_PATH, "send", "locator_mode", "uia"))
-    SendBoxDebug("locator_mode=" locatorMode)
-    if (locatorMode = "f8") {
-        SendBoxDebug("locator=f8_saved_point")
-        GetInputAnchor(targetHwnd, &anchorX, &anchorY)
-        Click anchorX, anchorY
-        Sleep ReadIntConfig("send", "after_click_ms", 100)
-        return true
-    }
-
-    if TryFocusSendBoxByUIAutomation(targetHwnd) || TryFocusSendBoxByControl(targetHwnd) {
-        Sleep ReadIntConfig("send", "after_click_ms", 100)
-        return true
-    }
-
-    if ReadBoolConfig("send", "allow_safe_geometry_fallback", true) && TryFocusSendBoxBySafeGeometry(targetHwnd) {
-        Sleep ReadIntConfig("send", "after_click_ms", 100)
-        return true
-    }
-
-    if ReadBoolConfig("send", "allow_saved_point_fallback", false) {
-        SendBoxDebug("fallback=saved_point")
-        GetInputAnchor(targetHwnd, &anchorX, &anchorY)
-        Click anchorX, anchorY
-        Sleep ReadIntConfig("send", "after_click_ms", 100)
-        return true
-    }
-
-    SendBoxDebug("result=not_found")
     return false
 }
 
@@ -1579,13 +1696,38 @@ NormalizeLocatorMode(value) {
     return "uia"
 }
 
-FindWeChatWindow() {
+FindWeChatWindow(preferredHwnd := 0) {
+    bestHwnd := 0
+    bestScore := -1
     for hwnd in WinGetList() {
-        if IsWeChatWindow(hwnd) {
-            return hwnd
+        if !IsUsableWeChatChatWindow(hwnd) {
+            continue
+        }
+        score := WeChatChatWindowScore(hwnd)
+        if hwnd = preferredHwnd {
+            score += 200
+        }
+        if score > bestScore {
+            bestScore := score
+            bestHwnd := hwnd
         }
     }
-    return 0
+    return bestHwnd
+}
+
+IsTargetWindowActive(hwnd) {
+    if !hwnd {
+        return false
+    }
+    activeHwnd := WinExist("A")
+    if activeHwnd = hwnd {
+        return true
+    }
+    try {
+        return DllCall("GetAncestor", "ptr", activeHwnd, "uint", 2, "ptr") = hwnd
+    } catch {
+        return false
+    }
 }
 
 PreviewWindowMouseDown(wParam, lParam, msg, hwnd) {
@@ -1634,10 +1776,30 @@ SafeActiveHwnd() {
 
 GetAvailableWeChatWindow() {
     activeHwnd := WinExist("A")
-    if activeHwnd && IsWeChatWindow(activeHwnd) {
+    if IsUsableWeChatChatWindow(activeHwnd) {
         return activeHwnd
     }
     return FindWeChatWindow()
+}
+
+GetActiveWeChatChatWindow() {
+    activeHwnd := WinExist("A")
+    return IsUsableWeChatChatWindow(activeHwnd) ? activeHwnd : 0
+}
+
+ResolveRequestSendTarget() {
+    global REQUEST_SOURCE_HWND, REQUEST_TARGET_HWND
+
+    if IsUsableWeChatChatWindow(REQUEST_TARGET_HWND) {
+        return REQUEST_TARGET_HWND
+    }
+
+    ; Prefer the query source only while it still qualifies as a real, visible
+    ; chat window. A minimized image viewer therefore cannot be reactivated as
+    ; a side effect of sending.
+    preferredHwnd := IsUsableWeChatChatWindow(REQUEST_SOURCE_HWND) ? REQUEST_SOURCE_HWND : 0
+    REQUEST_TARGET_HWND := FindWeChatWindow(preferredHwnd)
+    return REQUEST_TARGET_HWND
 }
 
 PositionPreviewNearMouse(mouseX := "", mouseY := "") {
@@ -1656,13 +1818,16 @@ PositionPreviewNearMouse(mouseX := "", mouseY := "") {
     firstX := Clamp(mouseX + gap, left + 10, right - 520)
     firstY := Clamp(mouseY + gap, top + 10, bottom - 360)
 
-    PREVIEW_GUI.Show("x" firstX " y" firstY " AutoSize")
+    PREVIEW_GUI.Show("Hide x" firstX " y" firstY " AutoSize")
     Sleep 30
 
     DebugPreviewTest("position_start")
     try {
-        WinGetPos ,, &previewW, &previewH, "ahk_id " PREVIEW_GUI.Hwnd
+        if !GetWindowSizeIncludingFrame(PREVIEW_GUI.Hwnd, &previewW, &previewH) {
+            throw Error("无法测量隐藏的预览窗口")
+        }
     } catch {
+        PREVIEW_GUI.Show("x" firstX " y" firstY " AutoSize")
         ApplyRoundedPreviewRegion()
         DebugPreviewTest("position_wingetpos_failed")
         return
@@ -1684,6 +1849,7 @@ PositionPreviewNearMouse(mouseX := "", mouseY := "") {
         best := ClampPreviewCandidate(candidates[1], previewW, previewH, left, top, right, bottom)
     }
     best := KeepPreviewAwayFromSendAnchor(best.x, best.y, previewW, previewH, left, top, right, bottom)
+    best := LiftPreviewForSendAreaTrigger(mouseX, mouseY, best.x, best.y, previewH, left, top, right, bottom)
 
     PREVIEW_GUI.Show("x" best.x " y" best.y " AutoSize")
     Sleep 30
@@ -1708,10 +1874,12 @@ PositionPreviewAt(x, y) {
     }
 
     GetWorkAreaForPoint(x, y, &left, &top, &right, &bottom)
-    PREVIEW_GUI.Show("x" x " y" y " AutoSize")
+    PREVIEW_GUI.Show("Hide x" x " y" y " AutoSize")
     Sleep 30
     try {
-        WinGetPos ,, &previewW, &previewH, "ahk_id " PREVIEW_GUI.Hwnd
+        if !GetWindowSizeIncludingFrame(PREVIEW_GUI.Hwnd, &previewW, &previewH) {
+            throw Error("无法测量隐藏的预览窗口")
+        }
         x := Clamp(x, left + 10, right - previewW - 10)
         y := Clamp(y, top + 10, bottom - previewH - 10)
         adjusted := KeepPreviewAwayFromSendAnchor(x, y, previewW, previewH, left, top, right, bottom)
@@ -1723,6 +1891,7 @@ PositionPreviewAt(x, y) {
     } catch {
         RAG_PREVIEW_X := x
         RAG_PREVIEW_Y := y
+        PREVIEW_GUI.Show("x" x " y" y " AutoSize")
     }
     ClearPreviewSelection()
     RedrawPreviewList()
@@ -1739,6 +1908,16 @@ ClearPreviewSelection() {
 
 FitsInWorkArea(x, y, w, h, left, top, right, bottom) {
     return x >= left + 10 && y >= top + 10 && x + w <= right - 10 && y + h <= bottom - 10
+}
+
+GetWindowSizeIncludingFrame(hwnd, &width, &height) {
+    rect := Buffer(16, 0)
+    if !DllCall("GetWindowRect", "ptr", hwnd, "ptr", rect.Ptr) {
+        return false
+    }
+    width := NumGet(rect, 8, "int") - NumGet(rect, 0, "int")
+    height := NumGet(rect, 12, "int") - NumGet(rect, 4, "int")
+    return width > 0 && height > 0
 }
 
 BuildPreviewPositionCandidates(mouseX, mouseY, w, h, left, top, right, bottom, gap) {
@@ -1761,6 +1940,38 @@ ClampPreviewCandidate(candidate, w, h, left, top, right, bottom) {
         x: Clamp(candidate.x, left + 10, right - w - 10),
         y: Clamp(candidate.y, top + 10, bottom - h - 10)
     }
+}
+
+LiftPreviewForSendAreaTrigger(mouseX, mouseY, x, y, previewH, left, top, right, bottom) {
+    guardLeft := 0
+    guardTop := 0
+    guardRight := 0
+    guardBottom := 0
+    hasGuard := GetSendAnchorGuardRect(&guardLeft, &guardTop, &guardRight, &guardBottom)
+    if !ShouldLiftPreviewForTrigger(mouseX, mouseY, left, top, right, bottom,
+        hasGuard, guardLeft, guardTop, guardRight, guardBottom) {
+        return {x: x, y: y}
+    }
+
+    return PlacePreviewUpperCenter(x, previewH, top, bottom)
+}
+
+PlacePreviewUpperCenter(x, previewH, top, bottom) {
+    targetCenterY := top + Floor((bottom - top) * 0.42)
+    targetY := targetCenterY - Floor(previewH / 2)
+    return {x: x, y: Clamp(targetY, top + 10, bottom - previewH - 10)}
+}
+
+ShouldLiftPreviewForTrigger(mouseX, mouseY, left, top, right, bottom,
+    hasGuard, guardLeft := 0, guardTop := 0, guardRight := 0, guardBottom := 0) {
+    if hasGuard && mouseX >= guardLeft && mouseX <= guardRight
+        && mouseY >= guardTop && mouseY <= guardBottom {
+        return true
+    }
+
+    triggerX := left + Floor((right - left) * 0.6)
+    triggerY := top + Floor((bottom - top) * 0.6)
+    return mouseX >= triggerX && mouseY >= triggerY
 }
 
 KeepPreviewAwayFromSendAnchor(x, y, w, h, left, top, right, bottom) {
@@ -2455,6 +2666,73 @@ IsWeChatWindow(hwnd) {
     return false
 }
 
+IsUsableWeChatChatWindow(hwnd) {
+    if !hwnd || !WinExist("ahk_id " hwnd) || !IsWeChatChatWindow(hwnd) {
+        return false
+    }
+    try {
+        if WinGetMinMax("ahk_id " hwnd) = -1 {
+            return false
+        }
+        style := WinGetStyle("ahk_id " hwnd)
+        if !(style & 0x10000000) {
+            return false
+        }
+        WinGetPos ,, &winW, &winH, "ahk_id " hwnd
+        return winW >= 640 && winH >= 480
+    } catch {
+        return false
+    }
+}
+
+IsWeChatChatWindow(hwnd) {
+    if !IsWeChatWindow(hwnd) {
+        return false
+    }
+
+    title := ""
+    className := ""
+    try title := StrLower(Trim(WinGetTitle("ahk_id " hwnd)))
+    try className := StrLower(WinGetClass("ahk_id " hwnd))
+    excludedMarkers := [
+        "图片查看器", "图片预览", "图片和视频", "图片与视频", "视频播放器",
+        "image viewer", "image preview", "photo viewer", "media viewer"
+    ]
+    for marker in excludedMarkers {
+        if InStr(title, marker) || InStr(className, StrLower(marker)) {
+            return false
+        }
+    }
+
+    ; WeChat commonly owns auxiliary viewers/popups from its main chat window.
+    ; Such windows are valid copy/query sources but must not receive messages.
+    try {
+        ownerHwnd := DllCall("GetWindow", "ptr", hwnd, "uint", 4, "ptr")
+        if ownerHwnd && IsWeChatWindow(ownerHwnd) {
+            return false
+        }
+        exStyle := WinGetExStyle("ahk_id " hwnd)
+        if exStyle & 0x00000080 {
+            return false
+        }
+    }
+    return true
+}
+
+WeChatChatWindowScore(hwnd) {
+    score := 0
+    try {
+        title := Trim(WinGetTitle("ahk_id " hwnd))
+        className := StrLower(WinGetClass("ahk_id " hwnd))
+        WinGetPos ,, &winW, &winH, "ahk_id " hwnd
+        score += title != "" ? 100 : 0
+        score += InStr(className, "qwindow") ? 40 : 0
+        score += Min(80, Floor(winW * winH / 50000))
+        score += WinGetMinMax("ahk_id " hwnd) != -1 ? 20 : 0
+    }
+    return score
+}
+
 ReadSendText() {
     if FileExist(SEND_TEXT_PATH) {
         return FileRead(SEND_TEXT_PATH, "UTF-8")
@@ -2610,13 +2888,28 @@ PreparePreviewSourceText(text) {
         if !InStr(output, fallbackText) {
             output .= (output = "" ? "" : "`n---`n") fallbackText
         }
-    } else if InStr(output, "截团") {
+    } else if AreAllTextProductResultsClosed(output) {
         temporaryClosedText := TemporaryClosedReply()
         if !InStr(output, temporaryClosedText) {
             output := temporaryClosedText (output = "" ? "" : "`n---`n" output)
         }
     }
     return output
+}
+
+AreAllTextProductResultsClosed(text) {
+    productCount := 0
+    closedCount := 0
+    for index, part in SplitSendText(text) {
+        if !IsProductResultPart(part) {
+            continue
+        }
+        productCount += 1
+        if IsClosedProductResult(part) {
+            closedCount += 1
+        }
+    }
+    return productCount > 0 && productCount = closedCount
 }
 
 FallbackManualReply() {
@@ -2868,6 +3161,11 @@ input_client_ratio_y=-1
 input_client_w=0
 input_client_h=0
 after_click_ms=100
+foreground_stable_ms=160
+foreground_activation_timeout_ms=1600
+foreground_stable_timeout_ms=1600
+after_foreground_switch_ms=500
+after_foreground_reactivate_ms=100
 clipboard_settle_ms=80
 image_clipboard_settle_ms_per_100kb=70
 image_clipboard_settle_max_ms=1500
@@ -2920,11 +3218,29 @@ RunPreviewSelfTest() {
     WinGetPos &x, &y, &w, &h, "ahk_id " PREVIEW_GUI.Hwnd
     okSize := w >= 560 && w <= 760 && h >= 430 && h <= 620
     okNearMouse := Abs(x - mouseX) <= 40 || Abs((x + w) - mouseX) <= 40
+    okGuardTrigger := ShouldLiftPreviewForTrigger(400, 800, 0, 0, 1000, 1000, true, 300, 600, 500, 900)
+    okGuardOutside := !ShouldLiftPreviewForTrigger(550, 800, 0, 0, 1000, 1000, true, 300, 600, 500, 900)
+    okFallbackTrigger := ShouldLiftPreviewForTrigger(800, 800, 0, 0, 1000, 1000, false)
+    lifted := PlacePreviewUpperCenter(120, 400, 0, 1000)
+    okActualGuardLift := -1
+    if GetSendAnchorInfo(&actualGuardLeft, &actualGuardTop, &actualGuardRight, &actualGuardBottom, &actualAnchorX, &actualAnchorY) {
+        GetWorkAreaForPoint(actualAnchorX, actualAnchorY, &actualLeft, &actualTop, &actualRight, &actualBottom)
+        actualLifted := LiftPreviewForSendAreaTrigger(actualAnchorX, actualAnchorY, 120, 240, 400,
+            actualLeft, actualTop, actualRight, actualBottom)
+        expectedActualY := actualTop + Floor((actualBottom - actualTop) * 0.42) - 200
+        expectedActualY := Clamp(expectedActualY, actualTop + 10, actualBottom - 410)
+        okActualGuardLift := actualLifted.y = expectedActualY
+    }
     FileAppend "[result]`n", PREVIEW_TEST_PATH, "UTF-8"
     FileAppend "x=" x "`ny=" y "`nw=" w "`nh=" h "`n", PREVIEW_TEST_PATH, "UTF-8"
     FileAppend "mouse_x=" mouseX "`nmouse_y=" mouseY "`n", PREVIEW_TEST_PATH, "UTF-8"
     FileAppend "ok_size=" (okSize ? "1" : "0") "`n", PREVIEW_TEST_PATH, "UTF-8"
     FileAppend "ok_near_mouse=" (okNearMouse ? "1" : "0") "`n", PREVIEW_TEST_PATH, "UTF-8"
+    FileAppend "ok_guard_trigger=" (okGuardTrigger ? "1" : "0") "`n", PREVIEW_TEST_PATH, "UTF-8"
+    FileAppend "ok_guard_outside=" (okGuardOutside ? "1" : "0") "`n", PREVIEW_TEST_PATH, "UTF-8"
+    FileAppend "ok_fallback_trigger=" (okFallbackTrigger ? "1" : "0") "`n", PREVIEW_TEST_PATH, "UTF-8"
+    FileAppend "ok_upper_center=" (lifted.y = 220 ? "1" : "0") "`n", PREVIEW_TEST_PATH, "UTF-8"
+    FileAppend "ok_actual_guard_lift=" okActualGuardLift "`n", PREVIEW_TEST_PATH, "UTF-8"
     Sleep 350
     ClosePreview()
 }

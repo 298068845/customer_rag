@@ -31,6 +31,8 @@ class LlmConfig:
     llama_server_executable: str = ""
     llama_server_backend: str = "auto"
     n_gpu_layers: int = 0
+    n_parallel: int = 1
+    prompt_cache_mb: int = 1024
 
 
 @dataclass(frozen=True)
@@ -138,6 +140,8 @@ def load_config(path: str | Path | None = None) -> RagConfig:
             llama_server_executable=str(llm_data.get("llama_server_executable", "")),
             llama_server_backend=str(llm_data.get("llama_server_backend", "auto")),
             n_gpu_layers=int(llm_data.get("n_gpu_layers", 0)),
+            n_parallel=int(llm_data.get("n_parallel", 1)),
+            prompt_cache_mb=int(llm_data.get("prompt_cache_mb", 1024)),
         ),
     )
 
