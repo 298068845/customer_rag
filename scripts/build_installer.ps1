@@ -194,10 +194,26 @@ if (-not (Test-Path -LiteralPath $pthPath)) {
 @(
     "python311.zip",
     ".",
+    "Lib",
     "Lib\site-packages",
     "..",
     "import site"
 ) | Set-Content -LiteralPath $pthPath -Encoding ascii
+
+Write-Step "Adding Tcl/Tk runtime for native path selectors..."
+$buildPythonBase = (& $python -c "import sys; print(sys.base_prefix)").Trim()
+$tkRuntimeFiles = @("_tkinter.pyd", "tcl86t.dll", "tk86t.dll")
+foreach ($tkRuntimeFile in $tkRuntimeFiles) {
+    $tkSource = Join-Path $buildPythonBase "DLLs\$tkRuntimeFile"
+    if (-not (Test-Path -LiteralPath $tkSource)) {
+        throw "Missing Tcl/Tk runtime file in build Python: $tkSource"
+    }
+    Copy-Item -LiteralPath $tkSource -Destination (Join-Path $runtimeDir $tkRuntimeFile) -Force
+}
+Copy-Tree -Source (Join-Path $buildPythonBase "Lib\tkinter") -Destination (Join-Path $runtimeDir "Lib\tkinter") `
+    -ExcludeDirs @("__pycache__") `
+    -ExcludeFiles @("*.pyc", "*.pyo")
+Copy-Tree -Source (Join-Path $buildPythonBase "tcl") -Destination (Join-Path $runtimeDir "tcl")
 
 Write-Step "Adding app-local Microsoft Visual C++ runtime..."
 foreach ($runtimeFile in $vcRuntimeFiles) {
@@ -228,6 +244,10 @@ Invoke-Native $python -m pip install `
 Remove-Item -LiteralPath (Join-Path $runtimeSitePackages "bin") -Recurse -Force -ErrorAction SilentlyContinue
 
 Copy-Tree -Source (Join-Path $root "customer_rag") -Destination (Join-Path $stageDir "customer_rag") `
+    -ExcludeDirs @("__pycache__") `
+    -ExcludeFiles @("*.pyc", "*.pyo")
+
+Copy-Tree -Source (Join-Path $root "components") -Destination (Join-Path $stageDir "components") `
     -ExcludeDirs @("__pycache__") `
     -ExcludeFiles @("*.pyc", "*.pyo")
 
@@ -279,7 +299,7 @@ Invoke-Native $python -c "from pathlib import Path; from PIL import Image; src=P
 Write-Step "Checking staged self-contained runtime..."
 Push-Location $stageDir
 try {
-    Invoke-Native (Join-Path $runtimeDir "python.exe") -c "import sys; assert sys.version_info[:2] == (3, 11); import cryptography, faiss, numpy, pandas, pyarrow, pystray, streamlit, torch, win32api; import customer_rag; print(sys.executable); print('runtime imports ok')"
+    Invoke-Native (Join-Path $runtimeDir "python.exe") -c "import sys; assert sys.version_info[:2] == (3, 11); import cryptography, faiss, numpy, pandas, pyarrow, pystray, streamlit, tkinter, torch, win32api; import customer_rag; assert tkinter.Tcl().eval('info patchlevel').startswith('8.6'); print(sys.executable); print('runtime imports ok')"
     Invoke-Native (Join-Path $runtimeDir "python.exe") (Join-Path $stageDir "customer_rag\wechat_bridge.py") --help
 }
 finally {
@@ -287,6 +307,10 @@ finally {
 }
 
 Write-Step "Auditing staged release paths..."
+$stagedTalkComponent = Join-Path $stageDir "components\asset_list_table\index.html"
+if (-not (Test-Path -LiteralPath $stagedTalkComponent)) {
+    throw "The staged talk page component is missing: $stagedTalkComponent"
+}
 $stagedWechatScript = Join-Path $stageDir "wechatExtension\WeChatQuickTool.ahk"
 $stagedWechatSource = Get-Content -LiteralPath $stagedWechatScript -Raw
 if ($stagedWechatSource -notmatch 'python\s*:=\s*projectRoot\s*"\\runtime\\python\.exe"') {

@@ -1167,7 +1167,8 @@ PasteTextToWeChat(text) {
                 Send "^v"
                 Sleep ImagePasteWaitMs(clipboardImagePath)
                 sentSomething := true
-                TraceSendStep(sendTraceId, "image_pasted", "clipboard_image_path=" clipboardImagePath)
+                formats := ClipboardImageFormats()
+                TraceSendStep(sendTraceId, "image_paste_requested", "clipboard_image_path=" clipboardImagePath "`n" formats)
                 if !testMode && ReadBoolConfig("send", "send_image_before_text", false) {
                     PrepareImageEnter()
                     PressSendShortcut()
@@ -1208,6 +1209,12 @@ PasteTextToWeChat(text) {
         pasteActiveSince := 0
         TraceSendStep(sendTraceId, "finally_exit", "restore=" (restoreClipboard ? "1" : "0"))
     }
+}
+
+ClipboardImageFormats() {
+    return "cf_bitmap=" (DllCall("IsClipboardFormatAvailable", "UInt", 2) ? "1" : "0")
+        . "`ncf_dib=" (DllCall("IsClipboardFormatAvailable", "UInt", 8) ? "1" : "0")
+        . "`ncf_hdrop=" (DllCall("IsClipboardFormatAvailable", "UInt", 15) ? "1" : "0")
 }
 
 PrepareImageEnter() {
@@ -1322,7 +1329,26 @@ ResolveProjectPath(path) {
 }
 
 SetClipboardFile(path) {
-    absolutePath := path
+    hDrop := CreateClipboardFileDrop(path)
+    if !hDrop {
+        return false
+    }
+    if !OpenClipboardWithRetry(0) {
+        DllCall("GlobalFree", "UPtr", hDrop)
+        return false
+    }
+    DllCall("EmptyClipboard")
+    if !DllCall("SetClipboardData", "UInt", 15, "UPtr", hDrop, "UPtr") {
+        DllCall("CloseClipboard")
+        DllCall("GlobalFree", "UPtr", hDrop)
+        return false
+    }
+    DllCall("CloseClipboard")
+    return true
+}
+
+CreateClipboardFileDrop(path) {
+    absolutePath := ResolveProjectPath(path)
     bytes := StrPut(absolutePath, "UTF-16") * 2 + 2
     size := 20 + bytes
     hDrop := DllCall("GlobalAlloc", "UInt", 0x42, "UPtr", size, "UPtr")
@@ -1342,18 +1368,7 @@ SetClipboardFile(path) {
     StrPut(absolutePath, ptr + 20, "UTF-16")
     NumPut("UShort", 0, ptr, 20 + StrPut(absolutePath, "UTF-16") * 2)
     DllCall("GlobalUnlock", "UPtr", hDrop)
-    if !DllCall("OpenClipboard", "UPtr", 0) {
-        DllCall("GlobalFree", "UPtr", hDrop)
-        return false
-    }
-    DllCall("EmptyClipboard")
-    if !DllCall("SetClipboardData", "UInt", 15, "UPtr", hDrop, "UPtr") {
-        DllCall("CloseClipboard")
-        DllCall("GlobalFree", "UPtr", hDrop)
-        return false
-    }
-    DllCall("CloseClipboard")
-    return true
+    return hDrop
 }
 
 SetClipboardImage(path) {
@@ -1372,9 +1387,13 @@ SetClipboardImage(path) {
         DllCall("DeleteObject", "UPtr", hBitmap)
         return ""
     }
+    hDrop := CreateClipboardFileDrop(clipboardImagePath != "" ? clipboardImagePath : imagePath)
     if !OpenClipboardWithRetry(0) {
         DllCall("DeleteObject", "UPtr", hBitmap)
         DllCall("GlobalFree", "UPtr", hDib)
+        if hDrop {
+            DllCall("GlobalFree", "UPtr", hDrop)
+        }
         return ""
     }
     DllCall("EmptyClipboard")
@@ -1387,6 +1406,10 @@ SetClipboardImage(path) {
     if bitmapOk {
         hBitmap := 0
     }
+    dropOk := hDrop ? DllCall("SetClipboardData", "UInt", 15, "UPtr", hDrop, "UPtr") : 0
+    if dropOk {
+        hDrop := 0
+    }
     DllCall("CloseClipboard")
 
     if hBitmap {
@@ -1395,7 +1418,10 @@ SetClipboardImage(path) {
     if hDib {
         DllCall("GlobalFree", "UPtr", hDib)
     }
-    return (dibOk || bitmapOk) ? (clipboardImagePath != "" ? clipboardImagePath : imagePath) : ""
+    if hDrop {
+        DllCall("GlobalFree", "UPtr", hDrop)
+    }
+    return (dibOk || bitmapOk || dropOk) ? (clipboardImagePath != "" ? clipboardImagePath : imagePath) : ""
 }
 
 LoadBitmapForClipboard(imagePath, &clipboardImagePath := "") {
