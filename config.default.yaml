@@ -1,9 +1,9 @@
-raw_data_dir: D:\workplace\customer_rag\data\raw
-index_dir: D:\workplace\customer_rag\data\index
-talk_data_dir: D:\workplace\customer_rag\data\talk_rag
-embedding_model_path: E:\workplace\customer_rag\models\embeddings\bge-small-zh-v1.5
-llm_model_path: E:\workplace\customer_rag\models\llm\model.gguf
-tools_dir: E:\workplace\customer_rag\tools
+raw_data_dir: data/raw
+index_dir: data/index
+talk_data_dir: data/talk_rag
+embedding_model_path: models/embeddings/bge-small-zh-v1.5
+llm_model_path: models/llm/model.gguf
+tools_dir: tools
 chunk_size: 700
 chunk_overlap: 120
 embedding_batch_size: 32

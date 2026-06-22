@@ -5,6 +5,7 @@ models/llm/**
 !models/llm/.gitkeep
 
 # Runtime data and generated indexes.
+config.yaml
 category_aliases.yaml
 output/
 data/index/**
@@ -21,6 +22,7 @@ data/*.json
 __pycache__/
 *.py[cod]
 .venv/
+.venv.*/
 
 # Installer build outputs.
 build/
