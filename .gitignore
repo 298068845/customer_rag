@@ -43,3 +43,7 @@ wechatExtension/*-test-result.ini
 
 # Local tool runtime binaries and generated files.
 tools/**
+
+# CodeFree Memory - private memories (auto-managed)
+# Team memories in .codefree/memory/team/ are NOT excluded (shared via VCS)
+*.private.md
