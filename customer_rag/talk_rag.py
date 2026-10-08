@@ -4,7 +4,7 @@ import json
 import re
 import shutil
 import zipfile
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -12,7 +12,11 @@ from typing import Literal
 from uuid import uuid4
 
 from customer_rag.category_config import category_aliases, category_brands, semantic_category_terms
+from customer_rag.category_config import _normalize_brand_term as _normalize_catalog_brand
+from customer_rag.config import RagConfig
+from customer_rag.corpus import CorpusItem, CorpusStore
 from customer_rag.loaders import brand_tags_from_text, category_tags_from_text
+from customer_rag.tencent_docs import TencentDocSubscription, load_subscriptions, subscription_output_path
 
 
 LinkType = Literal["fixed", "knowledge", "image"]
@@ -267,7 +271,69 @@ class TalkRagStore:
 
     def save_realtime_config(self, config: RealtimeTalkConfig) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
-        self.realtime_path.write_text(json.dumps(asdict(config), ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary_path = self.realtime_path.with_name(f"{self.realtime_path.name}.{uuid4().hex}.tmp")
+        temporary_path.write_text(json.dumps(asdict(config), ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary_path.replace(self.realtime_path)
+
+    def sync_subscription_brand_replies(
+        self,
+        subscriptions: list[TencentDocSubscription],
+        raw_data_dir: Path,
+        items: list[CorpusItem],
+    ) -> int:
+        active_subscriptions = [
+            subscription for subscription in subscriptions if subscription.enabled and subscription.url.strip()
+        ]
+        config = self.load_realtime_config()
+        aliases = {
+            normalize_text(alias): rule.brand
+            for rule in config.brand_alias_rules
+            for alias in rule.aliases
+        }
+        brands_by_source: dict[str, dict[str, str]] = {}
+        for item in items:
+            # Product rows carry categories or product information; sheet notices can also occupy the brand column.
+            if not category_tags_from_text(item.text) and not re.search(r"(?:^|[；;\n])\s*产品信息\s*[:：]", item.text):
+                continue
+            source_key = str(Path(item.source).resolve()).casefold()
+            for brand in brand_tags_from_text(item.text):
+                brand = _normalize_catalog_brand(normalize_brand(aliases.get(normalize_text(brand), brand), config))
+                brands_by_source.setdefault(source_key, {})[normalize_text(brand)] = brand
+
+        replies_by_brand: dict[str, list[str]] = {}
+        brand_names: dict[str, str] = {}
+        urls_by_brand: dict[str, set[str]] = {}
+        for subscription in active_subscriptions:
+            source_key = str(subscription_output_path(subscription, raw_data_dir).resolve()).casefold()
+            for brand_key, brand in brands_by_source.get(source_key, {}).items():
+                brand_names.setdefault(brand_key, brand)
+                seen_urls = urls_by_brand.setdefault(brand_key, set())
+                if subscription.url in seen_urls:
+                    continue
+                seen_urls.add(subscription.url)
+                reply_terms = replies_by_brand.setdefault(brand_key, [])
+                if reply_terms:
+                    reply_terms.append("---")
+                reply_terms.extend([f"【{subscription.name}】", subscription.url])
+
+        rules: list[BrandReplyRule] = []
+        handled: set[str] = set()
+        changed = 0
+        for rule in config.brand_reply_rules:
+            brand_key = normalize_text(rule.keyword)
+            if rule.keyword_type == "品牌":
+                updated = replace(rule, reply_terms=replies_by_brand.get(brand_key, []))
+                changed += updated != rule
+                rule = updated
+                handled.add(brand_key)
+            rules.append(rule)
+        for brand_key, reply_terms in replies_by_brand.items():
+            if brand_key not in handled:
+                rules.append(BrandReplyRule(new_id(), "品牌", brand_names[brand_key], reply_terms))
+                changed += 1
+        if changed:
+            self.save_realtime_config(replace(config, brand_reply_rules=rules, brand_reply_rules_initialized=True))
+        return changed
 
     def save_uploaded_assets(self, files: list, title: str, categories: list[str], description: str = "") -> AssetItem:
         self.ensure_seed_data()
@@ -502,17 +568,33 @@ class TalkRagStore:
         }
 
 
+def sync_subscription_brand_replies(config: RagConfig, items: list[CorpusItem] | None = None) -> int:
+    subscriptions_path = config.index_dir / "tencent_doc_subscriptions.json"
+    if not subscriptions_path.exists():
+        return 0
+    subscriptions = load_subscriptions(subscriptions_path)
+    if items is None:
+        items = CorpusStore(config.index_dir / "corpus.jsonl").list_items()
+    return TalkRagStore(config.talk_data_dir).sync_subscription_brand_replies(
+        subscriptions, config.raw_data_dir, items,
+    )
+
+
 class TalkRagEngine:
     def __init__(self, store: TalkRagStore | None = None):
         self.store = store or TalkRagStore()
         self._realtime_config: RealtimeTalkConfig | None = None
+        self._realtime_config_signature: tuple[int, int] | None = None
         self._combined_config: CombinedTalkConfig | None = None
         self._fixed_entries: list[FixedTalkEntry] | None = None
         self._assets: list[AssetItem] | None = None
 
     def realtime_config(self) -> RealtimeTalkConfig:
-        if self._realtime_config is None:
+        path = self.store.realtime_path
+        signature = (path.stat().st_mtime_ns, path.stat().st_size) if path.exists() else None
+        if self._realtime_config is None or signature != self._realtime_config_signature:
             self._realtime_config = self.store.load_realtime_config()
+            self._realtime_config_signature = (path.stat().st_mtime_ns, path.stat().st_size) if path.exists() else None
         return self._realtime_config
 
     def combined_config(self) -> CombinedTalkConfig:

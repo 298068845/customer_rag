@@ -25,6 +25,7 @@ from customer_rag.llm import LocalLlm, strip_thinking
 from customer_rag.loaders import LoadedDocument, brand_tags_from_text, category_tags_from_text
 from customer_rag.loaders import list_supported_files, load_document_file, load_documents
 from customer_rag.splitter import split_documents
+from customer_rag.talk_rag import sync_subscription_brand_replies
 from customer_rag.tencent_docs import load_subscriptions, subscription_output_path
 from customer_rag.vector_store import RetrievedChunk, VectorStore
 
@@ -135,6 +136,7 @@ class RagPipeline:
         )
         emit(65, "正在写入语料库")
         self.corpus.replace_documents(documents)
+        synced_brand_replies = sync_subscription_brand_replies(self.config, self.corpus.list_items())
         index_error = None
         chunks = 0
         if rebuild_index:
@@ -156,6 +158,7 @@ class RagPipeline:
             "added_categories": added_categories,
             "parsed_files": parsed_files,
             "reused_files": reused_files,
+            "synced_brand_replies": synced_brand_replies,
         }
 
     def _load_raw_documents_incremental(
@@ -294,6 +297,7 @@ class RagPipeline:
                 "items": added,
                 "chunks": 0,
                 "index_error": None,
+                "synced_brand_replies": sync_subscription_brand_replies(self.config, self.corpus.list_items()),
             }
         stats["removed"] = removed
         stats["added_categories"] = added_categories
@@ -1156,6 +1160,7 @@ class RagPipeline:
         return self.corpus.deduplicate()
 
     def _rebuild_stats(self, documents: int, before: int) -> dict[str, int | str | None]:
+        synced_brand_replies = sync_subscription_brand_replies(self.config, self.corpus.list_items())
         index_error = None
         chunks = 0
         try:
@@ -1167,6 +1172,7 @@ class RagPipeline:
             "items": len(self.corpus.list_items()) - before,
             "chunks": chunks,
             "index_error": index_error,
+            "synced_brand_replies": synced_brand_replies,
         }
 
 

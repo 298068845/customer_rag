@@ -521,35 +521,7 @@ def render_realtime_talk() -> None:
             STORE.save_realtime_config(replace(config, brand_triggers=clean_terms(brand_triggers_text)))
             st.success("品牌清单触发词已保存。")
     with brand_right:
-        st.markdown("##### 回复内容规则")
-        st.caption("品牌清单已独立保存，不再随订阅解析结果自动变化；点击表格中的 Add row 可手动新增品牌。")
-        editor_rows_key = "brand_reply_rules_editor_rows"
-        if editor_rows_key not in st.session_state:
-            st.session_state[editor_rows_key] = brand_reply_rules_to_rows(config.brand_reply_rules)
-        with st.form("brand_reply_rules_form", clear_on_submit=False, border=False):
-            st.data_editor(
-                pd.DataFrame(st.session_state[editor_rows_key]),
-                hide_index=True,
-                use_container_width=True,
-                height=300,
-                num_rows="dynamic",
-                column_config={
-                    "品牌": st.column_config.TextColumn("品牌", required=True),
-                    "回复内容": st.column_config.TextColumn("回复内容"),
-                    "补充回复": st.column_config.TextColumn("补充回复"),
-                },
-                key="brand_reply_rules_editor",
-            )
-            st.caption("回复内容为空时视为没有该品牌，检索命中后会忽略；补充回复用 `---` 分隔发送。")
-            save_brand_replies = st.form_submit_button(
-                "保存回复内容规则",
-                type="primary",
-                use_container_width=True,
-                on_click=save_brand_reply_editor,
-            )
-        saved_notice = st.session_state.pop("brand_reply_rules_saved", False)
-        if save_brand_replies or saved_notice:
-            st.toast("回复内容规则已保存。", icon="✅")
+        render_brand_reply_editor()
 
     st.divider()
     st.subheader("三、开团日期")
@@ -592,6 +564,39 @@ def render_realtime_talk() -> None:
         STORE.save_realtime_config(replace(config, open_group_knowledge=open_group_knowledge.strip()))
         st.success("开团日期知识已保存。")
     st.caption("品牌清单与售卖状态以当前保存配置为准；品类和品牌提问关联仍使用商品类目解析关系。")
+
+
+@st.fragment(run_every="5s")
+def render_brand_reply_editor() -> None:
+    config = STORE.load_realtime_config()
+    st.markdown("##### 回复内容规则")
+    st.caption("品牌清单按订阅中的商品品牌关联清单标题和地址；未关联订阅的回复内容为空；补充回复可单独保存。")
+    editor_rows_key = "brand_reply_rules_editor_rows"
+    refresh_brand_reply_editor_rows(config.brand_reply_rules)
+    with st.form("brand_reply_rules_form", clear_on_submit=False, border=False):
+        st.data_editor(
+            pd.DataFrame(st.session_state[editor_rows_key]),
+            hide_index=True,
+            use_container_width=True,
+            height=300,
+            num_rows="dynamic",
+            column_config={
+                "品牌": st.column_config.TextColumn("品牌", required=True),
+                "回复内容": st.column_config.TextColumn("回复内容"),
+                "补充回复": st.column_config.TextColumn("补充回复"),
+            },
+            key="brand_reply_rules_editor",
+        )
+        st.caption("回复内容为空时视为没有该品牌，检索命中后会忽略；补充回复用 `---` 分隔发送。")
+        save_brand_replies = st.form_submit_button(
+            "保存回复内容规则",
+            type="primary",
+            use_container_width=True,
+            on_click=save_brand_reply_editor,
+        )
+    saved_notice = st.session_state.pop("brand_reply_rules_saved", False)
+    if save_brand_replies or saved_notice:
+        st.toast("回复内容规则已保存。", icon="✅")
 
 
 def render_fixed_talk() -> None:
@@ -1533,12 +1538,24 @@ def clear_asset_list_editor_cache(title: str) -> None:
 def clear_talk_config_editor_cache() -> None:
     st.session_state.pop("brand_reply_rules_editor_rows", None)
     st.session_state.pop("brand_reply_rules_editor", None)
+    st.session_state.pop("brand_reply_rules_persisted_rows", None)
     st.session_state.pop("sale_status_rules_editor", None)
     st.session_state.pop("combined_rules_rows", None)
     for title in FIXED_TALK_TITLES:
         st.session_state.pop(f"fixed_rules_rows_{title}", None)
         st.session_state.pop(f"asset_list_editor_rows_{title}", None)
         st.session_state.pop(f"asset_list_editor_ids_{title}", None)
+
+
+def refresh_brand_reply_editor_rows(rules: list[BrandReplyRule]) -> None:
+    saved_rows = brand_reply_rules_to_rows(rules)
+    if (
+        "brand_reply_rules_editor_rows" not in st.session_state
+        or st.session_state.get("brand_reply_rules_persisted_rows") != saved_rows
+    ):
+        st.session_state["brand_reply_rules_editor_rows"] = saved_rows
+        st.session_state["brand_reply_rules_persisted_rows"] = saved_rows
+        st.session_state.pop("brand_reply_rules_editor", None)
 
 
 def brand_reply_rules_to_rows(rules: list[BrandReplyRule]) -> list[dict[str, str]]:

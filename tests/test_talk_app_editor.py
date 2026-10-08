@@ -1,4 +1,10 @@
 import unittest
+from dataclasses import replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+from streamlit.testing.v1 import AppTest
 
 from talk_app import (
     CONFIG_TRANSFER_SCOPE_OPTIONS,
@@ -14,14 +20,54 @@ from talk_app import (
     normalize_selected_asset_titles,
     prefer_rows_with_reply_assets,
     referenced_asset_titles,
+    refresh_brand_reply_editor_rows,
     rows_to_fixed_reply_rules,
     validate_fixed_reply_asset_bindings,
     validate_persisted_fixed_reply_rules,
 )
-from customer_rag.talk_rag import COMBINED_TALK_TITLE, FIXED_TALK_TITLES, REALTIME_TALK_TITLE, AssetItem, FixedReplyRule, FixedTalkEntry
+from customer_rag.talk_rag import COMBINED_TALK_TITLE, FIXED_TALK_TITLES, REALTIME_TALK_TITLE, AssetItem, BrandReplyRule, FixedReplyRule, FixedTalkEntry, RealtimeTalkConfig, TalkRagStore
 
 
 class TalkAppEditorTests(unittest.TestCase):
+    def test_brand_editor_fragment_displays_latest_saved_rules(self) -> None:
+        with TemporaryDirectory() as temporary_dir:
+            store = TalkRagStore(Path(temporary_dir))
+            config = RealtimeTalkConfig(brand_reply_rules=[BrandReplyRule("brand", "品牌", "美的", ["旧回复"])])
+            store.save_realtime_config(config)
+            with patch("talk_app.STORE", store):
+                app = AppTest.from_string("from talk_app import render_brand_reply_editor\nrender_brand_reply_editor()")
+                app.run()
+                self.assertEqual(len(app.exception), 0)
+                self.assertEqual(app.dataframe[0].value.iloc[0]["回复内容"], "旧回复")
+                store.save_realtime_config(
+                    replace(config, brand_reply_rules=[replace(config.brand_reply_rules[0], reply_terms=["新订阅地址"])])
+                )
+                app.run()
+                self.assertEqual(len(app.exception), 0)
+                self.assertEqual(app.dataframe[0].value.iloc[0]["回复内容"], "新订阅地址")
+
+    def test_brand_editor_refreshes_after_background_sync(self) -> None:
+        rule = BrandReplyRule("brand", "品牌", "美的", ["旧回复"])
+        session_state = {}
+        with patch("talk_app.st.session_state", session_state):
+            refresh_brand_reply_editor_rows([rule])
+            session_state["brand_reply_rules_editor"] = {"edited_rows": {0: {"补充回复": "草稿"}}}
+            refresh_brand_reply_editor_rows([replace(rule, reply_terms=["新订阅地址"])])
+
+        self.assertEqual(session_state["brand_reply_rules_editor_rows"][0]["回复内容"], "新订阅地址")
+        self.assertNotIn("brand_reply_rules_editor", session_state)
+
+    def test_brand_editor_preserves_draft_when_saved_rules_are_unchanged(self) -> None:
+        rule = BrandReplyRule("brand", "品牌", "美的", ["回复"])
+        session_state = {}
+        draft = {"edited_rows": {0: {"补充回复": "草稿"}}}
+        with patch("talk_app.st.session_state", session_state):
+            refresh_brand_reply_editor_rows([rule])
+            session_state["brand_reply_rules_editor"] = draft
+            refresh_brand_reply_editor_rows([rule])
+
+        self.assertEqual(session_state["brand_reply_rules_editor"], draft)
+
     def test_config_transfer_scope_starts_with_combined_and_maps_it_separately(self) -> None:
         self.assertEqual(
             CONFIG_TRANSFER_SCOPE_OPTIONS,

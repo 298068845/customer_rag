@@ -15,6 +15,7 @@ from customer_rag.cookie_login import clear_saved_cookie, load_saved_cookie, rea
 from customer_rag.logging_config import configure_logging, log_event, log_exception
 from customer_rag.process_utils import process_is_alive, start_worker_process
 from customer_rag.task_coordinator import read_state as read_coordinator_state, release, try_acquire
+from customer_rag.talk_rag import sync_subscription_brand_replies
 from customer_rag.time_format import display_datetime, display_datetimes_in_text, now_display
 from customer_rag.tencent_docs import (
     TencentDocSubscription,
@@ -470,6 +471,7 @@ def _run_subscription_job(
         update_download_percent()
         updated_name_set = set(state.updated_names)
         state.updated_names = [subscription.name for subscription in subscriptions if subscription.name in updated_name_set]
+        synced_brand_replies = 0
         if downloaded_paths:
             if _stop_requested(config):
                 state.status = "stopped"
@@ -512,6 +514,7 @@ def _run_subscription_job(
             state.documents = int(stats.get("documents") or 0)
             state.items = int(stats.get("items") or 0)
             state.removed = int(stats.get("removed") or 0)
+            synced_brand_replies = int(stats.get("synced_brand_replies") or 0)
             state.percent = 70
             state.message = "语料解析完成，正在构建新索引"
             write_state()
@@ -538,9 +541,13 @@ def _run_subscription_job(
             state.percent = 100
             state.message = f"订阅更新完成：{len(state.updated_names)} 个"
         else:
+            synced_brand_replies = sync_subscription_brand_replies(config)
             state.message = "订阅检查完成，无需下载。"
             state.percent = 100
             state.processed_urls = []
+        if synced_brand_replies:
+            _add_log(state, f"已同步 {synced_brand_replies} 个品牌的订阅回复规则")
+            state.message += f"；已同步 {synced_brand_replies} 个品牌回复规则"
         if state.failed:
             state.message += f"；本次有 {state.failed} 个订阅更新失败，将在下次定时任务重试"
         state.status = "completed"
