@@ -30,6 +30,7 @@ from customer_rag.task_coordinator import (
     set_subscription_import_scope,
 )
 from customer_rag.tencent_docs import TencentDocSubscription, load_subscriptions, save_subscriptions
+from customer_rag.talk_rag import sync_subscription_brand_replies
 
 
 _server: ThreadingHTTPServer | None = None
@@ -155,6 +156,7 @@ class _TaskApiHandler(BaseHTTPRequestHandler):
                 for item in load_subscriptions(path)
             ]
             save_subscriptions(path, subscriptions)
+            sync_subscription_brand_replies(config)
             self._send_json({"ok": True, "updated": len(subscriptions)})
             return
         if parsed.path == "/subscriptions/set-delete-selected":
@@ -208,6 +210,7 @@ class _TaskApiHandler(BaseHTTPRequestHandler):
                 updated.append(item)
         if changed:
             save_subscriptions(path, updated)
+            sync_subscription_brand_replies(config)
         return {"ok": changed}
 
     def _update_subscription_delete_selection(self, config, url: str, selected: bool) -> dict:
@@ -260,6 +263,7 @@ class _TaskApiHandler(BaseHTTPRequestHandler):
                 updated.append(item)
         if changed:
             save_subscriptions(path, updated)
+            sync_subscription_brand_replies(config)
         return {"ok": changed}
 
     def _send_json(self, payload: dict, status: int = 200) -> None:

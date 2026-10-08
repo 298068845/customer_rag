@@ -2469,7 +2469,7 @@ with tab_corpus:
                 warn_cols[0].warning("确认删除已选语料？")
                 if warn_cols[1].button("确认删除", type="secondary", use_container_width=True):
                     removed = pipeline.delete_corpus_many(selected_ids)
-                    queue_ui_notice("success", f"已删除 {removed} 条语料。请重建向量索引后用于问答。")
+                    queue_ui_notice("success", f"已删除 {removed} 条语料并清理旧查询缓存，向量索引已失效，可重建索引。")
                     for item_id in selected_ids:
                         st.session_state.pop(f"corpus_selected_{item_id}", None)
                     st.session_state["confirm_delete_selected"] = False
@@ -2732,7 +2732,7 @@ with tab_prompt:
 
 with tab_categories:
     st.subheader("商品类目")
-    st.caption("维护商品类目、同义词和在售品牌。解析数据时会按品类自动汇总品牌，用于实时话术识别品牌/品类。")
+    st.caption("在售品牌按当前启用订阅的商品重新统计；标准类目和同义词独立保留。")
     current_brand_map = category_brands()
 
     category_rows = st.data_editor(
@@ -2759,7 +2759,7 @@ with tab_categories:
             "品牌示例": st.column_config.TextColumn(
                 "品牌示例",
                 disabled=True,
-                help="只显示少量品牌，避免长文本拖慢页面。完整品牌请在下方选择类目编辑。",
+                help="完整在售品牌可在下方查看。",
             ),
         },
         key="category_alias_editor",
@@ -2768,27 +2768,23 @@ with tab_categories:
     edited_rows = category_rows.fillna("").to_dict("records") if isinstance(category_rows, pd.DataFrame) else []
     editable_categories = [str(row.get("标准类目", "") or "").strip() for row in edited_rows if str(row.get("标准类目", "") or "").strip()]
     brand_edit_category = st.selectbox(
-        "编辑某个类目的完整在售品牌",
+        "查看某个类目的完整在售品牌",
         editable_categories,
         index=0 if editable_categories else None,
         placeholder="选择类目",
         key="category_brand_edit_category",
     )
-    brand_edit_text = ""
     if brand_edit_category:
-        brand_edit_text = st.text_area(
+        st.text_area(
             "该类目在售品牌",
             value="、".join(current_brand_map.get(brand_edit_category, [])),
             height=96,
-            help="用顿号、逗号、分号或换行分隔。主表不会直接渲染这段长文本。",
-            key=f"category_brand_detail_{brand_edit_category}",
+            disabled=True,
         )
 
     action_col, hint_col = st.columns([0.18, 0.82], gap="medium")
     if action_col.button("保存类目", type="primary", use_container_width=True):
         aliases, brands, category_errors = category_alias_rows_to_config(edited_rows, current_brand_map)
-        if brand_edit_category:
-            brands[brand_edit_category] = parse_tags(brand_edit_text)
         if category_errors:
             for error in category_errors:
                 st.warning(error)
@@ -2796,4 +2792,4 @@ with tab_categories:
             save_category_catalog(aliases, brands)
             get_pipeline.clear()
             queue_ui_notice("success", "商品类目已保存，下一次提问会使用新的类目和同义词。")
-    hint_col.caption("新增类目：直接在表格底部新增一行；删除类目：清空该行标准类目或用表格自带删除行操作。在售品牌只在下方按单个类目编辑。")
+    hint_col.caption("在售品牌随订阅同步更新。")

@@ -21,6 +21,7 @@ from talk_app import (
     prefer_rows_with_reply_assets,
     referenced_asset_titles,
     refresh_brand_reply_editor_rows,
+    rows_to_brand_reply_rules,
     rows_to_fixed_reply_rules,
     validate_fixed_reply_asset_bindings,
     validate_persisted_fixed_reply_rules,
@@ -29,6 +30,16 @@ from customer_rag.talk_rag import COMBINED_TALK_TITLE, FIXED_TALK_TITLES, REALTI
 
 
 class TalkAppEditorTests(unittest.TestCase):
+    def test_brand_editor_preserves_subscription_categories(self) -> None:
+        import pandas as pd
+
+        categories = {"https://docs.qq.com/sheet/water": ["净水器"]}
+        rule = BrandReplyRule("brand", "品牌", "美的", ["清单"], subscription_categories=categories)
+        rows = pd.DataFrame([{"品牌": "美的", "回复内容": "清单", "补充回复": "新补充"}])
+        saved = rows_to_brand_reply_rules(rows, [rule])
+        self.assertEqual(saved[0].subscription_categories, categories)
+        self.assertEqual(saved[0].supplemental_reply, "新补充")
+
     def test_brand_editor_fragment_displays_latest_saved_rules(self) -> None:
         with TemporaryDirectory() as temporary_dir:
             store = TalkRagStore(Path(temporary_dir))

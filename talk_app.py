@@ -1578,6 +1578,7 @@ def brand_reply_rules_to_rows(rules: list[BrandReplyRule]) -> list[dict[str, str
 def rows_to_brand_reply_rules(rows: pd.DataFrame, existing_rules: list[BrandReplyRule]) -> list[BrandReplyRule]:
     records = dataframe_records(rows)
     ids_by_brand = {rule.keyword: rule.id for rule in existing_rules if rule.keyword_type == "品牌" and rule.keyword}
+    categories_by_brand = {rule.keyword: rule.subscription_categories for rule in existing_rules if rule.keyword_type == "品牌"}
     values: list[BrandReplyRule] = []
     seen: set[str] = set()
     for row in records:
@@ -1595,6 +1596,7 @@ def rows_to_brand_reply_rules(rows: pd.DataFrame, existing_rules: list[BrandRepl
                 keyword=brand,
                 reply_terms=replies,
                 supplemental_reply=supplemental_reply,
+                subscription_categories=categories_by_brand.get(brand),
             )
         )
     return values

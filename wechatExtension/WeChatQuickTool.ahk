@@ -48,6 +48,7 @@ global PREVIEW_SHOW_TABS := false
 global PREVIEW_SHORTCUTS := 0
 global PREVIEW_SHOW_SHORTCUTS := false
 global PREVIEW_FALLBACK_MODE := false
+global PREVIEW_QUERY_TIMEOUT := false
 global PREVIEW_MODE_ALL := 0
 global PREVIEW_MODE_SPLIT := 0
 global PREVIEW_BRAND_SELECT := 0
@@ -464,7 +465,8 @@ CheckRagQueryDone() {
 
 WriteRagFallbackResult() {
     FileDeleteSafe(SEND_TEXT_PATH)
-    FileAppend "__RAG_FUZZY_FALLBACK__`n没有做这款呢，看看其他", SEND_TEXT_PATH, "UTF-8"
+    FileDeleteSafe(RAG_BRANDS_PATH)
+    FileAppend "__RAG_QUERY_TIMEOUT__`n查询超时，请稍后重试", SEND_TEXT_PATH, "UTF-8"
 }
 
 ShowRagResultPreview() {
@@ -540,7 +542,7 @@ ShowSendPreview(text, mouseX := "", mouseY := "", mode := "query") {
     global PREVIEW_EDIT, PREVIEW_LIST, PREVIEW_STATUS, PREVIEW_MODE_ALL, PREVIEW_MODE_SPLIT
     global PREVIEW_CLOSE_BUTTON, PREVIEW_TABS, PREVIEW_TAB_TEXTS, PREVIEW_ACTIVE_TAB, PREVIEW_SHOW_TABS
     global PREVIEW_SHORTCUTS, PREVIEW_SHOW_SHORTCUTS
-    global PREVIEW_FALLBACK_MODE, PREVIEW_BRAND_SELECT, PREVIEW_RETURN_COUNT_SELECT
+    global PREVIEW_FALLBACK_MODE, PREVIEW_QUERY_TIMEOUT, PREVIEW_BRAND_SELECT, PREVIEW_RETURN_COUNT_SELECT
     global PREVIEW_BRANDS, PREVIEW_SELECTED_BRAND, PREVIEW_FORCE_SPLIT
     global RAG_SELECTED_BRAND
 
@@ -556,9 +558,9 @@ ShowSendPreview(text, mouseX := "", mouseY := "", mode := "query") {
     PREVIEW_FORCE_SPLIT := InStr(mode, "query") = 1
     PREVIEW_FORCE_SPLIT := PREVIEW_FORCE_SPLIT || PREVIEW_SHOW_SHORTCUTS
     PREVIEW_TAB_TEXTS := PREVIEW_SHOW_TABS ? BuildCustomTabTexts() : (PREVIEW_SHOW_SHORTCUTS ? BuildTalkShortcutTexts(text) : [text])
-    PREVIEW_ACTIVE_TAB := 1
-    PREVIEW_BRANDS := PREVIEW_SHOW_TABS ? [] : ReadQueryBrands()
-    PREVIEW_SELECTED_BRAND := RAG_SELECTED_BRAND
+    PREVIEW_ACTIVE_TAB := PREVIEW_SHOW_SHORTCUTS ? FirstMatchingTalkShortcut(PREVIEW_TAB_TEXTS) : 1
+    PREVIEW_BRANDS := (PREVIEW_SHOW_TABS || PREVIEW_QUERY_TIMEOUT) ? [] : ReadQueryBrands()
+    PREVIEW_SELECTED_BRAND := PREVIEW_QUERY_TIMEOUT ? "" : RAG_SELECTED_BRAND
     DebugPreviewTest("show_after_target")
 
     PREVIEW_GUI := Gui("+AlwaysOnTop -Caption -Border +ToolWindow", T("window_title"))
@@ -579,7 +581,7 @@ ShowSendPreview(text, mouseX := "", mouseY := "", mode := "query") {
     if !PREVIEW_SHOW_TABS && !PREVIEW_SHOW_SHORTCUTS {
         PREVIEW_GUI.SetFont("s9 c7A5A43", "Microsoft YaHei")
         PREVIEW_GUI.AddText("xm y+10 w34 h26 0x200 BackgroundFBF3E8", T("brand_filter"))
-        PREVIEW_BRAND_SELECT := PREVIEW_GUI.AddDropDownList("x+8 yp w142", BuildBrandOptions(PREVIEW_BRANDS))
+        PREVIEW_BRAND_SELECT := PREVIEW_GUI.AddDropDownList("x+8 yp w142", BuildBrandOptions(PREVIEW_BRANDS, PREVIEW_QUERY_TIMEOUT))
         PREVIEW_BRAND_SELECT.Choose(BrandOptionIndex(PREVIEW_BRANDS, PREVIEW_SELECTED_BRAND))
         PREVIEW_BRAND_SELECT.OnEvent("Change", PreviewBrandChanged)
         PREVIEW_RETURN_COUNT_SELECT := PREVIEW_GUI.AddDropDownList("x+4 yp w180", BuildReturnCountOptions())
@@ -810,7 +812,7 @@ RefreshModePills() {
 
 UpdatePreviewText() {
     global PREVIEW_LIST, PREVIEW_PARTS, PREVIEW_INDEX, PREVIEW_TAB_DEFAULT_CHECKED
-    global PREVIEW_FALLBACK_MODE, PREVIEW_SHOW_SHORTCUTS
+    global PREVIEW_FALLBACK_MODE, PREVIEW_QUERY_TIMEOUT, PREVIEW_SHOW_SHORTCUTS
 
     if !IsObject(PREVIEW_LIST) {
         return
@@ -834,7 +836,7 @@ UpdatePreviewText() {
         }
         PREVIEW_LIST.Add(options, MakeListPreview(part), part)
     }
-    if (!PREVIEW_SHOW_SHORTCUTS && PREVIEW_TAB_DEFAULT_CHECKED && checkedCount = 0) {
+    if (!PREVIEW_QUERY_TIMEOUT && !PREVIEW_SHOW_SHORTCUTS && PREVIEW_TAB_DEFAULT_CHECKED && checkedCount = 0) {
         PREVIEW_LIST.Insert(1, "Check", MakeListPreview(fallbackText), fallbackText)
     }
     PREVIEW_LIST.ModifyCol(1, CalculatePreviewColumnWidth())
@@ -1056,7 +1058,7 @@ ClosePreview(*) {
     global PREVIEW_PARTS, PREVIEW_INDEX, PREVIEW_EDIT, PREVIEW_STATUS, PREVIEW_MODE_ALL, PREVIEW_MODE_SPLIT
     global PREVIEW_LIST, PREVIEW_CLOSE_BUTTON, PREVIEW_TABS, PREVIEW_TAB_TEXTS, PREVIEW_ACTIVE_TAB, PREVIEW_SHOW_TABS
     global PREVIEW_SHORTCUTS, PREVIEW_SHOW_SHORTCUTS
-    global PREVIEW_FALLBACK_MODE, SEND_IN_PROGRESS, PREVIEW_BRAND_SELECT, PREVIEW_RETURN_COUNT_SELECT
+    global PREVIEW_FALLBACK_MODE, PREVIEW_QUERY_TIMEOUT, SEND_IN_PROGRESS, PREVIEW_BRAND_SELECT, PREVIEW_RETURN_COUNT_SELECT
     global PREVIEW_BRANDS, PREVIEW_SELECTED_BRAND, PREVIEW_FORCE_SPLIT
 
     if SEND_IN_PROGRESS {
@@ -1083,6 +1085,7 @@ ClosePreview(*) {
     PREVIEW_SHORTCUTS := 0
     PREVIEW_SHOW_SHORTCUTS := false
     PREVIEW_FALLBACK_MODE := false
+    PREVIEW_QUERY_TIMEOUT := false
     PREVIEW_BRAND_SELECT := 0
     PREVIEW_RETURN_COUNT_SELECT := 0
     PREVIEW_BRANDS := []
@@ -2796,6 +2799,18 @@ BuildTalkShortcutTexts(realtimeText) {
     return ["", realtimeText, "", "", "", "", "", ""]
 }
 
+FirstMatchingTalkShortcut(texts) {
+    for index, text in texts {
+        for part in SplitSendText(text) {
+            cleaned := Trim(StripBom(part), "`r`n `t")
+            if (cleaned != "" && !IsSeparatorLine(cleaned) && cleaned != "没有做这个的，看看别的渠道") {
+                return index
+            }
+        }
+    }
+    return 1
+}
+
 BuildTalkShortcutLabels() {
     global RAG_TALK_SHORTCUT_LABELS_PATH
 
@@ -2839,7 +2854,10 @@ ReadQueryBrands() {
     return brands
 }
 
-BuildBrandOptions(brands) {
+BuildBrandOptions(brands, queryTimedOut := false) {
+    if queryTimedOut {
+        return ["查询超时"]
+    }
     options := [BrandSummaryText(brands)]
     for brand in brands {
         options.Push(brand)
@@ -2890,26 +2908,32 @@ ReadReturnCountValue(value) {
 }
 
 PreparePreviewSourceText(text) {
-    global PREVIEW_FALLBACK_MODE
+    global PREVIEW_FALLBACK_MODE, PREVIEW_QUERY_TIMEOUT
 
     PREVIEW_FALLBACK_MODE := false
+    PREVIEW_QUERY_TIMEOUT := false
     text := StripBom(text)
     normalized := StrReplace(text, "`r`n", "`n")
     normalized := StrReplace(normalized, "`r", "`n")
     output := ""
-    markerFound := false
     for line in StrSplit(normalized, "`n") {
         trimmed := Trim(line)
-        if (!markerFound && trimmed = "__RAG_FUZZY_FALLBACK__") {
+        if (trimmed = "__RAG_QUERY_TIMEOUT__") {
+            PREVIEW_QUERY_TIMEOUT := true
+            continue
+        }
+        if (trimmed = "__RAG_FUZZY_FALLBACK__") {
             PREVIEW_FALLBACK_MODE := true
-            markerFound := true
             continue
         }
         output .= (output = "" ? "" : "`n") line
     }
 
     output := Trim(output, "`r`n `t")
-    if PREVIEW_FALLBACK_MODE {
+    if PREVIEW_QUERY_TIMEOUT {
+        ; A timeout can include partial candidates, but must never imply no stock.
+        PREVIEW_FALLBACK_MODE := false
+    } else if PREVIEW_FALLBACK_MODE {
         fallbackText := FallbackManualReply()
         if !InStr(output, fallbackText) {
             output .= (output = "" ? "" : "`n---`n") fallbackText

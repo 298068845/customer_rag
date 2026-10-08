@@ -2,6 +2,9 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
+from customer_rag.category_config import category_catalog, save_category_catalog
 from customer_rag.config import RagConfig
 from customer_rag.corpus import CorpusItem, CorpusStore
 from customer_rag.loaders import LoadedDocument
@@ -15,6 +18,7 @@ from customer_rag.talk_rag import (
     TalkRagEngine,
     TalkRagStore,
     render_brand_reply,
+    render_keyword_reply,
     sync_subscription_brand_replies,
 )
 from customer_rag.tencent_docs import TencentDocSubscription, save_subscriptions, subscription_output_path
@@ -23,6 +27,11 @@ from customer_rag.tencent_docs import TencentDocSubscription, save_subscriptions
 MIDEA = "\u7f8e\u7684"
 TOSHIBA = "\u4e1c\u829d"
 BRAND = "\u54c1\u724c"
+
+
+@pytest.fixture(autouse=True)
+def isolate_category_catalog(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
 
 
 def make_config(root: Path) -> RagConfig:
@@ -304,3 +313,148 @@ def test_full_parse_synchronizes_brand_replies(tmp_path: Path) -> None:
 
     assert stats["synced_brand_replies"] == 2
     assert subscription.url in store.load_realtime_config().brand_reply_rules[0].reply_terms
+
+
+def test_category_reply_filters_each_subscription_for_the_same_brand(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    store = seed_store(config)
+    water = TencentDocSubscription("Water", "https://docs.qq.com/sheet/water")
+    lights = TencentDocSubscription("Lights", "https://docs.qq.com/sheet/lights")
+    items = [
+        replace(item_for(water, config, MIDEA), text=product_text(MIDEA).replace("Sample", "净水-厨下")),
+        replace(item_for(lights, config, MIDEA), text=product_text(MIDEA).replace("Sample", "照明")),
+    ]
+    store.sync_subscription_brand_replies([water, lights], config.raw_data_dir, items)
+    saved = store.load_realtime_config()
+
+    with patch("customer_rag.talk_rag.category_aliases", return_value={"净水器": ["净水-厨下"]}):
+        for question in ("~搜净水器", f"{MIDEA}净水器"):
+            answer = render_keyword_reply(question, saved, include_index=False)
+            assert water.url in answer
+            assert lights.url not in answer
+            assert "keep this supplement" in answer
+    brand_answer = render_keyword_reply(MIDEA, saved, include_index=False)
+    assert water.url in brand_answer and lights.url in brand_answer
+
+
+def test_old_category_brand_mapping_cannot_return_unrelated_active_subscription(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    store = seed_store(config)
+    active = TencentDocSubscription("Lights", "https://docs.qq.com/sheet/lights")
+    old = TencentDocSubscription("Old water", "https://docs.qq.com/sheet/old")
+    items = [
+        replace(item_for(active, config, MIDEA), text=product_text(MIDEA).replace("Sample", "照明")),
+        replace(item_for(old, config, MIDEA), text=product_text(MIDEA).replace("Sample", "净水器")),
+    ]
+    store.sync_subscription_brand_replies([active], config.raw_data_dir, items)
+
+    with patch("customer_rag.talk_rag.category_aliases", return_value={"净水器": []}), patch(
+        "customer_rag.talk_rag.category_brands", return_value={"净水器": [MIDEA]},
+    ):
+        saved = store.load_realtime_config()
+        assert render_keyword_reply("净水器", saved, include_index=False) == ""
+        assert TalkRagEngine(store).ask("~搜净水器").score == 0
+
+
+def test_subscription_category_is_specific_to_product_brand(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    store = seed_store(config)
+    subscription = TencentDocSubscription("Mixed", "https://docs.qq.com/sheet/mixed")
+    items = [
+        replace(item_for(subscription, config, MIDEA), text=product_text(MIDEA).replace("Sample", "照明")),
+        replace(item_for(subscription, config, TOSHIBA), text=product_text(TOSHIBA).replace("Sample", "净水器")),
+    ]
+    store.sync_subscription_brand_replies([subscription], config.raw_data_dir, items)
+    saved = store.load_realtime_config()
+    assert render_keyword_reply(f"{MIDEA}净水器", saved, include_index=False) == ""
+    assert subscription.url in render_keyword_reply(f"{TOSHIBA}净水器", saved, include_index=False)
+
+
+def test_generic_water_alias_does_not_match_other_product_sets(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    store = seed_store(config)
+    subscription = TencentDocSubscription("Knife sets", "https://docs.qq.com/sheet/knives")
+    item = replace(item_for(subscription, config, MIDEA), text=product_text(MIDEA).replace("Sample", "刀具套装"))
+    store.sync_subscription_brand_replies([subscription], config.raw_data_dir, [item])
+    with patch("customer_rag.talk_rag.category_aliases", return_value={"净水": ["套装"]}):
+        assert render_keyword_reply("净水器", store.load_realtime_config(), include_index=False) == ""
+
+
+def test_category_change_refreshes_metadata_even_when_brand_url_stays_the_same(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    store = seed_store(config)
+    subscription = TencentDocSubscription("Mixed", "https://docs.qq.com/sheet/mixed")
+    item = replace(item_for(subscription, config, MIDEA), text=product_text(MIDEA).replace("Sample", "净水器"))
+    store.sync_subscription_brand_replies([subscription], config.raw_data_dir, [item])
+    engine = TalkRagEngine(store)
+    assert subscription.url in render_keyword_reply("净水器", engine.realtime_config(), include_index=False)
+    assert store.sync_subscription_brand_replies(
+        [subscription], config.raw_data_dir, [replace(item, text=item.text.replace("净水器", "照明"))],
+    ) == 1
+    assert render_keyword_reply("净水器", engine.realtime_config(), include_index=False) == ""
+
+
+def test_category_from_current_subscription_does_not_need_static_catalog(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    store = seed_store(config)
+    subscription = TencentDocSubscription("New", "https://docs.qq.com/sheet/new")
+    store.sync_subscription_brand_replies([subscription], config.raw_data_dir, [item_for(subscription, config, MIDEA)])
+    with patch("customer_rag.talk_rag.category_aliases", return_value={}), patch(
+        "customer_rag.talk_rag.category_brands", return_value={},
+    ), patch("customer_rag.talk_rag._indexed_category_brands", return_value={}):
+        assert subscription.url in render_keyword_reply("Sample", store.load_realtime_config(), include_index=False)
+
+
+def test_subscription_sync_replaces_brands_and_keeps_category_definitions(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    seed_store(config)
+    active = TencentDocSubscription("Active", "https://docs.qq.com/sheet/active")
+    disabled = TencentDocSubscription("Disabled", "https://docs.qq.com/sheet/disabled", enabled=False)
+    save_subscriptions(config.index_dir / "tencent_doc_subscriptions.json", [active, disabled])
+    save_category_catalog({"Sample": ["Example"], "Old": ["Previous"]}, {"Sample": ["OldBrand"], "Old": [TOSHIBA]})
+    definitions = category_catalog()[0]
+    items = [item_for(active, config, MIDEA), item_for(disabled, config, TOSHIBA)]
+    sync_subscription_brand_replies(config, items)
+    aliases, brands = category_catalog()
+    assert aliases == definitions
+    assert brands["Sample"] == [MIDEA]
+    assert brands["Old"] == []
+
+    save_subscriptions(config.index_dir / "tencent_doc_subscriptions.json", [])
+    sync_subscription_brand_replies(config, items)
+    assert category_catalog()[0] == definitions
+    assert all(not values for values in category_catalog()[1].values())
+
+
+def test_disabling_subscription_immediately_clears_its_brand_statistics(tmp_path: Path) -> None:
+    from customer_rag.local_task_api import _TaskApiHandler
+
+    config = make_config(tmp_path)
+    seed_store(config)
+    subscription = TencentDocSubscription("Active", "https://docs.qq.com/sheet/active")
+    save_subscriptions(config.index_dir / "tencent_doc_subscriptions.json", [subscription])
+    save_category_catalog({"Sample": []}, {})
+    CorpusStore(config.index_dir / "corpus.jsonl").replace_all([item_for(subscription, config, MIDEA)])
+    sync_subscription_brand_replies(config)
+    assert category_catalog()[1]["Sample"] == [MIDEA]
+
+    handler = object.__new__(_TaskApiHandler)
+    assert handler._update_subscription_enabled(config, subscription.url, False)["ok"]
+    assert category_catalog()[1]["Sample"] == []
+    assert TalkRagStore(config.talk_data_dir).load_realtime_config().brand_reply_rules[0].reply_terms == []
+
+
+def test_deleting_subscription_source_recounts_remaining_brands(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    seed_store(config)
+    first = TencentDocSubscription("First", "https://docs.qq.com/sheet/first")
+    second = TencentDocSubscription("Second", "https://docs.qq.com/sheet/second")
+    save_subscriptions(config.index_dir / "tencent_doc_subscriptions.json", [first, second])
+    save_category_catalog({"Sample": []}, {})
+    CorpusStore(config.index_dir / "corpus.jsonl").replace_all([
+        item_for(first, config, MIDEA), item_for(second, config, TOSHIBA),
+    ])
+    sync_subscription_brand_replies(config)
+    save_subscriptions(config.index_dir / "tencent_doc_subscriptions.json", [second])
+    RagPipeline(config).delete_sources({subscription_output_path(first, config.raw_data_dir)}, rebuild_index=False)
+    assert category_catalog()[1]["Sample"] == [TOSHIBA]

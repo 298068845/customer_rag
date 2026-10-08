@@ -7,7 +7,7 @@ import os
 import re
 import sys
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from customer_rag.category_config import category_aliases
 from customer_rag.category_config import category_brands
+from customer_rag.config import RagConfig, resolve_config_path
 from customer_rag.logging_config import configure_logging, log_event, log_exception, logs_dir
 from customer_rag.prompt_defaults import DEFAULT_SYSTEM_PROMPT
 from customer_rag.talk_rag import TalkRagEngine, TalkRagStore
@@ -31,8 +32,9 @@ DEFAULT_PROMPT_SUFFIX = """
 """
 
 FALLBACK_CONTROL_MARKER = "__RAG_FUZZY_FALLBACK__"
-QUERY_CACHE_VERSION = 11
-QUERY_CACHE_TTL_SECONDS = 0
+TIMEOUT_CONTROL_MARKER = "__RAG_QUERY_TIMEOUT__"
+QUERY_CACHE_VERSION = 13
+QUERY_CACHE_TTL_SECONDS = 300
 
 
 def main() -> int:
@@ -129,12 +131,16 @@ def main() -> int:
         config = load_config()
         if args.top_k in {5, 10}:
             config = replace(config, top_k=args.top_k)
+        query_context.update({
+            "config_path": str(resolve_config_path().resolve()),
+            "index_dir": str(config.index_dir.resolve()),
+        })
         system_prompt = load_system_prompt(config.index_dir / "prompt_settings.json")
         selected_brand = args.brand.strip()
-        effective_question = question if not selected_brand else f"{question}\nbrand:{selected_brand}"
+        effective_question = question if not selected_brand else f"{question}\n指定品牌：{selected_brand}"
         parsed_tags = parse_tags(args.tags)
-        cache_key = query_cache_key(
-            project_root,
+        cache_args = dict(
+            config=config,
             question=question,
             effective_question=effective_question,
             selected_brand=selected_brand,
@@ -143,7 +149,10 @@ def main() -> int:
             system_prompt=system_prompt,
             brands_seed=read_text_or_empty(args.brands_file) if selected_brand and args.brands_file else "",
         )
-        cached = read_query_cache(project_root, cache_key)
+        cache_key = query_cache_key(project_root, **cache_args)
+        cached = read_query_cache(config.index_dir, cache_key)
+        if cached is not None and cache_key != query_cache_key(project_root, **cache_args):
+            cached = None
         if cached is not None:
             args.output_file.parent.mkdir(parents=True, exist_ok=True)
             args.output_file.write_text(str(cached.get("answer", "")), encoding="utf-8")
@@ -156,31 +165,43 @@ def main() -> int:
                 "query completed from cache",
                 project_root=project_root,
                 query_id=query_id,
-                context={**query_context, "cache": "hit", "duration_seconds": round(time.monotonic() - started_monotonic, 3), "answer_length": len(str(cached.get("answer", "")))},
+                context={
+                    **query_context, "cache": "hit",
+                    "duration_seconds": round(time.monotonic() - started_monotonic, 3),
+                    "answer_length": len(cached["answer"]), "sources": cached["sources"],
+                    "fallback": False, "timed_out": False,
+                },
             )
             write_log(log_file, f"OK\ncache=hit\nquestion={question}\nbrand={selected_brand}\noutput={args.output_file}\n")
             return 0
 
         pipeline = RagPipeline(config)
-        system_prompt = load_system_prompt(project_root / "data" / "index" / "prompt_settings.json")
-        selected_brand = args.brand.strip()
-        effective_question = question if not selected_brand else f"{question}\n指定品牌：{selected_brand}"
         result = pipeline.ask(
             effective_question,
             system_prompt=system_prompt + DEFAULT_PROMPT_SUFFIX,
             tags=parsed_tags,
         )
         answer = format_wechat_answer(result.answer)
+        if result.timed_out and not result.sources:
+            answer = "查询超时，请稍后重试"
         if result.fallback:
             answer = FALLBACK_CONTROL_MARKER + "\n" + answer
+        if result.timed_out:
+            answer = TIMEOUT_CONTROL_MARKER + "\n" + answer
 
         args.output_file.parent.mkdir(parents=True, exist_ok=True)
         args.output_file.write_text(answer, encoding="utf-8")
         brands_text = ""
         if args.brands_file:
-            write_query_brands(args.brands_file, result.sources, selected_brand, answer=answer)
+            write_query_brands(args.brands_file, [] if result.timed_out else result.sources, selected_brand, answer=answer)
             brands_text = read_text_or_empty(args.brands_file)
-        write_query_cache(project_root, cache_key, answer=answer, brands=brands_text)
+        # A subscription can finish while this process is searching. Do not
+        # publish an answer under the snapshot taken before that update.
+        if cache_key == query_cache_key(project_root, **cache_args):
+            write_query_cache(
+                config.index_dir, cache_key, answer=answer, brands=brands_text,
+                sources=result.sources, fallback=result.fallback, timed_out=result.timed_out,
+            )
         log_event(
             "query",
             "query_completed",
@@ -194,6 +215,7 @@ def main() -> int:
                 "answer_length": len(answer),
                 "sources": len(result.sources),
                 "fallback": bool(result.fallback),
+                "timed_out": bool(result.timed_out),
             },
         )
         write_log(log_file, f"OK\ncache=miss\nquestion={question}\nbrand={selected_brand}\noutput={args.output_file}\n")
@@ -246,6 +268,7 @@ def parse_tags(value: str) -> list[str]:
 def query_cache_key(
     project_root: Path,
     *,
+    config: RagConfig,
     question: str,
     effective_question: str,
     selected_brand: str,
@@ -263,42 +286,69 @@ def query_cache_key(
         "top_k": top_k,
         "system_prompt_sha1": _sha1_text(system_prompt + DEFAULT_PROMPT_SUFFIX),
         "brands_seed_sha1": _sha1_text(brands_seed),
-        "config": file_signature(project_root / "config.yaml"),
-        "corpus": file_signature(project_root / "data" / "index" / "corpus.jsonl"),
-        "prompt": file_signature(project_root / "data" / "index" / "prompt_settings.json"),
+        "config_path": str(resolve_config_path().resolve()),
+        "config": file_signature(resolve_config_path()),
+        "settings": asdict(config),
+        "index_dir": str(config.index_dir.resolve()),
+        "corpus": file_signature(config.index_dir / "corpus.jsonl"),
+        "subscriptions": file_signature(config.index_dir / "tencent_doc_subscriptions.json"),
+        "vector_manifest": file_signature(config.index_dir / "vector_index_manifest.json"),
+        "legacy_vector_index": file_signature(config.index_dir / "faiss.index"),
+        "legacy_vector_chunks": file_signature(config.index_dir / "chunks.jsonl"),
+        "prompt": file_signature(config.index_dir / "prompt_settings.json"),
         "category_aliases": file_signature(project_root / "category_aliases.yaml"),
     }
-    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
-def read_query_cache(project_root: Path, key: str) -> dict | None:
-    path = query_cache_path(project_root, key)
+def read_query_cache(index_dir: Path, key: str) -> dict | None:
+    path = query_cache_path(index_dir, key)
     if not path.exists():
         return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return None
     if not isinstance(payload, dict) or payload.get("version") != QUERY_CACHE_VERSION:
         return None
-    created_at = float(payload.get("created_at") or 0)
+    if not isinstance(payload.get("answer"), str) or not payload["answer"].strip():
+        return None
+    if payload.get("timed_out") or payload.get("fallback"):
+        return None
+    if TIMEOUT_CONTROL_MARKER in payload["answer"] or FALLBACK_CONTROL_MARKER in payload["answer"]:
+        return None
+    try:
+        created_at = float(payload.get("created_at") or 0)
+        if int(payload.get("sources") or 0) <= 0:
+            return None
+    except (TypeError, ValueError):
+        return None
     if QUERY_CACHE_TTL_SECONDS > 0 and time.time() - created_at > QUERY_CACHE_TTL_SECONDS:
         return None
     return payload
 
 
-def write_query_cache(project_root: Path, key: str, *, answer: str, brands: str) -> None:
-    cache_dir = query_cache_dir(project_root)
+def write_query_cache(
+    index_dir: Path, key: str, *, answer: str, brands: str, sources: list,
+    fallback: bool = False, timed_out: bool = False,
+) -> None:
+    if not answer.strip() or not sources or fallback or timed_out:
+        return
+    cache_dir = query_cache_dir(index_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     cleanup_query_cache(cache_dir)
-    path = query_cache_path(project_root, key)
+    path = query_cache_path(index_dir, key)
     tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     payload = {
         "version": QUERY_CACHE_VERSION,
         "created_at": time.time(),
         "answer": answer,
         "brands": brands,
+        "sources": len(sources),
+        "source_paths": sorted({str(Path(source.source).resolve()) for source in sources}),
+        "fallback": False,
+        "timed_out": False,
     }
     try:
         tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -324,12 +374,12 @@ def cleanup_query_cache(cache_dir: Path) -> None:
             pass
 
 
-def query_cache_dir(project_root: Path) -> Path:
-    return project_root / "data" / "index" / "query_cache"
+def query_cache_dir(index_dir: Path) -> Path:
+    return index_dir / "query_cache"
 
 
-def query_cache_path(project_root: Path, key: str) -> Path:
-    return query_cache_dir(project_root) / f"{key}.json"
+def query_cache_path(index_dir: Path, key: str) -> Path:
+    return query_cache_dir(index_dir) / f"{key}.json"
 
 
 def file_signature(path: Path) -> tuple[int, int] | None:
@@ -380,6 +430,10 @@ def write_filter_rows(path: Path, pipeline: RagPipeline) -> None:
 
 
 def write_query_brands(path: Path, sources: list, selected_brand: str = "", *, answer: str = "") -> None:
+    if not sources:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+        return
     brands: list[str] = []
     if selected_brand and path.exists():
         try:

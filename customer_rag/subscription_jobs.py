@@ -14,6 +14,7 @@ from customer_rag.config import RagConfig
 from customer_rag.cookie_login import clear_saved_cookie, load_saved_cookie, read_login_state, start_cookie_login
 from customer_rag.logging_config import configure_logging, log_event, log_exception
 from customer_rag.process_utils import process_is_alive, start_worker_process
+from customer_rag.query_cache_invalidation import invalidate_query_cache
 from customer_rag.task_coordinator import read_state as read_coordinator_state, release, try_acquire
 from customer_rag.talk_rag import sync_subscription_brand_replies
 from customer_rag.time_format import display_datetime, display_datetimes_in_text, now_display
@@ -511,6 +512,16 @@ def _run_subscription_job(
                     for path in downloaded_paths
                 ]
                 stats = pipeline.replace_files_with_tags(path_tags, rebuild_index=False)
+            cleared_queries = invalidate_query_cache(
+                config.index_dir, None if import_scope == "full" else downloaded_paths,
+            )
+            _add_log(state, f"已清除 {cleared_queries} 条更新文档的查询缓存")
+            log_event(
+                "subscription", "subscription_query_cache_invalidated", "subscription query cache invalidated",
+                job_id=job_id,
+                context={"removed": cleared_queries, "scope": import_scope,
+                         "updated_files": [str(path.resolve()) for path in downloaded_paths]},
+            )
             state.documents = int(stats.get("documents") or 0)
             state.items = int(stats.get("items") or 0)
             state.removed = int(stats.get("removed") or 0)

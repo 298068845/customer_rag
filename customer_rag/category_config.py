@@ -203,6 +203,49 @@ def add_category_terms(
     return added
 
 
+def replace_category_brands(
+    category_brand_map: dict[str, list[str]],
+    path: str | Path = "category_aliases.yaml",
+) -> int:
+    aliases, previous = category_catalog(path)
+    brands: dict[str, list[str]] = {category: [] for category in aliases}
+    for term, values in category_brand_map.items():
+        category = category_for_term(term, aliases)
+        if category is None:
+            continue
+        current = brands[category]
+        keys = {value.lower() for value in current}
+        for brand in values:
+            brand = _normalize_brand_term(brand)
+            if brand and brand.lower() not in keys:
+                current.append(brand)
+                keys.add(brand.lower())
+    changed = sum(brands[category] != previous.get(category, []) for category in aliases)
+    if changed:
+        save_category_catalog(aliases, brands, path)
+    return changed
+
+
+def category_for_term(term: str, aliases: dict[str, list[str]]) -> str | None:
+    category_by_lower = {category.lower(): category for category in aliases}
+    alias_to_category = {
+        alias.lower(): category for category, values in aliases.items() for alias in values
+    }
+    key = term.strip().lower()
+    direct = category_by_lower.get(key) or alias_to_category.get(key)
+    if direct:
+        return direct
+    normalized, _ = _normalize_category_term(term, aliases)
+    normalized_key = normalized.lower()
+    direct = category_by_lower.get(normalized_key) or alias_to_category.get(normalized_key)
+    if direct:
+        return direct
+    for category, values in aliases.items():
+        if key in {value.lower() for value in semantic_category_terms(category, values)}:
+            return category
+    return None
+
+
 def clear_category_cache() -> None:
     global _CACHE_PATH, _CACHE_MTIME, _CACHE_ALIASES, _CACHE_BRANDS
     _CACHE_PATH = None

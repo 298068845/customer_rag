@@ -10,6 +10,7 @@ from pathlib import Path
 
 from customer_rag.attributes import extract_attributes
 from customer_rag.loaders import LoadedDocument
+from customer_rag.query_cache_invalidation import invalidate_corpus_caches
 
 
 CORPUS_CACHE_VERSION = 1
@@ -207,6 +208,7 @@ class CorpusStore:
             for item in items:
                 fp.write(json.dumps(asdict(item), ensure_ascii=False) + "\n")
         os.replace(tmp_path, self.path)
+        invalidate_corpus_caches(self.path, empty=not items)
 
     def _cache_path(self) -> Path:
         return self.path.with_name(f"{self.path.stem}.parsed.pkl")

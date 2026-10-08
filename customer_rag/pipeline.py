@@ -17,6 +17,7 @@ from customer_rag.attributes import NumericCondition, attributes_match, attribut
 from customer_rag.category_config import add_category_terms
 from customer_rag.category_config import category_aliases
 from customer_rag.category_config import category_brands
+from customer_rag.category_config import category_for_term
 from customer_rag.category_config import _compound_aliases as _compound_category_aliases
 from customer_rag.category_config import category_terms as configured_category_terms
 from customer_rag.corpus import CorpusItem, CorpusStore
@@ -25,7 +26,7 @@ from customer_rag.llm import LocalLlm, strip_thinking
 from customer_rag.loaders import LoadedDocument, brand_tags_from_text, category_tags_from_text
 from customer_rag.loaders import list_supported_files, load_document_file, load_documents
 from customer_rag.splitter import split_documents
-from customer_rag.talk_rag import sync_subscription_brand_replies
+from customer_rag.talk_rag import extract_categories_from_question, sync_subscription_brand_replies
 from customer_rag.tencent_docs import load_subscriptions, subscription_output_path
 from customer_rag.vector_store import RetrievedChunk, VectorStore
 
@@ -36,7 +37,7 @@ STRONG_MATCH_NEARBY_SCORE_DELTA = 10.0
 CONFIDENT_FUZZY_MODEL_CODE_SCORE = 92.0
 RAW_PARSE_CACHE_VERSION = "v1"
 MODEL_CODE_REMOVE_TRANS = str.maketrans("", "", " \t\r\n._-")
-QUICK_SEARCH_CACHE_VERSION = 1
+QUICK_SEARCH_CACHE_VERSION = 2
 NO_MATCH_ANSWER = "\u6ca1\u6709\u505a\u8fd9\u6b3e\u5462\uff0c\u770b\u770b\u5176\u4ed6"
 FOOTREST_WITH_TERMS = ("\u6709\u811a\u8e0f", "\u5e26\u811a\u8e0f", "\u811a\u8e0f\u6b3e", "\u811a\u8e0f\u7248")
 FOOTREST_WITH_QUERY_TERMS = FOOTREST_WITH_TERMS + ("\u811a\u8e0f",)
@@ -59,6 +60,7 @@ class RagResult:
     sources: list[RetrievedChunk]
     warning: str | None = None
     fallback: bool = False
+    timed_out: bool = False
 
 
 class RagPipeline:
@@ -69,6 +71,9 @@ class RagPipeline:
         self.llm = LocalLlm(config.llm_model_path, config.llm)
         self._corpus_cache_mtime: float | None = None
         self._corpus_cache: list[CorpusItem] | None = None
+        self._subscription_signature: tuple[int, int] | None = None
+        self._active_subscription_sources: set[str] | None = None
+        self._source_scope_cache: dict[str, bool] = {}
         self._tag_index_cache: dict[str, list[CorpusItem]] = {}
         self._tag_lookup_cache: dict[str, str] = {}
         self._model_code_index_cache: dict[str, list[CorpusItem]] = {}
@@ -333,7 +338,7 @@ class RagPipeline:
                 tags=item.tags,
                 attributes=item.attributes,
             )
-            for item in self.corpus.list_items()
+            for item in self._corpus_items()
         ]
         emit(25, "正在切分文档片段")
         chunks = split_documents(
@@ -362,11 +367,11 @@ class RagPipeline:
         product_query = is_product_query(question)
         timeout_seconds = self._search_timeout_seconds(question, precise_lookup=precise_lookup, product_query=product_query)
         deadline = started_at + timeout_seconds
-        auto_tags = [] if selected_tags or precise_lookup or product_query else self._auto_search_tags(question)
+        auto_tags = [] if selected_tags or precise_lookup or product_query else self._auto_search_tags(question, deadline=deadline)
         brand_search_tags = (
             []
-            if selected_tags or auto_tags or not (precise_lookup or product_query)
-            else self._brand_search_tags(question)
+            if selected_tags or auto_tags
+            else self._brand_search_tags(question, deadline=deadline)
         )
         search_tags = selected_tags or auto_tags or brand_search_tags
         tag_match = "all" if selected_tags else "any"
@@ -385,12 +390,18 @@ class RagPipeline:
                 keyword_top_k,
                 tags=search_tags,
                 tag_match=tag_match,
+                deadline=deadline,
             )
             if precise_lookup
             else []
         )
         if precise_lookup and not model_code_sources and _is_standalone_model_code_lookup(question):
-            return RagResult(answer=_format_fuzzy_sources([]), sources=[], fallback=True)
+            return RagResult(
+                answer=_format_fuzzy_sources([]),
+                sources=[],
+                fallback=True,
+                timed_out=not _has_time_left(deadline),
+            )
         if (
             precise_lookup
             and model_code_sources
@@ -505,6 +516,9 @@ class RagPipeline:
                 return self._fuzzy_fallback_result(question, keyword_sources, system_prompt, search_tags, None, deadline)
 
         precise_product_lookup = precise_lookup or product_query or strong_keyword_match
+        if broad_category_query and not keyword_sources:
+            # An exhausted category scan must not fall back to unrelated semantic products.
+            return RagResult(answer=NO_MATCH_ANSWER, sources=[], fallback=True)
         if precise_product_lookup and keyword_sources:
             sources = keyword_sources[: self.config.top_k]
         else:
@@ -512,7 +526,7 @@ class RagPipeline:
                 search_k = self.config.top_k * 8 if search_tags else self.config.top_k * 4
                 vector_results = _run_with_timeout(
                     lambda: self.store.search(question, search_k),
-                    max(0.2, timeout_seconds - (time.monotonic() - started_at)),
+                    max(0.0, deadline - time.monotonic()),
                 )
                 if vector_results is None:
                     return self._fuzzy_fallback_result(
@@ -522,12 +536,15 @@ class RagPipeline:
                         selected_tags,
                         None,
                         deadline,
+                        timed_out=True,
                     )
-                vector_sources = _filter_by_tags(vector_results, search_tags, match=tag_match)
+                vector_sources = _filter_by_tags(
+                    _filter_product_categories(question, self._current_sources(vector_results)), search_tags, match=tag_match,
+                )
                 if auto_tags and not vector_sources and not keyword_sources:
                     fallback_vector_results = _run_with_timeout(
                         lambda: self.store.search(question, self.config.top_k * 4),
-                        max(0.2, timeout_seconds - (time.monotonic() - started_at)),
+                        max(0.0, deadline - time.monotonic()),
                     )
                     if fallback_vector_results is None:
                         return self._fuzzy_fallback_result(
@@ -537,8 +554,11 @@ class RagPipeline:
                             selected_tags,
                             None,
                             deadline,
+                            timed_out=True,
                         )
-                    vector_sources = _merge_sources(vector_sources, fallback_vector_results)
+                    vector_sources = _merge_sources(
+                        vector_sources, _filter_product_categories(question, self._current_sources(fallback_vector_results)),
+                    )
                 sources = _merge_sources(keyword_sources[: self.config.top_k], vector_sources)[: self.config.top_k]
             except (FileNotFoundError, RuntimeError) as exc:
                 warning = f"向量索引暂不可用，已切换为关键词检索：{exc}"
@@ -640,7 +660,7 @@ class RagPipeline:
                     )
                 llm_answer = _run_text_with_timeout(
                     lambda: self.llm.answer(question, sources, system_prompt=system_prompt),
-                    max(0.2, timeout_seconds - (time.monotonic() - started_at)),
+                    max(0.0, deadline - time.monotonic()),
                 )
                 if llm_answer is None:
                     return self._fuzzy_fallback_result(
@@ -650,6 +670,7 @@ class RagPipeline:
                         search_tags,
                         None,
                         deadline,
+                        timed_out=True,
                     )
                 answer = llm_answer
         return RagResult(answer=strip_thinking(answer), sources=sources, warning=warning)
@@ -671,6 +692,8 @@ class RagPipeline:
         selected_tags: list[str],
         message: str | None,
         deadline: float | None = None,
+        *,
+        timed_out: bool = False,
     ) -> RagResult:
         sources = candidates[: self.config.top_k]
         if not sources and _has_time_left(deadline):
@@ -700,7 +723,13 @@ class RagPipeline:
                     answer = NO_MATCH_ANSWER
                 else:
                     answer = _format_fuzzy_sources(sources)
-        return RagResult(answer=answer, sources=sources, warning=message, fallback=True)
+        return RagResult(
+            answer=answer,
+            sources=sources,
+            warning=message,
+            fallback=True,
+            timed_out=timed_out or not _has_time_left(deadline),
+        )
 
     def model_code_search(
         self,
@@ -710,7 +739,10 @@ class RagPipeline:
         *,
         tag_match: str = "all",
         allow_fuzzy: bool = True,
+        deadline: float | None = None,
     ) -> list[RetrievedChunk]:
+        if not _has_time_left(deadline):
+            return []
         query_codes = _model_code_queries(question)
         if not query_codes:
             return []
@@ -720,11 +752,17 @@ class RagPipeline:
 
         scored: dict[str, RetrievedChunk] = {}
         for query_code in query_codes:
+            if not _has_time_left(deadline):
+                break
             for code, items in _model_code_candidates(self._model_code_index_cache, query_code, allow_fuzzy=allow_fuzzy):
+                if not _has_time_left(deadline):
+                    break
                 match_score = _model_code_match_score(query_code, code)
                 if match_score <= 0:
                     continue
-                for item in items:
+                for index, item in enumerate(items):
+                    if index % 64 == 0 and not _has_time_left(deadline):
+                        break
                     if selected_tags and not _tags_match(item.tags, selected_tag_set, tag_match):
                         continue
                     current = scored.get(item.id)
@@ -813,7 +851,7 @@ class RagPipeline:
                 )
             )
         results.sort(key=lambda source: source.score, reverse=True)
-        return results[:top_k]
+        return _filter_product_categories(question, results)[:top_k]
 
     def keyword_search(
         self,
@@ -877,7 +915,7 @@ class RagPipeline:
                 )
             )
         results.sort(key=lambda source: source.score, reverse=True)
-        sliced = results[:top_k]
+        sliced = _filter_product_categories(question, results)[:top_k]
         if _has_time_left(deadline):
             self._keyword_cache[cache_key] = list(sliced)
         return sliced
@@ -951,11 +989,42 @@ class RagPipeline:
         results.sort(key=lambda source: source.score, reverse=True)
         return results[:top_k]
 
+    def _refresh_subscription_scope(self) -> None:
+        path = self.config.index_dir / "tencent_doc_subscriptions.json"
+        signature = _corpus_file_signature(path) if path.exists() else None
+        if signature == self._subscription_signature:
+            return
+        self._active_subscription_sources = {
+            _normalize_path_value(subscription_output_path(subscription, self.config.raw_data_dir).resolve())
+            for subscription in load_subscriptions(path)
+            if subscription.enabled and subscription.url.strip()
+        } if signature is not None else None
+        self._subscription_signature = signature
+        self._source_scope_cache.clear()
+        self._corpus_cache = None
+        self._keyword_cache.clear()
+
+    def _source_is_current(self, source: str) -> bool:
+        if self._active_subscription_sources is None:
+            return True
+        if source not in self._source_scope_cache:
+            key = _normalize_path_value(Path(source).resolve())
+            # Manual uploads remain searchable; historical subscription copies do not.
+            self._source_scope_cache[source] = (
+                "tencent_docs" not in key.split("/") or key in self._active_subscription_sources
+            )
+        return self._source_scope_cache[source]
+
+    def _current_sources(self, sources: list[RetrievedChunk]) -> list[RetrievedChunk]:
+        self._refresh_subscription_scope()
+        return [source for source in sources if self._source_is_current(source.source)]
+
     def _corpus_items(self) -> list[CorpusItem]:
+        self._refresh_subscription_scope()
         path = self.corpus.path
         mtime = path.stat().st_mtime if path.exists() else None
         if self._corpus_cache is None or self._corpus_cache_mtime != mtime:
-            self._corpus_cache = self.corpus.list_items()
+            self._corpus_cache = [item for item in self.corpus.list_items() if self._source_is_current(item.source)]
             self._corpus_cache_mtime = mtime
             signature = _corpus_file_signature(path) if path.exists() else None
             quick_cache = self._load_quick_search_cache(signature)
@@ -1001,6 +1070,11 @@ class RagPipeline:
             return None
         if payload.get("version") != QUICK_SEARCH_CACHE_VERSION or tuple(payload.get("signature", ())) != signature:
             return None
+        if (
+            payload.get("subscriptions") != self._subscription_signature
+            or payload.get("raw_data_dir") != str(self.config.raw_data_dir.resolve())
+        ):
+            return None
         tag_index = payload.get("tag_index")
         tag_lookup = payload.get("tag_lookup")
         model_code_index = payload.get("model_code_index")
@@ -1018,6 +1092,8 @@ class RagPipeline:
         payload = {
             "version": QUICK_SEARCH_CACHE_VERSION,
             "signature": signature,
+            "subscriptions": self._subscription_signature,
+            "raw_data_dir": str(self.config.raw_data_dir.resolve()),
             "tag_index": self._tag_index_cache,
             "tag_lookup": self._tag_lookup_cache,
             "model_code_index": self._model_code_index_cache,
@@ -1057,11 +1133,15 @@ class RagPipeline:
         candidates = self._tag_index_cache.get(canonical, [])
         return [item for item in candidates if _tags_match(item.tags, selected_set, "all")]
 
-    def _auto_search_tags(self, question: str) -> list[str]:
+    def _auto_search_tags(self, question: str, *, deadline: float | None = None) -> list[str]:
+        if not _has_time_left(deadline):
+            return []
         terms = _category_tag_candidates(question)
         if not terms:
             return []
         self._corpus_items()
+        if not _has_time_left(deadline):
+            return []
         matched_tags: list[str] = []
         for term in terms:
             tag = self._tag_lookup_cache.get(term.lower())
@@ -1069,11 +1149,15 @@ class RagPipeline:
                 matched_tags.append(tag)
         return matched_tags
 
-    def _brand_search_tags(self, question: str) -> list[str]:
+    def _brand_search_tags(self, question: str, *, deadline: float | None = None) -> list[str]:
+        if not _has_time_left(deadline):
+            return []
         brand_terms = _known_brand_terms(question)
         if not brand_terms:
             return []
         self._corpus_items()
+        if not _has_time_left(deadline):
+            return []
         matched_tags: list[str] = []
         for brand in brand_terms:
             tag = self._tag_lookup_cache.get(brand.lower())
@@ -1110,10 +1194,16 @@ class RagPipeline:
         return self.corpus.update(item_id=item_id, title=title, text=text, location=location, tags=tags)
 
     def delete_corpus(self, item_id: str) -> bool:
-        return self.corpus.delete(item_id)
+        deleted = self.corpus.delete(item_id)
+        if deleted:
+            sync_subscription_brand_replies(self.config, self.corpus.list_items())
+        return deleted
 
     def delete_corpus_many(self, item_ids: set[str]) -> int:
-        return self.corpus.delete_many(item_ids)
+        deleted = self.corpus.delete_many(item_ids)
+        if deleted:
+            sync_subscription_brand_replies(self.config, self.corpus.list_items())
+        return deleted
 
     def delete_sources(
         self,
@@ -1124,6 +1214,7 @@ class RagPipeline:
         source_values = {str(source) for source in sources if str(source).strip()}
         removed = self.corpus.delete_by_sources(source_values)
         self._remove_raw_parse_manifest_sources(source_values)
+        sync_subscription_brand_replies(self.config, self.corpus.list_items())
         chunks = 0
         index_error = None
         if rebuild_index and removed:
@@ -1174,6 +1265,19 @@ class RagPipeline:
             "index_error": index_error,
             "synced_brand_replies": synced_brand_replies,
         }
+
+
+def _filter_product_categories(question: str, sources: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    aliases = category_aliases()
+    requested = set(extract_categories_from_question(question, aliases))
+    if not requested:
+        return sources
+    result = []
+    for source in sources:
+        categories = category_tags_from_text(source.text)
+        if not categories or any(category_for_term(category, aliases) in requested for category in categories):
+            result.append(source)
+    return result
 
 
 def _query_terms(question: str) -> list[str]:
@@ -1413,6 +1517,8 @@ def _run_text_with_timeout(callable_fn: Callable[[], str], timeout_seconds: floa
 
 
 def _run_daemon_with_timeout(callable_fn: Callable[[], object], timeout_seconds: float):
+    if timeout_seconds <= 0:
+        return None
     result_queue: queue.Queue[tuple[bool, object]] = queue.Queue(maxsize=1)
 
     def target() -> None:
@@ -1424,7 +1530,7 @@ def _run_daemon_with_timeout(callable_fn: Callable[[], object], timeout_seconds:
     thread = threading.Thread(target=target, daemon=True)
     thread.start()
     try:
-        ok, value = result_queue.get(timeout=max(0.1, timeout_seconds))
+        ok, value = result_queue.get(timeout=timeout_seconds)
     except queue.Empty:
         return None
     if ok:

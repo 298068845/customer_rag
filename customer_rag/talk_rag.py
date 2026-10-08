@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from customer_rag.category_config import category_aliases, category_brands, semantic_category_terms
+from customer_rag.category_config import category_aliases, category_brands, category_for_term, replace_category_brands, semantic_category_terms
 from customer_rag.category_config import _normalize_brand_term as _normalize_catalog_brand
 from customer_rag.config import RagConfig
 from customer_rag.corpus import CorpusItem, CorpusStore
@@ -134,6 +134,7 @@ class BrandReplyRule:
     keyword: str
     reply_terms: list[str]
     supplemental_reply: str = ""
+    subscription_categories: dict[str, list[str]] | None = None
 
 
 @dataclass(frozen=True)
@@ -291,22 +292,39 @@ class TalkRagStore:
             for alias in rule.aliases
         }
         brands_by_source: dict[str, dict[str, str]] = {}
+        categories_by_source: dict[str, dict[str, set[str]]] = {}
+        active_sources = {
+            str(subscription_output_path(subscription, raw_data_dir).resolve()).casefold()
+            for subscription in active_subscriptions
+        }
+        source_keys: dict[str, str] = {}
         for item in items:
-            # Product rows carry categories or product information; sheet notices can also occupy the brand column.
-            if not category_tags_from_text(item.text) and not re.search(r"(?:^|[；;\n])\s*产品信息\s*[:：]", item.text):
+            if item.source not in source_keys:
+                source_keys[item.source] = str(Path(item.source).resolve()).casefold()
+            source_key = source_keys[item.source]
+            if source_key not in active_sources:
                 continue
-            source_key = str(Path(item.source).resolve()).casefold()
+            categories = category_tags_from_text(item.text)
+            # Product rows carry categories or product information; sheet notices can also occupy the brand column.
+            if not categories and not re.search(r"(?:^|[；;\n])\s*产品信息\s*[:：]", item.text):
+                continue
             for brand in brand_tags_from_text(item.text):
                 brand = _normalize_catalog_brand(normalize_brand(aliases.get(normalize_text(brand), brand), config))
                 brands_by_source.setdefault(source_key, {})[normalize_text(brand)] = brand
+                categories_by_source.setdefault(source_key, {}).setdefault(normalize_text(brand), set()).update(categories)
 
         replies_by_brand: dict[str, list[str]] = {}
         brand_names: dict[str, str] = {}
         urls_by_brand: dict[str, set[str]] = {}
+        subscription_categories: dict[str, dict[str, list[str]]] = {}
         for subscription in active_subscriptions:
             source_key = str(subscription_output_path(subscription, raw_data_dir).resolve()).casefold()
             for brand_key, brand in brands_by_source.get(source_key, {}).items():
                 brand_names.setdefault(brand_key, brand)
+                catalog = subscription_categories.setdefault(brand_key, {})
+                catalog[subscription.url] = sorted(
+                    set(catalog.get(subscription.url, [])) | categories_by_source[source_key][brand_key]
+                )
                 seen_urls = urls_by_brand.setdefault(brand_key, set())
                 if subscription.url in seen_urls:
                     continue
@@ -322,14 +340,21 @@ class TalkRagStore:
         for rule in config.brand_reply_rules:
             brand_key = normalize_text(rule.keyword)
             if rule.keyword_type == "品牌":
-                updated = replace(rule, reply_terms=replies_by_brand.get(brand_key, []))
+                updated = replace(
+                    rule,
+                    reply_terms=replies_by_brand.get(brand_key, []),
+                    subscription_categories=subscription_categories.get(brand_key, {}),
+                )
                 changed += updated != rule
                 rule = updated
                 handled.add(brand_key)
             rules.append(rule)
         for brand_key, reply_terms in replies_by_brand.items():
             if brand_key not in handled:
-                rules.append(BrandReplyRule(new_id(), "品牌", brand_names[brand_key], reply_terms))
+                rules.append(BrandReplyRule(
+                    new_id(), "品牌", brand_names[brand_key], reply_terms,
+                    subscription_categories=subscription_categories[brand_key],
+                ))
                 changed += 1
         if changed:
             self.save_realtime_config(replace(config, brand_reply_rules=rules, brand_reply_rules_initialized=True))
@@ -575,9 +600,19 @@ def sync_subscription_brand_replies(config: RagConfig, items: list[CorpusItem] |
     subscriptions = load_subscriptions(subscriptions_path)
     if items is None:
         items = CorpusStore(config.index_dir / "corpus.jsonl").list_items()
-    return TalkRagStore(config.talk_data_dir).sync_subscription_brand_replies(
+    store = TalkRagStore(config.talk_data_dir)
+    changed = store.sync_subscription_brand_replies(
         subscriptions, config.raw_data_dir, items,
     )
+    brands_by_category: dict[str, list[str]] = {}
+    for rule in store.load_realtime_config().brand_reply_rules:
+        if rule.keyword_type != "品牌":
+            continue
+        for categories in (rule.subscription_categories or {}).values():
+            for category in categories:
+                brands_by_category.setdefault(category, []).append(rule.keyword)
+    replace_category_brands(brands_by_category)
+    return changed
 
 
 class TalkRagEngine:
@@ -789,6 +824,11 @@ def realtime_config_from_payload(payload: dict) -> RealtimeTalkConfig:
                 keyword=str(item.get("keyword", "")).strip(),
                 reply_terms=clean_terms(item.get("reply_terms", [])),
                 supplemental_reply=str(item.get("supplemental_reply", "") or "").strip(),
+                subscription_categories={
+                    str(url): clean_terms(categories)
+                    for url, categories in item["subscription_categories"].items()
+                    if isinstance(categories, list)
+                } if isinstance(item.get("subscription_categories"), dict) else None,
             )
             for item in payload.get("brand_reply_rules", [])
             if isinstance(item, dict)
@@ -1132,30 +1172,58 @@ def trigger_matches_question(trigger: str, question: str, variable_name: str) ->
 
 def render_keyword_reply(question: str, config: RealtimeTalkConfig, *, include_index: bool | None = None) -> str:
     should_include_index = _should_scan_index_for_question(question) if include_index is None else include_index
+    aliases, brands_by_category = _talk_category_catalog(include_index=should_include_index)
+    for rule in config.brand_reply_rules:
+        for tags in (rule.subscription_categories or {}).values():
+            for tag in tags:
+                if category_for_term(tag, aliases) is None:
+                    aliases.setdefault(tag, [])
+    categories = extract_categories_from_question(question, aliases)
     brand = extract_brand_from_question(question, config, include_index=should_include_index)
     if brand:
-        return render_brand_reply(brand, config)
+        return render_brand_reply(brand, config, categories=categories, category_catalog=aliases)
 
-    aliases, brands_by_category = _talk_category_catalog(include_index=should_include_index)
-    categories = extract_categories_from_question(question, aliases)
     if categories:
         brands = unique_terms(
             brand
             for category in categories
             for brand in brands_by_category.get(category, [])
         )
-        replies = [render_brand_reply(brand, config) for brand in brands]
+        brands = unique_terms([*brands, *[
+            rule.keyword for rule in config.brand_reply_rules if rule.subscription_categories
+        ]])
+        replies = [render_brand_reply(brand, config, categories=categories, category_catalog=aliases) for brand in brands]
         return deduplicate_reply_parts(replies)
     return ""
 
 
-def render_brand_reply(brand: str, config: RealtimeTalkConfig) -> str:
+def render_brand_reply(
+    brand: str,
+    config: RealtimeTalkConfig,
+    *,
+    categories: list[str] | None = None,
+    category_catalog: dict[str, list[str]] | None = None,
+) -> str:
     normalized_brand = normalize_brand(brand, config)
     normalized_key = normalize_text(normalized_brand)
     for rule in config.brand_reply_rules:
         if rule.keyword_type != "品牌" or normalize_text(rule.keyword) != normalized_key:
             continue
         reply = "\n".join(clean_terms(rule.reply_terms))
+        if categories and rule.subscription_categories is not None:
+            # A brand can sell unrelated products in different subscription documents.
+            catalog = category_catalog if category_catalog is not None else _talk_category_catalog()[0]
+            allowed_urls = {
+                url for url, tags in rule.subscription_categories.items()
+                if any(
+                    category_for_term(tag, catalog) in categories
+                    for tag in tags
+                )
+            }
+            reply = "\n---\n".join(
+                part.strip() for part in re.split(r"\n\s*-{3,}\s*\n", reply)
+                if set(_URL_PATTERN.findall(part)).intersection(allowed_urls)
+            )
         if not reply:
             return ""
         supplemental_reply = rule.supplemental_reply.strip()
