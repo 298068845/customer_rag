@@ -7,8 +7,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from customer_rag.config import load_config
+from customer_rag.corpus import CorpusStore
 from customer_rag.auto_update import ensure_auto_update_scheduler
 from customer_rag.logging_config import configure_logging, log_exception
+from customer_rag.pipeline import RagPipeline
 from customer_rag.cookie_login import (
     capture_cookie,
     cookie_window_is_open,
@@ -36,6 +38,9 @@ from customer_rag.talk_rag import sync_subscription_brand_replies
 _server: ThreadingHTTPServer | None = None
 _server_port: int | None = None
 _lock = threading.Lock()
+_qa_pipeline: RagPipeline | None = None
+_qa_pipeline_config = None
+_qa_pipeline_lock = threading.Lock()
 
 
 def ensure_local_task_api(port: int = 8512) -> str:
@@ -185,6 +190,16 @@ class _TaskApiHandler(BaseHTTPRequestHandler):
             payload["saved"] = has_saved_cookie(config)
             self._send_json(payload)
             return
+        if parsed.path == "/qa/ask":
+            question = query.get("question", [""])[0].strip()
+            if not question:
+                self._send_json({"error": "请输入问题"}, status=400)
+                return
+            self._send_json(_qa_payload(config, question, query.get("tag", [])))
+            return
+        if parsed.path == "/corpus/search":
+            self._send_json(_corpus_search_payload(config, query))
+            return
         self._send_json({"error": "not found"}, status=404)
 
     def _update_subscription_enabled(self, config, url: str, enabled: bool) -> dict:
@@ -276,6 +291,88 @@ class _TaskApiHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+
+def _get_qa_pipeline(config) -> RagPipeline:
+    """Reuse the web-query pipeline while allowing configuration changes."""
+    global _qa_pipeline, _qa_pipeline_config
+    with _qa_pipeline_lock:
+        if _qa_pipeline is None or _qa_pipeline_config != config:
+            _qa_pipeline = RagPipeline(config)
+            _qa_pipeline_config = config
+        return _qa_pipeline
+
+
+def _qa_payload(config, question: str, tags: list[str]) -> dict:
+    result = _get_qa_pipeline(config).ask(question, tags=[tag for tag in tags if tag])
+    return {
+        "answer": result.answer,
+        "warning": "检索超时，已返回当前最相关的结果。" if result.timed_out else "",
+        "fallback": result.fallback,
+        "timed_out": result.timed_out,
+        "sources": [
+            {
+                "title": source.title,
+                "source": source.source,
+                "location": source.location,
+                "score": source.score,
+                "text": source.text,
+                "tags": source.tags,
+            }
+            for source in result.sources
+        ],
+    }
+
+
+def _corpus_search_payload(config, query: dict[str, list[str]]) -> dict:
+    keyword = query.get("keyword", [""])[0].strip().lower()
+    selected_sources = {value for value in query.get("source", []) if value}
+    selected_tags = {value for value in query.get("tag", []) if value}
+    image_filter = query.get("image", ["全部"])[0]
+    sort_mode = query.get("sort", ["更新时间倒序"])[0]
+    try:
+        limit = max(1, min(int(query.get("limit", ["50"])[0]), 200))
+    except ValueError:
+        limit = 50
+
+    items = CorpusStore(config.index_dir / "corpus.jsonl").list_items()
+    matched = []
+    for item in items:
+        searchable = "\n".join([item.title, item.source, item.location, item.text, " ".join(item.tags)]).lower()
+        if keyword and keyword not in searchable:
+            continue
+        if selected_sources and item.source not in selected_sources:
+            continue
+        if selected_tags and not selected_tags.intersection(item.tags):
+            continue
+        if image_filter == "有图片" and not item.image_paths:
+            continue
+        if image_filter == "无图片" and item.image_paths:
+            continue
+        matched.append(item)
+
+    if sort_mode == "创建时间倒序":
+        matched.sort(key=lambda item: item.created_at, reverse=True)
+    elif sort_mode == "标题 A-Z":
+        matched.sort(key=lambda item: item.title.casefold())
+    else:
+        matched.sort(key=lambda item: item.updated_at, reverse=True)
+
+    return {
+        "total": len(items),
+        "matched": len(matched),
+        "rows": [
+            {
+                "title": item.title,
+                "source": item.source,
+                "tags": item.tags,
+                "summary": item.text.replace("\n", " ")[:280],
+                "image_count": len(item.image_paths),
+                "updated_at": item.updated_at,
+            }
+            for item in matched[:limit]
+        ],
+    }
 
 
 def _parse_tags(value: str) -> list[str]:

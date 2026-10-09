@@ -2,7 +2,33 @@ from __future__ import annotations
 
 import yaml
 
-from customer_rag.category_config import add_category_terms, category_catalog, replace_category_brands, save_category_catalog
+from customer_rag.category_config import add_category_terms, category_catalog, category_terms, replace_category_brands, save_category_catalog
+
+
+def test_parent_bucket_does_not_expand_specific_query_to_sibling_products(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_category_catalog({
+        "微波炉": ["厨房电器", "厨房电器-微波炉", "烤箱", "厨房电器-烤箱"],
+        "小家电": ["咖啡机", "小家电-咖啡机", "空气炸锅", "小家电-空气炸锅"],
+    })
+    microwave = category_terms("微波炉")
+    assert "微波炉" in microwave
+    assert "烤箱" not in microwave and "厨房电器" not in microwave
+    shaver = category_terms("剃须刀")
+    assert "剃须刀" in shaver
+    assert "咖啡机" not in shaver and "小家电" not in shaver
+    coffee = category_terms("咖啡机")
+    assert "咖啡机" in coffee
+    assert "空气炸锅" not in coffee
+
+
+def test_import_does_not_assign_sibling_to_shared_parent_alias(tmp_path):
+    path = tmp_path / "category_aliases.yaml"
+    save_category_catalog({"微波炉": ["厨房电器"], "小家电": []}, {}, path)
+    add_category_terms(["厨房电器-烤箱", "小家电-咖啡机"], path)
+    aliases, _ = category_catalog(path)
+    assert "烤箱" in aliases and "咖啡机" in aliases
+    assert "厨房电器-烤箱" not in aliases["微波炉"]
 
 
 def test_category_catalog_merges_compound_air_conditioner_categories(tmp_path):
@@ -73,3 +99,42 @@ def test_replace_brands_keeps_categories_and_aliases_and_clears_old_brands(tmp_p
     signature = path.stat().st_mtime_ns
     assert replace_category_brands({"厨下净水器": ["美的"], "照明": ["雷士"]}, path) == 0
     assert path.stat().st_mtime_ns == signature
+
+
+def test_catalog_ignores_brand_only_pseudo_categories(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "category_aliases.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "categories": {
+                    "电视": {"aliases": ["MiniLED"], "brands": ["海信"]},
+                    "海信": {"aliases": ["海信-天猫"], "brands": []},
+                }
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    aliases, brands = category_catalog(path)
+
+    assert "海信" not in aliases
+    assert brands["电视"] == ["海信"]
+    assert category_terms("海信") == []
+
+
+def test_add_category_terms_does_not_restore_brand_only_category(tmp_path):
+    path = tmp_path / "category_aliases.yaml"
+    path.write_text(yaml.safe_dump({"categories": {}}, allow_unicode=True), encoding="utf-8")
+
+    add_category_terms(
+        ["海信-天猫"],
+        path,
+        category_brand_map={"电视": ["海信"]},
+    )
+    aliases, brands = category_catalog(path)
+
+    assert "海信" not in aliases
+    assert brands["电视"] == ["海信"]

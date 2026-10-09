@@ -83,7 +83,7 @@ def build_structured_product_answer(
     for source in sources:
         fields = _extract_fields(source.text)
         product_name = _product_title(fields.get("型号/规格") or source.title)
-        if require_question_match and not _matches_product_question(question, product_name, fields):
+        if require_question_match and not _matches_product_question(question, product_name, fields, source.title):
             continue
         key = _product_identity(product_name, fields)
         if key in seen:
@@ -371,10 +371,12 @@ def _source_row_number(location: str) -> int:
         return 0
 
 
-def _matches_product_question(question: str, product_name: str, fields: dict[str, str]) -> bool:
+def _matches_product_question(
+    question: str, product_name: str, fields: dict[str, str], source_title: str = "",
+) -> bool:
     query = question.strip()
     brand = fields.get(FIELD_BRAND, "")
-    target_text = f"{brand}\n{product_name}\n{fields.get(FIELD_MODEL, '')}\n{fields.get(FIELD_CATEGORY, '')}"
+    target_text = f"{brand}\n{product_name}\n{source_title}\n{fields.get(FIELD_MODEL, '')}\n{fields.get(FIELD_CATEGORY, '')}"
     lowered_target = target_text.lower()
 
     brand_terms = _known_brand_terms(query)
@@ -396,7 +398,7 @@ def _matches_product_question(question: str, product_name: str, fields: dict[str
         if category_terms:
             category_text = fields.get("品类", "")
             match_terms = _specific_category_terms(query, category_terms) or category_terms
-            return any(term in product_name or term in fields.get("型号/规格", "") or term in category_text for term in match_terms)
+            return any(term in product_name or term in source_title or term in fields.get("型号/规格", "") or term in category_text for term in match_terms)
         remainder_terms = _query_without_brands(query, brand_terms)
         if remainder_terms and any(term.lower() in lowered_target for term in remainder_terms):
             return True
@@ -404,7 +406,7 @@ def _matches_product_question(question: str, product_name: str, fields: dict[str
     category_terms = _specific_category_terms_for_query(query, _category_terms(query))
     if category_terms:
         category_text = fields.get(FIELD_CATEGORY, "")
-        return any(term in product_name or term in fields.get(FIELD_MODEL, "") or term in category_text for term in category_terms)
+        return any(term in product_name or term in source_title or term in fields.get(FIELD_MODEL, "") or term in category_text for term in category_terms)
 
     keywords = [word.lower() for word in re.findall(r"[\u4e00-\u9fffA-Za-z0-9]+", query) if len(word) >= 2]
     return not keywords or any(word in lowered_target for word in keywords)

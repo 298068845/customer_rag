@@ -91,6 +91,24 @@ class BrandReplyRuleTests(unittest.TestCase):
         self.assertEqual(render_brand_reply("美的", config), "@小助理 美的专属清单\n请查收")
         self.assertEqual(render_brand_reply("东芝", config), "")
 
+    def test_realtime_talk_accepts_a_saved_brand_by_itself(self) -> None:
+        config = RealtimeTalkConfig(
+            brand_reply_rules=[
+                BrandReplyRule(
+                    id="hisense",
+                    keyword_type="品牌",
+                    keyword="海信",
+                    reply_terms=["【海信清单】", "https://docs.qq.com/sheet/hisense"],
+                )
+            ]
+        )
+
+        result = match_realtime_talk("海信", config, include_index=False)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.answer, "【海信清单】\nhttps://docs.qq.com/sheet/hisense")
+        self.assertIn("直接匹配品牌：海信", result.chain)
+
     def test_render_brand_reply_appends_supplemental_reply(self) -> None:
         config = RealtimeTalkConfig(
             brand_reply_rules=[
@@ -107,6 +125,26 @@ class BrandReplyRuleTests(unittest.TestCase):
         self.assertEqual(
             render_brand_reply("美的", config),
             "@小助理 美的清单\n---\n这是补充回复\n可以包含多行",
+        )
+
+    @patch("customer_rag.talk_rag.category_aliases", return_value={"海信": []})
+    @patch("customer_rag.talk_rag._indexed_category_brands", return_value={})
+    def test_brand_reply_ignores_same_named_pseudo_category(self, _indexed_categories, _category_aliases) -> None:
+        config = RealtimeTalkConfig(
+            brand_reply_rules=[
+                BrandReplyRule(
+                    id="hisense",
+                    keyword_type="品牌",
+                    keyword="海信",
+                    reply_terms=["【海信清单】", "https://docs.qq.com/sheet/hisense"],
+                    subscription_categories={"https://docs.qq.com/sheet/hisense": ["电视"]},
+                )
+            ]
+        )
+
+        self.assertEqual(
+            render_keyword_reply("海信", config, include_index=False),
+            "【海信清单】\nhttps://docs.qq.com/sheet/hisense",
         )
 
     @patch("customer_rag.talk_rag.category_brands", return_value={"电饭煲": ["美的", "东芝"]})

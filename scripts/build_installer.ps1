@@ -138,11 +138,13 @@ function Copy-RootReleaseFiles {
         [Parameter(Mandatory = $true)][string]$DestinationRoot
     )
     $includeExtensions = @(".py", ".md", ".txt", ".ps1", ".bat")
-    $includeNames = @("requirements.txt")
+    # The category catalog carries the brand-to-category mappings used by
+    # product retrieval. It must ship with the app; otherwise packaged builds
+    # fall back to the empty default brand lists and filter out valid brands.
+    $includeNames = @("requirements.txt", "category_aliases.yaml")
     $excludeNames = @(
         ".gitignore",
         "build_installer.bat",
-        "category_aliases.yaml",
         "config.yaml",
         "config.default.yaml",
         "requirements-build.txt",

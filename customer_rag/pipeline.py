@@ -17,6 +17,8 @@ from customer_rag.attributes import NumericCondition, attributes_match, attribut
 from customer_rag.category_config import add_category_terms
 from customer_rag.category_config import category_aliases
 from customer_rag.category_config import category_brands
+from customer_rag.category_config import all_category_terms
+from customer_rag.category_config import semantic_category_terms
 from customer_rag.category_config import category_for_term
 from customer_rag.category_config import _compound_aliases as _compound_category_aliases
 from customer_rag.category_config import category_terms as configured_category_terms
@@ -37,7 +39,7 @@ STRONG_MATCH_NEARBY_SCORE_DELTA = 10.0
 CONFIDENT_FUZZY_MODEL_CODE_SCORE = 92.0
 RAW_PARSE_CACHE_VERSION = "v1"
 MODEL_CODE_REMOVE_TRANS = str.maketrans("", "", " \t\r\n._-")
-QUICK_SEARCH_CACHE_VERSION = 2
+QUICK_SEARCH_CACHE_VERSION = 4
 NO_MATCH_ANSWER = "\u6ca1\u6709\u505a\u8fd9\u6b3e\u5462\uff0c\u770b\u770b\u5176\u4ed6"
 FOOTREST_WITH_TERMS = ("\u6709\u811a\u8e0f", "\u5e26\u811a\u8e0f", "\u811a\u8e0f\u6b3e", "\u811a\u8e0f\u7248")
 FOOTREST_WITH_QUERY_TERMS = FOOTREST_WITH_TERMS + ("\u811a\u8e0f",)
@@ -64,13 +66,15 @@ class RagResult:
 
 
 class RagPipeline:
-    def __init__(self, config: RagConfig):
+    def __init__(self, config: RagConfig, *, require_categorized_results: bool = False):
         self.config = config
+        self.require_categorized_results = require_categorized_results
         self.corpus = CorpusStore(config.index_dir / "corpus.jsonl")
         self.store = VectorStore(config.index_dir, config.embedding_model_path, config.embedding_batch_size)
         self.llm = LocalLlm(config.llm_model_path, config.llm)
         self._corpus_cache_mtime: float | None = None
         self._corpus_cache: list[CorpusItem] | None = None
+        self._category_index_signature: tuple[int, int] | None = None
         self._subscription_signature: tuple[int, int] | None = None
         self._active_subscription_sources: set[str] | None = None
         self._source_scope_cache: dict[str, bool] = {}
@@ -380,18 +384,17 @@ class RagPipeline:
         broad_category_query = product_query and not _known_brand_terms(question) and (
             bool(_category_terms(question)) or category_query
         )
-        broad_category_brands = _category_brands_for_query(question) if broad_category_query else []
         keyword_top_k = self.config.top_k * (40 if broad_category_query else 10)
         max_answer_products = self.config.top_k
 
         model_code_sources = (
-            self.model_code_search(
+            self._filter_uncategorized_sources(self.model_code_search(
                 question,
                 keyword_top_k,
                 tags=search_tags,
                 tag_match=tag_match,
                 deadline=deadline,
-            )
+            ))
             if precise_lookup
             else []
         )
@@ -465,13 +468,13 @@ class RagPipeline:
             )
 
         fast_category_sources = (
-            self.category_search(
+            self._filter_uncategorized_sources(self.category_search(
                 question,
                 keyword_top_k,
                 tags=search_tags,
                 tag_match=tag_match,
                 deadline=deadline,
-            )
+            ))
             if broad_category_query
             else []
         )
@@ -539,7 +542,11 @@ class RagPipeline:
                         timed_out=True,
                     )
                 vector_sources = _filter_by_tags(
-                    _filter_product_categories(question, self._current_sources(vector_results)), search_tags, match=tag_match,
+                    self._filter_uncategorized_sources(
+                        _filter_product_categories(question, self._current_sources(vector_results))
+                    ),
+                    search_tags,
+                    match=tag_match,
                 )
                 if auto_tags and not vector_sources and not keyword_sources:
                     fallback_vector_results = _run_with_timeout(
@@ -557,7 +564,10 @@ class RagPipeline:
                             timed_out=True,
                         )
                     vector_sources = _merge_sources(
-                        vector_sources, _filter_product_categories(question, self._current_sources(fallback_vector_results)),
+                        vector_sources,
+                        self._filter_uncategorized_sources(
+                            _filter_product_categories(question, self._current_sources(fallback_vector_results))
+                        ),
                     )
                 sources = _merge_sources(keyword_sources[: self.config.top_k], vector_sources)[: self.config.top_k]
             except (FileNotFoundError, RuntimeError) as exc:
@@ -603,7 +613,6 @@ class RagPipeline:
                 conditions,
             )
             if broad_category_query:
-                answer_sources = _filter_sources_by_known_brands(answer_sources, broad_category_brands)
                 answer_sources = _diversify_sources_by_brand(answer_sources)
                 sources = answer_sources[:max_answer_products]
         answer = build_structured_product_answer(
@@ -695,11 +704,28 @@ class RagPipeline:
         *,
         timed_out: bool = False,
     ) -> RagResult:
-        sources = candidates[: self.config.top_k]
+        sources = self._filter_uncategorized_sources(candidates)[: self.config.top_k]
         if not sources and _has_time_left(deadline):
             sources = self.keyword_search(question, self.config.top_k, tags=selected_tags, tag_match="all", deadline=deadline)
         if not sources and _has_time_left(deadline):
             sources = self.keyword_search(question, self.config.top_k, deadline=deadline)
+        if not _is_precise_lookup(question):
+            # A timeout does not make unrelated candidates valid search results.
+            terms = _query_terms(question)
+            normalized_question = question.lower().strip()
+            brand_terms = _known_brand_terms(normalized_question)
+            category_terms = _category_terms_for_query_expansion(
+                normalized_question, brand_terms, _category_terms(normalized_question),
+            )
+            sources = [
+                source for source in sources
+                if _keyword_score(
+                    normalized_question, terms, brand_terms=brand_terms,
+                    category_terms=category_terms, code_terms=[],
+                    title=source.title, location=source.location,
+                    source=source.source, text=source.text,
+                ) > 0
+            ]
         sources = _dedupe_sources_by_product(sources)[: self.config.top_k]
         answer = build_structured_product_answer(
             question,
@@ -781,7 +807,7 @@ class RagPipeline:
                     )
         results = list(scored.values())
         results.sort(key=lambda source: source.score, reverse=True)
-        return results[:top_k]
+        return self._filter_uncategorized_sources(results)[:top_k]
 
     def category_search(
         self,
@@ -915,10 +941,26 @@ class RagPipeline:
                 )
             )
         results.sort(key=lambda source: source.score, reverse=True)
-        sliced = _filter_product_categories(question, results)[:top_k]
+        sliced = self._filter_uncategorized_sources(_filter_product_categories(question, results))[:top_k]
         if _has_time_left(deadline):
             self._keyword_cache[cache_key] = list(sliced)
         return sliced
+
+    def _filter_uncategorized_sources(self, sources: list[RetrievedChunk]) -> list[RetrievedChunk]:
+        if not self.require_categorized_results:
+            return sources
+        return [
+            source for source in sources
+            if category_tags_from_text(source.text)
+            and (
+                _product_field_text(source.text)
+                or _is_precise_lookup(source.title)
+                or (
+                    not re.search(r"\.(?:xlsx?|csv)\s*/", source.title, re.IGNORECASE)
+                    and any(term in source.title for term in category_tags_from_text(source.text))
+                )
+            )
+        ]
 
     def attribute_search(
         self,
@@ -987,7 +1029,7 @@ class RagPipeline:
                 )
             )
         results.sort(key=lambda source: source.score, reverse=True)
-        return results[:top_k]
+        return self._filter_uncategorized_sources(results)[:top_k]
 
     def _refresh_subscription_scope(self) -> None:
         path = self.config.index_dir / "tencent_doc_subscriptions.json"
@@ -1023,7 +1065,13 @@ class RagPipeline:
         self._refresh_subscription_scope()
         path = self.corpus.path
         mtime = path.stat().st_mtime if path.exists() else None
-        if self._corpus_cache is None or self._corpus_cache_mtime != mtime:
+        category_path = Path("category_aliases.yaml")
+        category_signature = _corpus_file_signature(category_path) if category_path.exists() else None
+        if (
+            self._corpus_cache is None or self._corpus_cache_mtime != mtime
+            or self._category_index_signature != category_signature
+        ):
+            self._category_index_signature = category_signature
             self._corpus_cache = [item for item in self.corpus.list_items() if self._source_is_current(item.source)]
             self._corpus_cache_mtime = mtime
             signature = _corpus_file_signature(path) if path.exists() else None
@@ -1072,6 +1120,7 @@ class RagPipeline:
             return None
         if (
             payload.get("subscriptions") != self._subscription_signature
+            or payload.get("categories") != self._category_index_signature
             or payload.get("raw_data_dir") != str(self.config.raw_data_dir.resolve())
         ):
             return None
@@ -1081,7 +1130,24 @@ class RagPipeline:
         category_item_index = payload.get("category_item_index")
         if not all(isinstance(value, dict) for value in (tag_index, tag_lookup, model_code_index, category_item_index)):
             return None
-        return tag_index, tag_lookup, model_code_index, category_item_index
+        items_by_id = {item.id: item for item in self._corpus_cache or []}
+
+        def restore_index(index: dict) -> dict[str, list[CorpusItem]]:
+            if not all(
+                isinstance(key, str) and isinstance(ids, list)
+                and all(isinstance(item_id, str) for item_id in ids)
+                for key, ids in index.items()
+            ):
+                raise ValueError("Invalid quick search cache index")
+            return {key: [items_by_id[item_id] for item_id in ids] for key, ids in index.items()}
+
+        try:
+            return (
+                restore_index(tag_index), tag_lookup,
+                restore_index(model_code_index), restore_index(category_item_index),
+            )
+        except (KeyError, ValueError):
+            return None
 
     def _write_quick_search_cache(self, signature: tuple[int, int] | None) -> None:
         if signature is None:
@@ -1093,19 +1159,23 @@ class RagPipeline:
             "version": QUICK_SEARCH_CACHE_VERSION,
             "signature": signature,
             "subscriptions": self._subscription_signature,
+            "categories": self._category_index_signature,
             "raw_data_dir": str(self.config.raw_data_dir.resolve()),
-            "tag_index": self._tag_index_cache,
+            # Persist IDs and resolve them against the current corpus after reload.
+            "tag_index": {key: [item.id for item in items] for key, items in self._tag_index_cache.items()},
             "tag_lookup": self._tag_lookup_cache,
-            "model_code_index": self._model_code_index_cache,
-            "category_item_index": self._category_item_index_cache,
+            "model_code_index": {key: [item.id for item in items] for key, items in self._model_code_index_cache.items()},
+            "category_item_index": {key: [item.id for item in items] for key, items in self._category_item_index_cache.items()},
         }
         try:
             with tmp_path.open("wb") as fp:
                 pickle.dump(payload, fp, protocol=pickle.HIGHEST_PROTOCOL)
             os.replace(tmp_path, path)
-        except OSError:
+        except (OSError, pickle.PickleError, TypeError):
+            pass
+        finally:
             try:
-                tmp_path.unlink()
+                tmp_path.unlink(missing_ok=True)
             except OSError:
                 pass
 
@@ -1270,12 +1340,30 @@ class RagPipeline:
 def _filter_product_categories(question: str, sources: list[RetrievedChunk]) -> list[RetrievedChunk]:
     aliases = category_aliases()
     requested = set(extract_categories_from_question(question, aliases))
+    brand_terms = {term.lower() for term in _known_brand_terms(question)}
+    # Brand-only queries must not be restricted by a stale pseudo-category
+    # carrying the same name (for example, a historical "海信" category).
+    requested = {category for category in requested if category.lower() not in brand_terms}
     if not requested:
         return sources
+    # Spreadsheet categories can be broad (e.g. "小家电") while the product
+    # title names the requested subtype explicitly (e.g. "微波炉").
+    match_terms = _category_terms(question)
+    explicit_terms = [term for term in match_terms if len(term) > 1 and term in question.lower()]
+    explicit_terms.extend(term.lower() for term in semantic_category_terms("", explicit_terms))
     result = []
     for source in sources:
         categories = category_tags_from_text(source.text)
-        if not categories or any(category_for_term(category, aliases) in requested for category in categories):
+        product_text = f"{source.title}\n{_product_field_text(source.text.lower())}".lower()
+        if (
+            not categories
+            or any(term in product_text for term in explicit_terms)
+            or any(
+                category_for_term(category, aliases) in requested
+                and any(term in category.lower() for term in match_terms)
+                for category in categories
+            )
+        ):
             result.append(source)
     return result
 
@@ -1457,9 +1545,13 @@ def _category_item_candidates(index: dict[str, list[CorpusItem]], term: str) -> 
 
 def _build_category_item_index(items: list[CorpusItem]) -> dict[str, list[CorpusItem]]:
     index: dict[str, list[CorpusItem]] = {}
+    title_terms = sorted({term.lower() for term in all_category_terms() if len(term) >= 2}, key=len, reverse=True)
+    title_pattern = re.compile("|".join(re.escape(term) for term in title_terms)) if title_terms else None
     for item in items:
         terms = [tag.lower() for tag in item.tags if tag]
         terms.extend(_extract_category_fields(item.text))
+        if title_pattern:
+            terms.extend(title_pattern.findall(f"{item.title}\n{_product_field_text(item.text)}".lower()))
         for term in dict.fromkeys(term.strip().lower() for term in terms if term.strip()):
             bucket = index.setdefault(term, [])
             if not bucket or bucket[-1].id != item.id:
@@ -1638,9 +1730,11 @@ def _keyword_score(
             score -= 120.0
         else:
             score -= 70.0
-    for char in question:
-        if "\u4e00" <= char <= "\u9fff" and char in title_text:
-            score += 0.08
+    # Shared characters can break ties only after a complete search term matches.
+    if score > 0:
+        for char in question:
+            if "\u4e00" <= char <= "\u9fff" and char in title_text:
+                score += 0.08
     if question.isdigit() and _looks_like_sparse_id_mapping(body_text):
         score -= 55.0
     return score

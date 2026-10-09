@@ -901,15 +901,24 @@ def match_realtime_talk(question: str, config: RealtimeTalkConfig, *, include_in
         if schedule_match:
             return schedule_match
 
-    if any(trigger_matches_question(trigger, question, "keyword") for trigger in config.brand_triggers):
-        brand_or_category_reply = render_keyword_reply(question, config, include_index=include_index)
-        if brand_or_category_reply:
-            return TalkMatch(
-                answer=brand_or_category_reply,
-                link=None,
-                chain=["命中实时话术：品牌清单", f"识别问题：{question}"],
-                score=90,
-            )
+    brand_or_category_reply = render_keyword_reply(question, config, include_index=include_index)
+    matched_brand = extract_brand_from_question(question, config, include_index=include_index)
+    is_direct_brand_query = bool(
+        matched_brand and normalize_text(matched_brand) == normalized_question
+    )
+    if brand_or_category_reply and (
+        is_direct_brand_query
+        or any(trigger_matches_question(trigger, question, "keyword") for trigger in config.brand_triggers)
+    ):
+        chain = ["命中实时话术：品牌清单", f"识别问题：{question}"]
+        if is_direct_brand_query:
+            chain.append(f"直接匹配品牌：{matched_brand}")
+        return TalkMatch(
+            answer=brand_or_category_reply,
+            link=None,
+            chain=chain,
+            score=90,
+        )
     return None
 
 
@@ -1181,6 +1190,11 @@ def render_keyword_reply(question: str, config: RealtimeTalkConfig, *, include_i
     categories = extract_categories_from_question(question, aliases)
     brand = extract_brand_from_question(question, config, include_index=should_include_index)
     if brand:
+        # Prefer the brand interpretation over a legacy category with the
+        # same name. Otherwise the category-specific subscription filter can
+        # erase the brand's only valid reply.
+        normalized_brand = normalize_text(brand)
+        categories = [category for category in categories if normalize_text(category) != normalized_brand]
         return render_brand_reply(brand, config, categories=categories, category_catalog=aliases)
 
     if categories:

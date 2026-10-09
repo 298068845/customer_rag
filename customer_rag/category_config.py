@@ -8,8 +8,10 @@ import yaml
 
 
 _GENERIC_QUERY_ALIASES = {"刀", "锅"}
+_CATEGORY_PARENT_TERMS = {"厨房电器", "小家电", "个护电器"}
 _CATEGORY_SEMANTIC_GROUPS = (
     ("智能门锁", "智能锁", "门锁", "指纹锁"),
+    ("剃须刀", "刮胡刀", "电动剃须刀"),
 )
 _PLATFORM_TERMS = {
     "京东",
@@ -152,10 +154,29 @@ def add_category_terms(
         for alias in alias_values:
             alias_to_category.setdefault(alias.lower(), category)
 
+    known_brand_keys = {
+        _normalize_brand_term(brand).lower()
+        for brand_values in brands.values()
+        for brand in brand_values
+        if _normalize_brand_term(brand)
+    }
+    for raw_category, brand_values in (category_brand_map or {}).items():
+        category_key = _normalize_brand_term(raw_category).lower()
+        for brand in brand_values:
+            brand_key = _normalize_brand_term(brand).lower()
+            if brand_key and brand_key != category_key:
+                known_brand_keys.add(brand_key)
+
+    def is_brand_only_category(value: str) -> bool:
+        normalized = _normalize_brand_term(value).lower()
+        return bool(normalized and normalized in known_brand_keys)
+
     added = 0
     changed = False
     for term in _clean_terms(terms):
         normalized_category, term_aliases = _normalize_category_term(term, aliases)
+        if is_brand_only_category(normalized_category):
+            continue
         key = normalized_category.lower()
         existing_category = category_by_lower.get(key) or alias_to_category.get(key)
         if existing_category:
@@ -180,6 +201,8 @@ def add_category_terms(
     for category, brand_values in (category_brand_map or {}).items():
         category_text, category_aliases = _normalize_category_term(category, aliases)
         if not category_text:
+            continue
+        if is_brand_only_category(category_text):
             continue
         key = category_text.lower()
         existing_category = category_by_lower.get(key) or alias_to_category.get(key) or category_text
@@ -263,8 +286,26 @@ def category_terms(query: str) -> list[str]:
             matched.extend(group)
     for category, aliases in category_aliases().items():
         terms = [category, *aliases, *_compound_aliases(category), *semantic_category_terms(category, aliases)]
-        if any(_term_matches_query(term, query_lower) for term in terms):
-            matched.extend(terms)
+        direct = [term for term in terms if _term_matches_query(term, query_lower)]
+        if direct:
+            # A parent bucket is not a synonym for every subtype it contains.
+            hierarchical = category in _CATEGORY_PARENT_TERMS or any(
+                _compound_aliases(alias) and _compound_aliases(alias)[0] != category
+                for alias in aliases
+            )
+            if hierarchical and not any(parent in query_lower for parent in _CATEGORY_PARENT_TERMS):
+                longest = max(len(term) for term in direct)
+                specific = [term for term in direct if len(term) == longest]
+                matched.extend(
+                    term for term in terms
+                    if term not in _CATEGORY_PARENT_TERMS
+                    and any(seed.lower() in term.lower() or term.lower() in seed.lower() for seed in specific)
+                )
+                matched.extend(semantic_category_terms(category, direct))
+                if category in direct:
+                    matched.extend(DEFAULT_CATEGORY_ALIASES.get(category, []))
+            else:
+                matched.extend(terms)
             matched.extend(_related_category_terms(category, catalog_aliases))
     return _clean_terms(matched)
 
@@ -322,12 +363,33 @@ def _parse_catalog(payload: Any) -> tuple[dict[str, list[str]], dict[str, list[s
         current_brand_keys = {brand.lower() for brand in current_brands}
         for brand in _clean_terms([_normalize_brand_term(brand) for brand in brand_values]):
             brand_key = brand.lower()
+            # A malformed source can repeat its product category in the brand
+            # field (for example, "水槽"). Do not teach the catalog that a
+            # category name is also a brand name.
+            if brand_key == normalized_category.lower():
+                continue
             if brand_key not in current_brand_keys:
                 current_brands.append(brand)
                 current_brand_keys.add(brand_key)
     if not parsed:
         parsed = DEFAULT_CATEGORY_ALIASES
         brands = {category: [] for category in parsed}
+
+    # Some spreadsheet summary rows place a brand in the "品类" column, such
+    # as "海信-天猫". A real product category already carries that brand in
+    # another category's `brands` list; ignore these brand-only pseudo
+    # categories so they cannot turn a brand-only query into a category query.
+    known_brand_keys = {
+        brand.lower()
+        for values in brands.values()
+        for brand in values
+        if brand
+    }
+    for category in list(parsed):
+        if _normalize_brand_term(category).lower() not in known_brand_keys:
+            continue
+        parsed.pop(category, None)
+        brands.pop(category, None)
     for category in parsed:
         brands.setdefault(category, [])
     return parsed, brands
@@ -391,17 +453,19 @@ def _known_category_from_parts(parts: list[str], known_aliases: dict[str, list[s
         for alias in aliases
     }
     for part in parts:
-        matched = category_by_lower.get(part.lower())
+        matched = category_by_lower.get(part.lower()) if part not in _CATEGORY_PARENT_TERMS else None
         if matched:
             return matched
     for part in parts:
-        matched = alias_to_category.get(part.lower())
-        if matched:
-            return matched
-    for part in parts:
-        matched = DEFAULT_CATEGORY_ALIASES.get(part)
+        matched = DEFAULT_CATEGORY_ALIASES.get(part) if part not in _CATEGORY_PARENT_TERMS else None
         if matched is not None:
             return part
+    for part in parts:
+        matched = alias_to_category.get(part.lower()) if part not in _CATEGORY_PARENT_TERMS else None
+        if matched:
+            return matched
+    if parts[0] in _CATEGORY_PARENT_TERMS:
+        return parts[-1]
     return ""
 
 

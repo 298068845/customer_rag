@@ -33,7 +33,7 @@ DEFAULT_PROMPT_SUFFIX = """
 
 FALLBACK_CONTROL_MARKER = "__RAG_FUZZY_FALLBACK__"
 TIMEOUT_CONTROL_MARKER = "__RAG_QUERY_TIMEOUT__"
-QUERY_CACHE_VERSION = 13
+QUERY_CACHE_VERSION = 15
 QUERY_CACHE_TTL_SECONDS = 300
 
 
@@ -175,7 +175,10 @@ def main() -> int:
             write_log(log_file, f"OK\ncache=hit\nquestion={question}\nbrand={selected_brand}\noutput={args.output_file}\n")
             return 0
 
+        # WeChat's Tab flow should only send concrete product records, never
+        # an uncategorized campaign or order-flow note.
         pipeline = RagPipeline(config)
+        pipeline.require_categorized_results = True
         result = pipeline.ask(
             effective_question,
             system_prompt=system_prompt + DEFAULT_PROMPT_SUFFIX,

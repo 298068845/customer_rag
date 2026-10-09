@@ -13,7 +13,7 @@ from customer_rag.loaders import LoadedDocument
 from customer_rag.query_cache_invalidation import invalidate_corpus_caches
 
 
-CORPUS_CACHE_VERSION = 1
+CORPUS_CACHE_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -229,9 +229,12 @@ class CorpusStore:
         if tuple(payload.get("signature", ())) != signature:
             return None
         items = payload.get("items")
-        if not isinstance(items, list) or not all(isinstance(item, CorpusItem) for item in items):
+        if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
             return None
-        return list(items)
+        try:
+            return [_item_from_payload(item) for item in items]
+        except (TypeError, ValueError):
+            return None
 
     def _write_items_cache(self, signature: tuple[int, int], items: list[CorpusItem]) -> None:
         cache_path = self._cache_path()
@@ -239,15 +242,19 @@ class CorpusStore:
         payload = {
             "version": CORPUS_CACHE_VERSION,
             "signature": signature,
-            "items": items,
+            # Class instances become unpicklable when Streamlit reloads their module.
+            "items": [asdict(item) for item in items],
         }
         try:
             with tmp_path.open("wb") as fp:
                 pickle.dump(payload, fp, protocol=pickle.HIGHEST_PROTOCOL)
             os.replace(tmp_path, cache_path)
-        except OSError:
+        except (OSError, pickle.PickleError, TypeError):
+            # This optional cache must never prevent reading the source corpus.
+            pass
+        finally:
             try:
-                tmp_path.unlink()
+                tmp_path.unlink(missing_ok=True)
             except OSError:
                 pass
 
